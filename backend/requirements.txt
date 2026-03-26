@@ -1,0 +1,13 @@
+fastapi
+uvicorn[standard]
+opencv-python
+numpy
+pydantic
+pydantic-settings
+SQLAlchemy
+sqlalchemy-utils
+ultralytics
+
+# Optional but commonly useful for better decoding/robust RTSP:
+# ffmpeg-python==0.2.0
+

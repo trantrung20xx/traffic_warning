@@ -1,0 +1,11 @@
+{
+  "db_path": "config/traffic_warning.sqlite",
+  "detector_conf_threshold": 0.35,
+  "detector_iou_threshold": 0.7,
+  "resize_frame": true,
+
+  "track_push_interval_ms": 200,
+  "wrong_lane_min_duration_ms": 1200,
+  "turn_region_min_hits": 3
+}
+

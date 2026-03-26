@@ -1,0 +1,33 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ViolationEvent",
+  "type": "object",
+  "required": [
+    "camera_id",
+    "location",
+    "vehicle_id",
+    "vehicle_type",
+    "lane_id",
+    "violation",
+    "timestamp"
+  ],
+  "properties": {
+    "camera_id": { "type": "string" },
+    "location": {
+      "type": "object",
+      "required": ["road_name", "intersection"],
+      "properties": {
+        "road_name": { "type": "string" },
+        "intersection": { "type": ["string", "null"] },
+        "gps_lat": { "type": ["number", "null"] },
+        "gps_lng": { "type": ["number", "null"] }
+      }
+    },
+    "vehicle_id": { "type": "integer" },
+    "vehicle_type": { "type": "string" },
+    "lane_id": { "type": "integer" },
+    "violation": { "type": "string" },
+    "timestamp": { "type": "string" }
+  }
+}
+

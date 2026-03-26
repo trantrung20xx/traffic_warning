@@ -1,0 +1,19 @@
+{
+  "cameras": [
+    {
+      "camera_id": "cam_01",
+      "rtsp_url": "rtsp://192.168.1.10:554/stream1",
+      "camera_type": "roadside",
+      "location": {
+        "road_name": "QL1A",
+        "intersection_name": "Ngã tư ABC",
+        "gps_lat": 10.12345,
+        "gps_lng": 106.12345
+      },
+      "monitored_lanes": [1, 2],
+      "frame_width": 1280,
+      "frame_height": 720
+    }
+  ]
+}
+

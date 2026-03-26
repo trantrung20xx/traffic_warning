@@ -1,0 +1,2 @@
+"""Geometry + lane/violation logic."""
+
