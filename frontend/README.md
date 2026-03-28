@@ -6,6 +6,8 @@
 - Nhận track/violation events từ backend qua WebSocket và hiển thị rõ `camera_id`, `vehicle_id`, `vehicle_type`, `lane_id`, `violation`.
 - Dashboard: thống kê theo camera/khu vực/tuyến đường bằng dữ liệu từ backend (`/api/stats`).
 
+Frontend này dùng **JavaScript thuần** (không dùng TypeScript).
+
 ## Cài đặt
 ```powershell
 cd frontend

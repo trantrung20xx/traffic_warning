@@ -30,14 +30,13 @@ def create_app() -> FastAPI:
     app.include_router(create_api_router(manager))
     app.include_router(create_ws_router(manager))
 
+    @app.on_event("startup")
     async def _startup():
         await manager.start()
 
+    @app.on_event("shutdown")
     async def _shutdown():
         await manager.stop()
-
-    app.add_event_handler("startup", _startup)
-    app.add_event_handler("shutdown", _shutdown)
     return app
 
 

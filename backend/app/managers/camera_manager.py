@@ -96,6 +96,12 @@ class CameraManager:
             raise KeyError(camera_id)
         return ctx.get_lane_polygons_for_ui()
 
+    def get_camera_preview_jpeg(self, camera_id: str) -> Optional[bytes]:
+        ctx = self._contexts.get(camera_id)
+        if ctx is None:
+            return None
+        return ctx.get_latest_preview_jpeg()
+
     async def start(self) -> None:
         # Create contexts
         if self._contexts:

@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import threading
+import time
 from datetime import datetime, timezone
 from typing import Any, Callable, Optional
+
+import cv2
 
 from app.core.config import CameraLaneConfig, CameraConfig
 from app.db.repository import insert_violation
@@ -82,6 +86,12 @@ class CameraContext:
         self._last_track_push_ts_ms: int = 0
         self._track_push_interval_ms: int = int(track_push_interval_ms)
 
+        # Latest frame for browser preview (MJPEG). Updated from processing loop, read from HTTP handlers.
+        self._preview_lock = threading.Lock()
+        self._latest_preview_jpeg: Optional[bytes] = None
+        self._last_preview_encode_ms: int = 0
+        self._preview_min_interval_ms: int = 66  # ~15 FPS max for preview encode
+
     @property
     def camera_id(self) -> str:
         return self.camera_config.camera_id
@@ -100,11 +110,30 @@ class CameraContext:
             "lanes": lanes,
         }
 
+    def get_latest_preview_jpeg(self) -> Optional[bytes]:
+        with self._preview_lock:
+            return self._latest_preview_jpeg
+
+    def _maybe_update_preview(self, frame_bgr) -> None:
+        """Encode a JPEG occasionally so the web UI can show live video (not just overlays)."""
+        now = int(time.time() * 1000)
+        if now - self._last_preview_encode_ms < self._preview_min_interval_ms:
+            return
+        self._last_preview_encode_ms = now
+        ok, buf = cv2.imencode(".jpg", frame_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 75])
+        if not ok:
+            return
+        data = buf.tobytes()
+        with self._preview_lock:
+            self._latest_preview_jpeg = data
+
     async def run_forever(self, *, stop_event: asyncio.Event) -> None:
         while not stop_event.is_set():
             frame = await asyncio.to_thread(self.rtsp_reader.read)
             if frame is None:
                 continue
+
+            await asyncio.to_thread(self._maybe_update_preview, frame.bgr)
 
             ts_dt = datetime.fromtimestamp(frame.timestamp_utc_ms / 1000.0, tz=timezone.utc)
             tracks = await asyncio.to_thread(self.tracker.track, frame.bgr)

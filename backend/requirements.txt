@@ -7,6 +7,8 @@ pydantic-settings
 SQLAlchemy
 sqlalchemy-utils
 ultralytics
+# ByteTrack trong Ultralytics cần lap (tránh AutoUpdate lúc chạy lần đầu)
+lap>=0.5.12
 
 # Optional but commonly useful for better decoding/robust RTSP:
 # ffmpeg-python==0.2.0

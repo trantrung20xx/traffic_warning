@@ -75,6 +75,21 @@ body {
   padding: 14px;
 }
 
+/* Backend MJPEG under transparent lane/bbox overlay */
+.video-stack {
+  position: relative;
+  width: 100%;
+  line-height: 0;
+}
+
+.video-preview {
+  width: 100%;
+  height: auto;
+  display: block;
+  border-radius: 10px;
+  background: #0b0f14;
+}
+
 .panel-title {
   font-weight: 700;
   margin-bottom: 10px;
