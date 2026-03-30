@@ -5,57 +5,116 @@ function apiUrl(path) {
 }
 
 function wsUrl(path) {
-  const u = new URL(API_BASE);
-  const proto = u.protocol === "https:" ? "wss:" : "ws:";
-  return `${proto}//${u.host}${path}`;
+  const base = new URL(API_BASE);
+  const protocol = base.protocol === "https:" ? "wss:" : "ws:";
+  return `${protocol}//${base.host}${path}`;
+}
+
+function withQuery(path, params) {
+  const search = new URLSearchParams();
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== "") {
+      search.set(key, value);
+    }
+  });
+  const query = search.toString();
+  return query ? `${path}?${query}` : path;
+}
+
+async function request(path, options) {
+  const response = await fetch(apiUrl(path), {
+    headers: {
+      "Content-Type": "application/json",
+      ...(options?.headers || {}),
+    },
+    ...options,
+  });
+  if (!response.ok) {
+    let detail = `${response.status}`;
+    try {
+      const body = await response.json();
+      detail = body.detail || JSON.stringify(body);
+    } catch {
+      detail = `${response.status}`;
+    }
+    throw new Error(detail);
+  }
+  if (response.status === 204) return null;
+  return await response.json();
 }
 
 export async function fetchCameras() {
-  const res = await fetch(apiUrl("/api/cameras"));
-  if (!res.ok) throw new Error(`fetchCameras failed: ${res.status}`);
-  const json = await res.json();
-  return json.cameras || [];
+  const data = await request("/api/cameras");
+  return data.cameras || [];
 }
 
-export async function fetchLanes(cameraId) {
-  const res = await fetch(apiUrl(`/api/cameras/${cameraId}/lanes`));
-  if (!res.ok) throw new Error(`fetchLanes failed: ${res.status}`);
-  return await res.json();
+export async function fetchCameraDetail(cameraId) {
+  return await request(`/api/cameras/${cameraId}`);
 }
 
-export async function fetchStats(fromTs, toTs) {
-  const qs = new URLSearchParams();
-  if (fromTs) qs.set("from_ts", fromTs);
-  if (toTs) qs.set("to_ts", toTs);
-  const res = await fetch(apiUrl(`/api/stats?${qs.toString()}`));
-  if (!res.ok) throw new Error(`fetchStats failed: ${res.status}`);
-  const json = await res.json();
-  return json.rows || [];
+export async function fetchDashboard({ cameraId, fromTs, toTs }) {
+  return await request(
+    withQuery("/api/analytics/dashboard", {
+      camera_id: cameraId,
+      from_ts: fromTs,
+      to_ts: toTs,
+    }),
+  );
+}
+
+export async function fetchViolationHistory({ cameraId, fromTs, toTs, limit }) {
+  return await request(
+    withQuery("/api/violations/history", {
+      camera_id: cameraId,
+      from_ts: fromTs,
+      to_ts: toTs,
+      limit,
+    }),
+  );
+}
+
+export async function createCamera(payload) {
+  return await request("/api/cameras", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateCamera(cameraId, payload) {
+  return await request(`/api/cameras/${cameraId}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deleteCamera(cameraId) {
+  return await request(`/api/cameras/${cameraId}`, {
+    method: "DELETE",
+  });
 }
 
 export function connectTracks(cameraId, onMessage) {
-  const url = wsUrl("/ws/tracks");
-  const ws = new WebSocket(cameraId ? `${url}?camera_id=${encodeURIComponent(cameraId)}` : url);
-
-  ws.onmessage = (ev) => {
-    const msg = JSON.parse(ev.data);
-    if (msg.type === "track") onMessage(msg);
+  const socket = new WebSocket(`${wsUrl("/ws/tracks")}?camera_id=${encodeURIComponent(cameraId)}`);
+  socket.onmessage = (event) => {
+    const message = JSON.parse(event.data);
+    if (message.type === "track") {
+      onMessage(message);
+    }
   };
-  return ws;
+  return socket;
 }
 
 export function connectViolations(cameraId, onMessage) {
-  const url = wsUrl("/ws/violations");
-  const ws = new WebSocket(cameraId ? `${url}?camera_id=${encodeURIComponent(cameraId)}` : url);
-
-  ws.onmessage = (m) => {
-    const msg = JSON.parse(m.data);
-    if (msg.type === "violation") onMessage(msg.event);
+  const socket = new WebSocket(`${wsUrl("/ws/violations")}?camera_id=${encodeURIComponent(cameraId)}`);
+  socket.onmessage = (event) => {
+    const message = JSON.parse(event.data);
+    if (message.type === "violation") {
+      onMessage(message.event);
+    }
   };
-  return ws;
+  return socket;
 }
 
-/** MJPEG stream URL for <img src="..."> (preview only; AI runs on backend pipeline). */
 export function getCameraPreviewUrl(cameraId) {
   return apiUrl(`/api/cameras/${cameraId}/preview`);
 }

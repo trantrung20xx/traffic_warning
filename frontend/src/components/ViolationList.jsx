@@ -1,9 +1,10 @@
 import React from "react";
+import { getVehicleTypeLabel, getViolationLabel } from "../utils";
 
 export default function ViolationList({ events }) {
   return (
     <div className="panel">
-      <div className="panel-title">Realtime Violations</div>
+      <div className="panel-title">Vi phạm thời gian thực</div>
       <div className="table">
         {events.length === 0 ? (
           <div className="muted">Chưa có vi phạm.</div>
@@ -12,10 +13,10 @@ export default function ViolationList({ events }) {
             <div className="row" key={`${e.camera_id}-${e.vehicle_id}-${e.violation}-${e.timestamp}`}>
               <div className="row-main">
                 <div className="row-title">
-                  {e.violation} (lane {e.lane_id})
+                  {getViolationLabel(e.violation)} (làn {e.lane_id})
                 </div>
                 <div className="row-sub">
-                  {e.vehicle_type} · vehicle #{e.vehicle_id}
+                  {getVehicleTypeLabel(e.vehicle_type)} · xe #{e.vehicle_id}
                 </div>
               </div>
               <div className="row-meta">
