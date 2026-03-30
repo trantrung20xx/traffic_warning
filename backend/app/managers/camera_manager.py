@@ -4,7 +4,17 @@ import asyncio
 from pathlib import Path
 from typing import Optional
 
-from app.core.config import load_app_config, load_cameras, load_lane_config_for_camera, validate_no_shared_lanes_across_cameras
+from app.core.config import (
+    CameraLaneConfig,
+    delete_lane_config_for_camera,
+    load_app_config,
+    load_cameras,
+    load_lane_config_for_camera,
+    save_cameras,
+    save_lane_config_for_camera,
+    validate_no_shared_lanes_across_cameras,
+)
+from app.db.repository import query_dashboard_analytics, query_violation_history
 from app.db.database import create_engine_and_session
 from app.managers.camera_context import CameraContext
 from app.schemas.camera import CameraConfig
@@ -23,13 +33,12 @@ class CameraManager:
 
         self._contexts: dict[str, CameraContext] = {}
         self._stop_event = asyncio.Event()
-        self._tasks: list[asyncio.Task] = []
+        self._tasks: dict[str, asyncio.Task] = {}
+        self._running = False
 
         # WebSocket listeners
         self._track_listeners: set[asyncio.Queue[TrackMessage]] = set()
         self._violation_listeners: set[asyncio.Queue[ViolationEvent]] = set()
-
-        # Build contexts lazily in start()
 
     @property
     def session_factory(self):
@@ -41,7 +50,11 @@ class CameraManager:
             rows.append(
                 {
                     "camera_id": cam.camera_id,
+                    "rtsp_url": cam.rtsp_url,
                     "camera_type": cam.camera_type,
+                    "view_direction": cam.view_direction,
+                    "frame_width": cam.frame_width,
+                    "frame_height": cam.frame_height,
                     "location": {
                         "road_name": cam.location.road_name,
                         "intersection": cam.location.intersection_name,
@@ -52,6 +65,78 @@ class CameraManager:
                 }
             )
         return rows
+
+    def get_camera_detail(self, camera_id: str) -> dict:
+        cam = next((item for item in self.cameras if item.camera_id == camera_id), None)
+        if cam is None:
+            raise KeyError(camera_id)
+        lane_cfg = load_lane_config_for_camera(self.repo_root, camera_id)
+        return {
+            "camera": {
+                "camera_id": cam.camera_id,
+                "rtsp_url": cam.rtsp_url,
+                "camera_type": cam.camera_type,
+                "view_direction": cam.view_direction,
+                "frame_width": cam.frame_width,
+                "frame_height": cam.frame_height,
+                "location": {
+                    "road_name": cam.location.road_name,
+                    "intersection_name": cam.location.intersection_name,
+                    "gps_lat": cam.location.gps_lat,
+                    "gps_lng": cam.location.gps_lng,
+                },
+                "monitored_lanes": cam.monitored_lanes,
+            },
+            "lane_config": lane_cfg.model_dump(mode="json", exclude_none=True),
+        }
+
+    def upsert_camera(self, camera_config: CameraConfig, lane_config: CameraLaneConfig) -> dict:
+        if camera_config.camera_id != lane_config.camera_id:
+            raise ValueError("camera_id mismatch between camera_config and lane_config")
+        lane_ids = [lane.lane_id for lane in lane_config.lanes]
+        if len(set(lane_ids)) != len(lane_ids):
+            raise ValueError("lane_config contains duplicate lane_id values")
+        if sorted(camera_config.monitored_lanes) != sorted(lane_ids):
+            raise ValueError("monitored_lanes must match lane_config lane_id values")
+
+        next_cameras = [cam for cam in self.cameras if cam.camera_id != camera_config.camera_id]
+        next_cameras.append(camera_config)
+        next_cameras.sort(key=lambda cam: cam.camera_id)
+
+        save_cameras(self.repo_root, next_cameras)
+        save_lane_config_for_camera(self.repo_root, lane_config)
+        validate_no_shared_lanes_across_cameras(self.repo_root)
+
+        self.cameras = next_cameras
+        self._reload_context(camera_config.camera_id)
+        return self.get_camera_detail(camera_config.camera_id)
+
+    def delete_camera(self, camera_id: str) -> None:
+        if not any(cam.camera_id == camera_id for cam in self.cameras):
+            raise KeyError(camera_id)
+        self._stop_context(camera_id)
+        self.cameras = [cam for cam in self.cameras if cam.camera_id != camera_id]
+        save_cameras(self.repo_root, self.cameras)
+        delete_lane_config_for_camera(self.repo_root, camera_id)
+
+    def query_history(self, *, from_ts: Optional[str], to_ts: Optional[str], camera_id: Optional[str], limit: int):
+        with self._SessionLocal() as session:
+            return query_violation_history(
+                session,
+                from_ts=from_ts,
+                to_ts=to_ts,
+                camera_id=camera_id,
+                limit=limit,
+            )
+
+    def query_dashboard(self, *, from_ts: Optional[str], to_ts: Optional[str], camera_id: Optional[str]):
+        with self._SessionLocal() as session:
+            return query_dashboard_analytics(
+                session,
+                from_ts=from_ts,
+                to_ts=to_ts,
+                camera_id=camera_id,
+            )
 
     def _on_track(self, msg: TrackMessage) -> None:
         # Called inside the event loop (CameraContext.run_forever).
@@ -93,7 +178,22 @@ class CameraManager:
     def get_lane_polygons(self, camera_id: str) -> dict:
         ctx = self._contexts.get(camera_id)
         if ctx is None:
-            raise KeyError(camera_id)
+            lane_cfg = load_lane_config_for_camera(self.repo_root, camera_id)
+            return {
+                "camera_id": lane_cfg.camera_id,
+                "frame_width": lane_cfg.frame_width,
+                "frame_height": lane_cfg.frame_height,
+                "lanes": [
+                    {
+                        "lane_id": lane.lane_id,
+                        "polygon": lane.polygon,
+                        "turn_regions": lane.turn_regions or {},
+                        "allowed_maneuvers": lane.allowed_maneuvers or [],
+                        "allowed_lane_changes": lane.allowed_lane_changes or [lane.lane_id],
+                    }
+                    for lane in lane_cfg.lanes
+                ],
+            }
         return ctx.get_lane_polygons_for_ui()
 
     def get_camera_preview_jpeg(self, camera_id: str) -> Optional[bytes]:
@@ -103,36 +203,53 @@ class CameraManager:
         return ctx.get_latest_preview_jpeg()
 
     async def start(self) -> None:
-        # Create contexts
-        if self._contexts:
+        if self._running:
             return
-        for cam in self.cameras:
-            lane_cfg = load_lane_config_for_camera(self.repo_root, cam.camera_id)
-
-            ctx = CameraContext(
-                camera_config=cam,
-                lane_config=lane_cfg,
-                db_session_factory=self._SessionLocal,
-                on_track=self._on_track,
-                on_violation=self._on_violation,
-                detector_weights_path="yolov8n.pt",
-                detector_conf_threshold=self.cfg.detector_conf_threshold,
-                detector_iou_threshold=self.cfg.detector_iou_threshold,
-                track_push_interval_ms=self.cfg.track_push_interval_ms,
-                wrong_lane_min_duration_ms=self.cfg.wrong_lane_min_duration_ms,
-                turn_region_min_hits=self.cfg.turn_region_min_hits,
-            )
-            self._contexts[cam.camera_id] = ctx
-
-        # Start per-camera tasks
         self._stop_event.clear()
-        for ctx in self._contexts.values():
-            task = asyncio.create_task(ctx.run_forever(stop_event=self._stop_event))
-            self._tasks.append(task)
+        for cam in self.cameras:
+            self._start_context(cam.camera_id)
+        self._running = True
 
     async def stop(self) -> None:
         self._stop_event.set()
-        for t in self._tasks:
+        for t in self._tasks.values():
             t.cancel()
         self._tasks.clear()
+        self._contexts.clear()
+        self._running = False
+
+    def _build_context(self, camera_id: str) -> CameraContext:
+        cam = next(item for item in self.cameras if item.camera_id == camera_id)
+        lane_cfg = load_lane_config_for_camera(self.repo_root, cam.camera_id)
+        return CameraContext(
+            camera_config=cam,
+            lane_config=lane_cfg,
+            db_session_factory=self._SessionLocal,
+            on_track=self._on_track,
+            on_violation=self._on_violation,
+            detector_weights_path=str(self.repo_root / "backend" / "yolov8n.pt"),
+            detector_conf_threshold=self.cfg.detector_conf_threshold,
+            detector_iou_threshold=self.cfg.detector_iou_threshold,
+            track_push_interval_ms=self.cfg.track_push_interval_ms,
+            wrong_lane_min_duration_ms=self.cfg.wrong_lane_min_duration_ms,
+            turn_region_min_hits=self.cfg.turn_region_min_hits,
+        )
+
+    def _start_context(self, camera_id: str) -> None:
+        ctx = self._build_context(camera_id)
+        self._contexts[camera_id] = ctx
+        if self._running or not self._stop_event.is_set():
+            self._tasks[camera_id] = asyncio.create_task(ctx.run_forever(stop_event=self._stop_event))
+
+    def _stop_context(self, camera_id: str) -> None:
+        task = self._tasks.pop(camera_id, None)
+        if task is not None:
+            task.cancel()
+        self._contexts.pop(camera_id, None)
+
+    def _reload_context(self, camera_id: str) -> None:
+        was_running = self._running
+        self._stop_context(camera_id)
+        if was_running:
+            self._start_context(camera_id)
 

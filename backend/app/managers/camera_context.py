@@ -102,7 +102,15 @@ class CameraContext:
         """
         lanes = []
         for lp in self.lane_config.lanes:
-            lanes.append({"lane_id": lp.lane_id, "polygon": lp.polygon})
+            lanes.append(
+                {
+                    "lane_id": lp.lane_id,
+                    "polygon": lp.polygon,
+                    "turn_regions": lp.turn_regions or {},
+                    "allowed_maneuvers": lp.allowed_maneuvers or [],
+                    "allowed_lane_changes": lp.allowed_lane_changes or [lp.lane_id],
+                }
+            )
         return {
             "camera_id": self.camera_id,
             "frame_width": self.lane_config.frame_width,
@@ -128,52 +136,52 @@ class CameraContext:
             self._latest_preview_jpeg = data
 
     async def run_forever(self, *, stop_event: asyncio.Event) -> None:
-        while not stop_event.is_set():
-            frame = await asyncio.to_thread(self.rtsp_reader.read)
-            if frame is None:
-                continue
+        try:
+            while not stop_event.is_set():
+                frame = await asyncio.to_thread(self.rtsp_reader.read)
+                if frame is None:
+                    continue
 
-            await asyncio.to_thread(self._maybe_update_preview, frame.bgr)
+                await asyncio.to_thread(self._maybe_update_preview, frame.bgr)
 
-            ts_dt = datetime.fromtimestamp(frame.timestamp_utc_ms / 1000.0, tz=timezone.utc)
-            tracks = await asyncio.to_thread(self.tracker.track, frame.bgr)
+                ts_dt = datetime.fromtimestamp(frame.timestamp_utc_ms / 1000.0, tz=timezone.utc)
+                tracks = await asyncio.to_thread(self.tracker.track, frame.bgr)
 
-            vehicles: list[TrackVehicle] = []
-            violation_candidates: list[tuple[int, str, dict]] = []  # (vehicle_id, vehicle_type, candidate)
+                vehicles: list[TrackVehicle] = []
+                violation_candidates: list[tuple[int, str, dict]] = []
 
-            for tr in tracks:
-                lane_id = self.lane_logic.assign_lane_id_from_bbox_xyxy(tr.bbox_xyxy)
-                vehicles.append(
-                    TrackVehicle(
+                for tr in tracks:
+                    lane_id = self.lane_logic.assign_lane_id_from_bbox_xyxy(tr.bbox_xyxy)
+                    vehicles.append(
+                        TrackVehicle(
+                            vehicle_id=tr.vehicle_id,
+                            vehicle_type=tr.vehicle_type,
+                            lane_id=lane_id,
+                            bbox=BBox(x1=tr.bbox_xyxy[0], y1=tr.bbox_xyxy[1], x2=tr.bbox_xyxy[2], y2=tr.bbox_xyxy[3]),
+                        )
+                    )
+
+                    candidates = self.violation_logic.update_and_maybe_generate_violation(
                         vehicle_id=tr.vehicle_id,
                         vehicle_type=tr.vehicle_type,
                         lane_id=lane_id,
-                        bbox=BBox(x1=tr.bbox_xyxy[0], y1=tr.bbox_xyxy[1], x2=tr.bbox_xyxy[2], y2=tr.bbox_xyxy[3]),
+                        bbox_xyxy=tr.bbox_xyxy,
+                        ts=ts_dt,
                     )
-                )
+                    for c in candidates:
+                        violation_candidates.append((tr.vehicle_id, tr.vehicle_type, c))
 
-                candidates = self.violation_logic.update_and_maybe_generate_violation(
-                    vehicle_id=tr.vehicle_id,
-                    vehicle_type=tr.vehicle_type,
-                    lane_id=lane_id,
-                    bbox_xyxy=tr.bbox_xyxy,
-                    ts=ts_dt,
-                )
-                for c in candidates:
-                    violation_candidates.append((tr.vehicle_id, tr.vehicle_type, c))
+                if frame.timestamp_utc_ms - self._last_track_push_ts_ms >= self._track_push_interval_ms:
+                    self._last_track_push_ts_ms = frame.timestamp_utc_ms
+                    track_msg = TrackMessage(camera_id=self.camera_id, timestamp=ts_dt, vehicles=vehicles)
+                    self.on_track(track_msg)
 
-            # Push track state (throttled)
-            if frame.timestamp_utc_ms - self._last_track_push_ts_ms >= self._track_push_interval_ms:
-                self._last_track_push_ts_ms = frame.timestamp_utc_ms
-                track_msg = TrackMessage(camera_id=self.camera_id, timestamp=ts_dt, vehicles=vehicles)
-                self.on_track(track_msg)
+                if violation_candidates:
+                    await self._handle_violations(violation_candidates, ts_dt)
 
-            # Persist + broadcast violations
-            if violation_candidates:
-                await self._handle_violations(violation_candidates, ts_dt)
-
-            # Prevent state leak
-            await asyncio.to_thread(self.violation_logic.prune, current_ts=ts_dt, max_age_s=60.0)
+                await asyncio.to_thread(self.violation_logic.prune, current_ts=ts_dt, max_age_s=60.0)
+        finally:
+            await asyncio.to_thread(self.rtsp_reader.close)
 
     async def _handle_violations(
         self,

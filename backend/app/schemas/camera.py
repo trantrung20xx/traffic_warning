@@ -21,6 +21,7 @@ class CameraConfig(BaseModel):
     camera_id: str
     rtsp_url: str
     camera_type: Literal["roadside", "overhead", "intersection"]
+    view_direction: Optional[str] = None
     location: CameraLocation
     # lanes monitored by THIS camera (must be unique per camera)
     monitored_lanes: list[int]
