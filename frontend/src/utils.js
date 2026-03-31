@@ -182,3 +182,81 @@ export function buildPayload(draft) {
     },
   };
 }
+
+function orientation(a, b, c) {
+  const value = (b[1] - a[1]) * (c[0] - b[0]) - (b[0] - a[0]) * (c[1] - b[1]);
+  if (Math.abs(value) < 1e-9) return 0;
+  return value > 0 ? 1 : 2;
+}
+
+function onSegment(a, b, c) {
+  return (
+    Math.min(a[0], c[0]) <= b[0] &&
+    b[0] <= Math.max(a[0], c[0]) &&
+    Math.min(a[1], c[1]) <= b[1] &&
+    b[1] <= Math.max(a[1], c[1])
+  );
+}
+
+function segmentsIntersect(a1, a2, b1, b2) {
+  const o1 = orientation(a1, a2, b1);
+  const o2 = orientation(a1, a2, b2);
+  const o3 = orientation(b1, b2, a1);
+  const o4 = orientation(b1, b2, a2);
+
+  if (o1 !== o2 && o3 !== o4) return true;
+  if (o1 === 0 && onSegment(a1, b1, a2)) return true;
+  if (o2 === 0 && onSegment(a1, b2, a2)) return true;
+  if (o3 === 0 && onSegment(b1, a1, b2)) return true;
+  if (o4 === 0 && onSegment(b1, a2, b2)) return true;
+  return false;
+}
+
+export function polygonSelfIntersects(points) {
+  if (!Array.isArray(points) || points.length < 4) return false;
+
+  for (let i = 0; i < points.length; i += 1) {
+    const a1 = points[i];
+    const a2 = points[(i + 1) % points.length];
+
+    for (let j = i + 1; j < points.length; j += 1) {
+      const b1 = points[j];
+      const b2 = points[(j + 1) % points.length];
+
+      const sharesVertex =
+        i === j ||
+        (i + 1) % points.length === j ||
+        i === (j + 1) % points.length;
+
+      if (sharesVertex) continue;
+      if (segmentsIntersect(a1, a2, b1, b2)) return true;
+    }
+  }
+
+  return false;
+}
+
+export function validatePolygonDraft(draft) {
+  const errors = [];
+  const warnings = [];
+
+  (draft?.lane_config?.lanes || []).forEach((lane) => {
+    const lanePoints = lane.polygon || [];
+    if (lanePoints.length < 3) {
+      errors.push(`Làn ${lane.lane_id} phải có polygon ít nhất 3 điểm.`);
+    } else if (polygonSelfIntersects(lanePoints)) {
+      warnings.push(`Polygon của làn ${lane.lane_id} đang tự cắt nhau.`);
+    }
+
+    Object.entries(lane.turn_regions || {}).forEach(([maneuver, points]) => {
+      if (!Array.isArray(points) || points.length === 0) return;
+      if (points.length < 3) {
+        errors.push(`Vùng rẽ "${getManeuverLabel(maneuver)}" của làn ${lane.lane_id} phải có ít nhất 3 điểm.`);
+      } else if (polygonSelfIntersects(points)) {
+        warnings.push(`Vùng rẽ "${getManeuverLabel(maneuver)}" của làn ${lane.lane_id} đang tự cắt nhau.`);
+      }
+    });
+  });
+
+  return { errors, warnings };
+}

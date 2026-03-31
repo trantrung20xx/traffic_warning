@@ -13,16 +13,92 @@ import {
   createEmptyLane,
   getManeuverLabel,
   normalizeCameraDetail,
+  polygonSelfIntersects,
+  validatePolygonDraft,
 } from "../utils";
+
+function ActionIcon({ type }) {
+  const commonProps = {
+    viewBox: "0 0 24 24",
+    width: 16,
+    height: 16,
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: 1.9,
+    strokeLinecap: "round",
+    strokeLinejoin: "round",
+    "aria-hidden": true,
+  };
+
+  if (type === "lock") {
+    return (
+      <svg {...commonProps}>
+        <path d="M7 10V8a5 5 0 0 1 10 0v2" />
+        <rect x="5" y="10" width="14" height="10" rx="2" />
+        <path d="M12 14v2" />
+      </svg>
+    );
+  }
+
+  if (type === "unlock") {
+    return (
+      <svg {...commonProps}>
+        <path d="M7 10V8a5 5 0 0 1 9-3" />
+        <rect x="5" y="10" width="14" height="10" rx="2" />
+        <path d="M12 14v2" />
+      </svg>
+    );
+  }
+
+  if (type === "undo") {
+    return (
+      <svg {...commonProps}>
+        <path d="M9 7 5 11l4 4" />
+        <path d="M19 17a6 6 0 0 0-6-6H5" />
+      </svg>
+    );
+  }
+
+  if (type === "vertex-delete") {
+    return (
+      <svg {...commonProps}>
+        <circle cx="8" cy="8" r="2" />
+        <circle cx="16" cy="8" r="2" />
+        <circle cx="12" cy="16" r="2" />
+        <path d="M9.8 9.2 10.9 14" />
+        <path d="M14.2 9.2 13.1 14" />
+        <path d="M17.5 17.5 21 21" />
+        <path d="M21 17.5 17.5 21" />
+      </svg>
+    );
+  }
+
+  if (type === "polygon-delete") {
+    return (
+      <svg {...commonProps}>
+        <path d="M6 7h12" />
+        <path d="M9 7V5h6v2" />
+        <path d="M8 7l1 12h6l1-12" />
+        <path d="M10 11v5" />
+        <path d="M14 11v5" />
+      </svg>
+    );
+  }
+
+  return null;
+}
 
 export default function ManagementView({ cameras, selectedCameraId, onSelectCamera, onRefreshCameras }) {
   const [draft, setDraft] = useState(createCameraDraft());
   const [activeCameraId, setActiveCameraId] = useState(selectedCameraId || null);
   const [selectedLaneId, setSelectedLaneId] = useState(1);
+  const [selectedVertexIndex, setSelectedVertexIndex] = useState(null);
   const [editTarget, setEditTarget] = useState("lane");
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
   const [isNewCamera, setIsNewCamera] = useState(false);
+  const [isDirty, setIsDirty] = useState(false);
+  const [polygonLocked, setPolygonLocked] = useState(false);
 
   useEffect(() => {
     if (!selectedCameraId && cameras[0]?.camera_id) {
@@ -38,9 +114,15 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
         const normalized = normalizeCameraDetail(detail);
         setDraft(normalized);
         setSelectedLaneId(normalized.lane_config.lanes[0]?.lane_id || 1);
+        setSelectedVertexIndex(null);
+        setIsDirty(false);
+        setPolygonLocked(false);
+        setMessage(detail.runtime_applied ? "Cấu hình đang được backend áp dụng runtime." : "");
       })
       .catch(() => {
         setDraft(createCameraDraft());
+        setSelectedVertexIndex(null);
+        setIsDirty(false);
       });
   }, [activeCameraId, selectedCameraId, isNewCamera]);
 
@@ -49,7 +131,30 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
     [draft, selectedLaneId],
   );
 
-  const updateDraft = (updater) => {
+  const selectedPoints = useMemo(() => {
+    if (!selectedLane) return [];
+    if (editTarget === "lane") return selectedLane.polygon || [];
+    return selectedLane.turn_regions?.[editTarget] || [];
+  }, [editTarget, selectedLane]);
+
+  const polygonStatus = useMemo(() => {
+    if (!selectedLane) return { warnings: [] };
+    const targetLabel = editTarget === "lane" ? `Polygon làn ${selectedLane.lane_id}` : `${getManeuverLabel(editTarget)} của làn ${selectedLane.lane_id}`;
+    const warnings = [];
+    if (selectedPoints.length > 0 && selectedPoints.length < 3) {
+      warnings.push(`${targetLabel} hiện có dưới 3 điểm, chưa đủ để tạo vùng hợp lệ.`);
+    }
+    if (selectedPoints.length >= 4 && polygonSelfIntersects(selectedPoints)) {
+      warnings.push(`${targetLabel} đang tự cắt nhau, nên chỉnh lại để tránh vùng hình học khó kiểm soát.`);
+    }
+    return { warnings };
+  }, [editTarget, selectedLane, selectedPoints]);
+
+  useEffect(() => {
+    setSelectedVertexIndex(null);
+  }, [editTarget, selectedLaneId]);
+
+  const updateDraft = (updater, options = {}) => {
     setDraft((current) => {
       const next = updater(current);
       return {
@@ -66,6 +171,10 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
         },
       };
     });
+    if (options.markDirty !== false) {
+      setIsDirty(true);
+      setMessage('Có thay đổi chưa lưu. Nhấn "Lưu cấu hình làn đường" để backend áp dụng.');
+    }
   };
 
   const updateLane = (laneId, updater) => {
@@ -89,6 +198,8 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
       },
     }));
     setSelectedLaneId(nextLaneId);
+    setSelectedVertexIndex(null);
+    setMessage(`Đã thêm làn ${nextLaneId}.`);
   };
 
   const removeLane = (laneId) => {
@@ -101,6 +212,8 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
       },
     }));
     setSelectedLaneId(remaining[0]?.lane_id || 1);
+    setSelectedVertexIndex(null);
+    setMessage(`Đã xóa làn ${laneId}.`);
   };
 
   const updateTargetPolygon = (lane, updater) => {
@@ -122,25 +235,51 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
   const handleCanvasPoint = (point) => {
     if (!selectedLane) return;
     updateLane(selectedLane.lane_id, (lane) => updateTargetPolygon(lane, (points) => [...points, point]));
+    setSelectedVertexIndex(selectedPoints.length);
+    setMessage("Đã thêm điểm mới vào polygon.");
+  };
+
+  const replaceTargetPolygon = (nextPoints) => {
+    if (!selectedLane) return;
+    updateLane(selectedLane.lane_id, (lane) => updateTargetPolygon(lane, () => nextPoints));
+    setMessage("Đã cập nhật polygon trên canvas, chưa lưu xuống backend.");
+  };
+
+  const deleteSelectedVertex = () => {
+    if (!selectedLane || selectedVertexIndex == null) return;
+    updateLane(
+      selectedLane.lane_id,
+      (lane) => updateTargetPolygon(lane, (points) => points.filter((_, index) => index !== selectedVertexIndex)),
+    );
+    setSelectedVertexIndex(null);
+    setMessage("Đã xóa điểm đang chọn.");
   };
 
   const undoPoint = () => {
     if (!selectedLane) return;
     updateLane(selectedLane.lane_id, (lane) => updateTargetPolygon(lane, (points) => points.slice(0, -1)));
+    setSelectedVertexIndex(null);
+    setMessage("Đã xóa điểm vừa vẽ.");
   };
 
   const clearPolygon = () => {
     if (!selectedLane) return;
     updateLane(selectedLane.lane_id, (lane) => updateTargetPolygon(lane, () => []));
+    setSelectedVertexIndex(null);
+    setMessage("Đã xóa toàn bộ polygon hiện tại.");
   };
 
   const startCreateCamera = () => {
+    if (isDirty && !window.confirm("Cấu hình hiện tại chưa lưu. Tạo camera mới và bỏ thay đổi này?")) return;
     setIsNewCamera(true);
     setActiveCameraId(null);
     const draftState = createCameraDraft(`cam_${String(cameras.length + 1).padStart(2, "0")}`);
     setDraft(draftState);
     setSelectedLaneId(1);
+    setSelectedVertexIndex(null);
     setEditTarget("lane");
+    setIsDirty(false);
+    setPolygonLocked(false);
     setMessage("");
   };
 
@@ -148,6 +287,11 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
     setSaving(true);
     setMessage("");
     try {
+      const validation = validatePolygonDraft(draft);
+      if (validation.errors.length > 0) {
+        setMessage(validation.errors[0]);
+        return;
+      }
       const payload = buildPayload(draft);
       const response = isNewCamera
         ? await createCamera(payload)
@@ -161,7 +305,9 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
       const normalized = normalizeCameraDetail(freshDetail);
       setDraft(normalized);
       setSelectedLaneId(normalized.lane_config.lanes[0]?.lane_id || 1);
-      setMessage("Đã lưu cấu hình camera.");
+      setSelectedVertexIndex(null);
+      setIsDirty(false);
+      setMessage(response.runtime_applied ? "Đã lưu và backend đã áp dụng ngay cấu hình lane mới." : "Đã lưu cấu hình camera.");
     } catch (error) {
       setMessage(error.message || "Không thể lưu cấu hình camera.");
     } finally {
@@ -182,6 +328,8 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
       setActiveCameraId(null);
       setDraft(createCameraDraft());
       setSelectedLaneId(1);
+      setSelectedVertexIndex(null);
+      setIsDirty(false);
       setMessage(`Đã xóa ${activeCameraId}.`);
     } catch (error) {
       setMessage(error.message || "Không thể xóa camera.");
@@ -208,9 +356,11 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
               key={camera.camera_id}
               className={camera.camera_id === activeCameraId && !isNewCamera ? "camera-card active" : "camera-card"}
               onClick={() => {
+                if (isDirty && !window.confirm("Cấu hình hiện tại chưa lưu. Chuyển camera và bỏ thay đổi này?")) return;
                 setIsNewCamera(false);
                 setActiveCameraId(camera.camera_id);
                 onSelectCamera(camera.camera_id);
+                setSelectedVertexIndex(null);
                 setMessage("");
               }}
             >
@@ -237,9 +387,20 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
                   Xóa camera
                 </button>
               ) : null}
-              <button className="button primary" onClick={saveCurrentCamera} disabled={saving}>
-                {saving ? "Đang lưu..." : "Lưu cấu hình"}
+              <button className="button primary" onClick={saveCurrentCamera} disabled={saving || !isDirty}>
+                {saving ? "Đang lưu..." : "Lưu cấu hình làn đường"}
               </button>
+            </div>
+          </div>
+
+          <div className="status-strip">
+            <div className={isDirty ? "badge warning" : "badge success"}>
+              {isDirty ? "Chưa lưu" : "Đã đồng bộ backend"}
+            </div>
+            <div className="row-sub">
+              {isDirty
+                ? "Các thay đổi hiện chỉ nằm ở frontend state cho đến khi bạn nhấn lưu."
+                : "Monitoring và logic backend đang dùng đúng cấu hình hiện tại."}
             </div>
           </div>
 
@@ -486,14 +647,44 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
                   })}
                 </div>
 
-                <div className="editor-actions">
-                  <button className="button secondary" onClick={undoPoint}>
+                <div className="editor-action-toolbar">
+                  <div className="editor-action-toolbar-label">Thao tác polygon</div>
+                  <div className="editor-actions">
+                  <button
+                    className={polygonLocked ? "button secondary compact-button" : "button ghost compact-button"}
+                    onClick={() => {
+                      setPolygonLocked((value) => {
+                        const nextValue = !value;
+                        setMessage(nextValue ? "Đã khóa polygon để tránh chỉnh nhầm." : "Đã mở khóa polygon để tiếp tục chỉnh.");
+                        return nextValue;
+                      });
+                    }}
+                  >
+                    <ActionIcon type={polygonLocked ? "unlock" : "lock"} />
+                    {polygonLocked ? "Mở khóa polygon" : "Khóa polygon"}
+                  </button>
+                  <button className="button secondary compact-button" onClick={undoPoint}>
+                    <ActionIcon type="undo" />
                     Xóa điểm vừa vẽ
                   </button>
-                  <button className="button ghost" onClick={clearPolygon}>
+                  <button className="button ghost compact-button" onClick={deleteSelectedVertex} disabled={selectedVertexIndex == null}>
+                    <ActionIcon type="vertex-delete" />
+                    Xóa vertex đang chọn
+                  </button>
+                  <button className="button ghost compact-button" onClick={clearPolygon}>
+                    <ActionIcon type="polygon-delete" />
                     Xóa đa giác hiện tại
                   </button>
                 </div>
+                </div>
+
+                {polygonStatus.warnings.length > 0 ? (
+                  <div className="message-bar warning">
+                    {polygonStatus.warnings.map((warning) => (
+                      <div key={warning}>{warning}</div>
+                    ))}
+                  </div>
+                ) : null}
               </div>
             ) : (
               <div className="empty-state slim">Tạo làn đầu tiên để bắt đầu cấu hình.</div>
@@ -508,8 +699,11 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
               vehicles={[]}
               showTurnRegions
               selectedLaneId={selectedLaneId}
-              editable
+              selectedVertexIndex={selectedVertexIndex}
+              editable={!polygonLocked}
               onCanvasClick={handleCanvasPoint}
+              onPolygonReplace={replaceTargetPolygon}
+              onVertexSelect={setSelectedVertexIndex}
               editTarget={editTarget}
             />
           </div>

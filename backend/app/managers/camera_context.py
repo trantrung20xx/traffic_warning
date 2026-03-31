@@ -10,7 +10,7 @@ import cv2
 
 from app.core.config import CameraLaneConfig, CameraConfig
 from app.db.repository import insert_violation
-from app.logic.lane_logic import LaneLogic
+from app.logic.lane_logic import LaneLogic, TemporalLaneAssigner
 from app.logic.violation_logic import ViolationLogic
 from app.schemas.camera import CameraLocation
 from app.schemas.events import (
@@ -72,6 +72,7 @@ class CameraContext:
 
         # Lane / violation rules (hand-crafted polygons)
         self.lane_logic = LaneLogic(lane_config.lanes)
+        self.temporal_lane_assigner = TemporalLaneAssigner()
         self.violation_logic = ViolationLogic(
             lane_config.lanes,
             wrong_lane_min_duration_ms=wrong_lane_min_duration_ms,
@@ -151,12 +152,18 @@ class CameraContext:
                 violation_candidates: list[tuple[int, str, dict]] = []
 
                 for tr in tracks:
-                    lane_id = self.lane_logic.assign_lane_id_from_bbox_xyxy(tr.bbox_xyxy)
+                    raw_lane_id = self.lane_logic.assign_lane_id_from_bbox_xyxy(tr.bbox_xyxy)
+                    lane_id = self.temporal_lane_assigner.resolve_lane(
+                        vehicle_id=tr.vehicle_id,
+                        raw_lane_id=raw_lane_id,
+                        ts=ts_dt,
+                    )
                     vehicles.append(
                         TrackVehicle(
                             vehicle_id=tr.vehicle_id,
                             vehicle_type=tr.vehicle_type,
                             lane_id=lane_id,
+                            raw_lane_id=raw_lane_id,
                             bbox=BBox(x1=tr.bbox_xyxy[0], y1=tr.bbox_xyxy[1], x2=tr.bbox_xyxy[2], y2=tr.bbox_xyxy[3]),
                         )
                     )
@@ -180,6 +187,7 @@ class CameraContext:
                     await self._handle_violations(violation_candidates, ts_dt)
 
                 await asyncio.to_thread(self.violation_logic.prune, current_ts=ts_dt, max_age_s=60.0)
+                await asyncio.to_thread(self.temporal_lane_assigner.prune, current_ts=ts_dt, max_age_s=60.0)
         finally:
             await asyncio.to_thread(self.rtsp_reader.close)
 

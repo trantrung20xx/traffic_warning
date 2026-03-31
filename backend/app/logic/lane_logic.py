@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections import Counter, deque
+from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Optional
 
 from app.core.config import LanePolygon
@@ -10,6 +12,15 @@ from app.logic.polygon import bbox_bottom_center, point_in_polygon
 @dataclass(frozen=True)
 class LaneMatch:
     lane_id: int
+
+
+@dataclass
+class LaneHistoryState:
+    stable_lane_id: Optional[int] = None
+    pending_lane_id: Optional[int] = None
+    pending_started_ts: Optional[datetime] = None
+    recent_observations: deque[tuple[datetime, Optional[int]]] = field(default_factory=deque)
+    last_seen_ts: Optional[datetime] = None
 
 
 class LaneLogic:
@@ -39,4 +50,88 @@ class LaneLogic:
             # Misconfigured overlapping polygons. Skeleton: choose the first.
             return matches[0]
         return None
+
+
+class TemporalLaneAssigner:
+    """
+    Stabilize per-frame polygon hits before the rest of the pipeline consumes lane_id.
+    Traffic cameras are fixed, so a short majority window plus hysteresis gives behavior
+    closer to real ITS rule engines than reacting to a single noisy frame.
+    """
+
+    def __init__(
+        self,
+        *,
+        observation_window_ms: int = 1200,
+        min_majority_hits: int = 3,
+        switch_min_duration_ms: int = 700,
+    ):
+        self._observation_window_ms = int(observation_window_ms)
+        self._min_majority_hits = int(min_majority_hits)
+        self._switch_min_duration_ms = int(switch_min_duration_ms)
+        self._vehicle_states: dict[int, LaneHistoryState] = {}
+
+    def resolve_lane(self, *, vehicle_id: int, raw_lane_id: Optional[int], ts: datetime) -> Optional[int]:
+        st = self._vehicle_states.get(vehicle_id)
+        if st is None:
+            st = LaneHistoryState()
+            self._vehicle_states[vehicle_id] = st
+
+        st.last_seen_ts = ts
+        st.recent_observations.append((ts, raw_lane_id))
+        self._prune_history(st, ts)
+
+        counts = Counter(lane_id for _, lane_id in st.recent_observations if lane_id is not None)
+        if not counts:
+            return st.stable_lane_id
+
+        majority_lane_id, majority_hits = counts.most_common(1)[0]
+
+        if st.stable_lane_id is None:
+            if majority_hits >= self._min_majority_hits:
+                st.stable_lane_id = majority_lane_id
+            return st.stable_lane_id
+
+        if majority_lane_id == st.stable_lane_id:
+            st.pending_lane_id = None
+            st.pending_started_ts = None
+            return st.stable_lane_id
+
+        stable_hits = counts.get(st.stable_lane_id, 0)
+        if majority_hits <= stable_hits:
+            st.pending_lane_id = None
+            st.pending_started_ts = None
+            return st.stable_lane_id
+
+        if st.pending_lane_id != majority_lane_id:
+            st.pending_lane_id = majority_lane_id
+            st.pending_started_ts = ts
+            return st.stable_lane_id
+
+        if st.pending_started_ts is None:
+            st.pending_started_ts = ts
+            return st.stable_lane_id
+
+        duration_ms = int((ts - st.pending_started_ts).total_seconds() * 1000.0)
+        if duration_ms >= self._switch_min_duration_ms and majority_hits >= self._min_majority_hits:
+            st.stable_lane_id = majority_lane_id
+            st.pending_lane_id = None
+            st.pending_started_ts = None
+
+        return st.stable_lane_id
+
+    def prune(self, *, current_ts: datetime, max_age_s: float) -> None:
+        cutoff_ts = current_ts.timestamp() - float(max_age_s)
+        stale_ids = [
+            vehicle_id
+            for vehicle_id, state in self._vehicle_states.items()
+            if state.last_seen_ts is not None and state.last_seen_ts.timestamp() < cutoff_ts
+        ]
+        for vehicle_id in stale_ids:
+            del self._vehicle_states[vehicle_id]
+
+    def _prune_history(self, state: LaneHistoryState, current_ts: datetime) -> None:
+        cutoff_ts = current_ts.timestamp() - (self._observation_window_ms / 1000.0)
+        while state.recent_observations and state.recent_observations[0][0].timestamp() < cutoff_ts:
+            state.recent_observations.popleft()
 

@@ -23,6 +23,7 @@ class TrackVehicle(BaseModel):
     vehicle_id: int
     vehicle_type: str
     lane_id: Optional[int] = None
+    raw_lane_id: Optional[int] = None
     bbox: BBox
 
 

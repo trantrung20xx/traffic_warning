@@ -9,6 +9,7 @@ export default function App() {
   const [cameras, setCameras] = useState([]);
   const [selectedCameraId, setSelectedCameraId] = useState(null);
   const [loadingCameras, setLoadingCameras] = useState(true);
+  const [configRevision, setConfigRevision] = useState(0);
 
   const refreshCameras = async (preferredCameraId = null) => {
     setLoadingCameras(true);
@@ -16,6 +17,7 @@ export default function App() {
       const rows = await fetchCameras();
       startTransition(() => {
         setCameras(rows);
+        setConfigRevision((value) => value + 1);
         setSelectedCameraId((current) => {
           if (preferredCameraId && rows.some((camera) => camera.camera_id === preferredCameraId)) {
             return preferredCameraId;
@@ -62,6 +64,7 @@ export default function App() {
             selectedCameraId={selectedCameraId}
             onSelectCamera={setSelectedCameraId}
             loading={loadingCameras}
+            configRevision={configRevision}
           />
         ) : null}
         {view === "analytics" ? (

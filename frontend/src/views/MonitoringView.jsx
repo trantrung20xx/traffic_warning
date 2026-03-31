@@ -4,7 +4,7 @@ import StatPill from "../components/StatPill";
 import { connectTracks, connectViolations, fetchCameraDetail, getCameraPreviewUrl } from "../api";
 import { formatTimestamp, getCameraTypeLabel, getVehicleTypeLabel, getViolationLabel } from "../utils";
 
-export default function MonitoringView({ cameras, selectedCameraId, onSelectCamera, loading }) {
+export default function MonitoringView({ cameras, selectedCameraId, onSelectCamera, loading, configRevision }) {
   const [detail, setDetail] = useState(null);
   const [vehicles, setVehicles] = useState([]);
   const [violations, setViolations] = useState([]);
@@ -17,7 +17,7 @@ export default function MonitoringView({ cameras, selectedCameraId, onSelectCame
     fetchCameraDetail(selectedCameraId).then(setDetail).catch(() => setDetail(null));
     setVehicles([]);
     setViolations([]);
-  }, [selectedCameraId]);
+  }, [configRevision, selectedCameraId]);
 
   useEffect(() => {
     if (!selectedCameraId) return undefined;
@@ -102,7 +102,9 @@ export default function MonitoringView({ cameras, selectedCameraId, onSelectCame
                   <div className="row-title">
                     #{vehicle.vehicle_id} · {getVehicleTypeLabel(vehicle.vehicle_type)}
                   </div>
-                  <div className="row-sub">Làn: {vehicle.lane_id ?? "ngoài vùng cấu hình"}</div>
+                  <div className="row-sub">
+                    Làn ổn định: {vehicle.lane_id ?? "đang ổn định"}{vehicle.raw_lane_id != null ? ` · hit hiện tại: ${vehicle.raw_lane_id}` : ""}
+                  </div>
                 </div>
                 <div className="badge subtle">{vehicle.bbox ? "Đang theo dõi" : "Chờ xử lý"}</div>
               </article>

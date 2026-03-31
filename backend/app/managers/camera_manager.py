@@ -88,6 +88,7 @@ class CameraManager:
                 "monitored_lanes": cam.monitored_lanes,
             },
             "lane_config": lane_cfg.model_dump(mode="json", exclude_none=True),
+            "runtime_applied": camera_id in self._contexts,
         }
 
     def upsert_camera(self, camera_config: CameraConfig, lane_config: CameraLaneConfig) -> dict:
@@ -251,5 +252,7 @@ class CameraManager:
         was_running = self._running
         self._stop_context(camera_id)
         if was_running:
+            # Saving a camera config must swap runtime geometry immediately so monitoring
+            # and violation logic start using the new polygons without a server restart.
             self._start_context(camera_id)
 

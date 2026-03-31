@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from app.schemas.camera import CameraConfig
 
@@ -26,6 +26,25 @@ class LanePolygon(BaseModel):
     # If a vehicle enters a lane not in allowed_lane_changes, we consider it illegal.
     # By default skeleton allows only staying in its primary lane.
     allowed_lane_changes: Optional[list[int]] = None
+
+    @field_validator("polygon")
+    @classmethod
+    def validate_polygon(cls, value: list[list[float]]) -> list[list[float]]:
+        if len(value) < 3:
+            raise ValueError("lane polygon must contain at least 3 points")
+        return value
+
+    @field_validator("turn_regions")
+    @classmethod
+    def validate_turn_regions(
+        cls, value: Optional[dict[str, list[list[float]]]]
+    ) -> Optional[dict[str, list[list[float]]]]:
+        if value is None:
+            return value
+        for maneuver, points in value.items():
+            if len(points) < 3:
+                raise ValueError(f"turn region '{maneuver}' must contain at least 3 points")
+        return value
 
 
 class CameraLaneConfig(BaseModel):

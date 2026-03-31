@@ -88,6 +88,18 @@ select {
   cursor: pointer;
 }
 
+.button:active,
+.nav-tab:active,
+.camera-card:active,
+.lane-chip:active {
+  transform: translateY(1px) scale(0.985);
+}
+
+.button:disabled {
+  opacity: 0.52;
+  cursor: not-allowed;
+}
+
 .nav-tab.active,
 .button.primary {
   background: linear-gradient(135deg, rgba(0, 214, 143, 0.3), rgba(28, 166, 255, 0.3));
@@ -159,7 +171,6 @@ select {
 .filter-row,
 .action-row,
 .inline-fields,
-.editor-actions,
 .camera-meta-grid,
 .summary-grid,
 .form-grid,
@@ -281,6 +292,18 @@ select {
 
 .badge.subtle {
   color: var(--muted);
+}
+
+.badge.warning {
+  background: rgba(255, 190, 61, 0.16);
+  border-color: rgba(255, 190, 61, 0.28);
+  color: #ffe0a3;
+}
+
+.badge.success {
+  background: rgba(0, 214, 143, 0.14);
+  border-color: rgba(0, 214, 143, 0.24);
+  color: #a7ffdc;
 }
 
 .stat-pill {
@@ -407,10 +430,63 @@ select {
   background: rgba(255, 255, 255, 0.03);
 }
 
+.editor-actions {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: stretch;
+  gap: 10px;
+  overflow-x: auto;
+}
+
+.editor-action-toolbar {
+  margin-top: 18px;
+  padding: 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.editor-action-toolbar-label {
+  margin-bottom: 10px;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.editor-actions .button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  white-space: nowrap;
+  flex: 1 1 0;
+  min-width: max-content;
+}
+
+.editor-actions .button svg {
+  flex: 0 0 auto;
+}
+
+.compact-button {
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 1.2;
+}
+
 .editor-canvas-wrap {
   border-radius: 18px;
   overflow: hidden;
   border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.status-strip {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
 }
 
 .message-bar,
@@ -420,6 +496,12 @@ select {
   border-radius: 14px;
   background: rgba(255, 255, 255, 0.03);
   color: var(--muted);
+}
+
+.message-bar.warning {
+  background: rgba(255, 190, 61, 0.12);
+  border: 1px solid rgba(255, 190, 61, 0.28);
+  color: #ffe0a3;
 }
 
 .empty-state.slim {
@@ -444,6 +526,15 @@ select {
   .panel-header {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .editor-actions {
+    flex-wrap: wrap;
+    overflow-x: visible;
+  }
+
+  .editor-actions .button {
+    flex: 1 1 calc(50% - 10px);
   }
 }
 
