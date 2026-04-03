@@ -4,8 +4,14 @@ import asyncio
 from pathlib import Path
 from typing import Optional
 
+from app.core.background_images import (
+    delete_background_image,
+    get_background_image_path,
+    save_background_image,
+)
 from app.core.config import (
     CameraLaneConfig,
+    denormalize_lane_config,
     delete_lane_config_for_camera,
     load_app_config,
     load_cameras,
@@ -89,6 +95,7 @@ class CameraManager:
             },
             "lane_config": lane_cfg.model_dump(mode="json", exclude_none=True),
             "runtime_applied": camera_id in self._contexts,
+            "has_background_image": self.has_background_image(camera_id),
         }
 
     def upsert_camera(self, camera_config: CameraConfig, lane_config: CameraLaneConfig) -> dict:
@@ -119,6 +126,7 @@ class CameraManager:
         self.cameras = [cam for cam in self.cameras if cam.camera_id != camera_id]
         save_cameras(self.repo_root, self.cameras)
         delete_lane_config_for_camera(self.repo_root, camera_id)
+        delete_background_image(self.repo_root, camera_id)
 
     def query_history(self, *, from_ts: Optional[str], to_ts: Optional[str], camera_id: Optional[str], limit: int):
         with self._SessionLocal() as session:
@@ -180,6 +188,7 @@ class CameraManager:
         ctx = self._contexts.get(camera_id)
         if ctx is None:
             lane_cfg = load_lane_config_for_camera(self.repo_root, camera_id)
+            lane_cfg_pixels = denormalize_lane_config(lane_cfg)
             return {
                 "camera_id": lane_cfg.camera_id,
                 "frame_width": lane_cfg.frame_width,
@@ -192,10 +201,30 @@ class CameraManager:
                         "allowed_maneuvers": lane.allowed_maneuvers or [],
                         "allowed_lane_changes": lane.allowed_lane_changes or [lane.lane_id],
                     }
-                    for lane in lane_cfg.lanes
+                    for lane in lane_cfg_pixels.lanes
                 ],
             }
         return ctx.get_lane_polygons_for_ui()
+
+    def has_background_image(self, camera_id: str) -> bool:
+        self._require_camera_exists(camera_id)
+        return get_background_image_path(self.repo_root, camera_id) is not None
+
+    def get_background_image_path(self, camera_id: str) -> Optional[Path]:
+        self._require_camera_exists(camera_id)
+        return get_background_image_path(self.repo_root, camera_id)
+
+    def save_background_image(self, camera_id: str, *, suffix: str, data: bytes) -> Path:
+        self._require_camera_exists(camera_id)
+        return save_background_image(self.repo_root, camera_id, suffix=suffix, data=data)
+
+    def delete_background_image(self, camera_id: str) -> bool:
+        self._require_camera_exists(camera_id)
+        path = get_background_image_path(self.repo_root, camera_id)
+        if path is None:
+            return False
+        delete_background_image(self.repo_root, camera_id)
+        return True
 
     def get_camera_preview_jpeg(self, camera_id: str) -> Optional[bytes]:
         ctx = self._contexts.get(camera_id)
@@ -222,9 +251,10 @@ class CameraManager:
     def _build_context(self, camera_id: str) -> CameraContext:
         cam = next(item for item in self.cameras if item.camera_id == camera_id)
         lane_cfg = load_lane_config_for_camera(self.repo_root, cam.camera_id)
+        lane_cfg_pixels = denormalize_lane_config(lane_cfg)
         return CameraContext(
             camera_config=cam,
-            lane_config=lane_cfg,
+            lane_config=lane_cfg_pixels,
             db_session_factory=self._SessionLocal,
             on_track=self._on_track,
             on_violation=self._on_violation,
@@ -255,4 +285,8 @@ class CameraManager:
             # Saving a camera config must swap runtime geometry immediately so monitoring
             # and violation logic start using the new polygons without a server restart.
             self._start_context(camera_id)
+
+    def _require_camera_exists(self, camera_id: str) -> None:
+        if not any(cam.camera_id == camera_id for cam in self.cameras):
+            raise KeyError(camera_id)
 

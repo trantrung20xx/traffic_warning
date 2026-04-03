@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import ValidationError
 
 from app.core.config import CameraLaneConfig
@@ -15,6 +16,18 @@ from app.db.repository import query_violation_counts
 
 def create_api_router(manager: CameraManager) -> APIRouter:
     router = APIRouter()
+    allowed_upload_content_types = {"image/jpeg": ".jpg", "image/png": ".png"}
+
+    def _get_upload_suffix(upload: UploadFile) -> str:
+        content_type = (upload.content_type or "").lower()
+        if content_type in allowed_upload_content_types:
+            return allowed_upload_content_types[content_type]
+        suffix = Path(upload.filename or "").suffix.lower()
+        if suffix == ".jpeg":
+            suffix = ".jpg"
+        if suffix in {".jpg", ".png"}:
+            return suffix
+        raise HTTPException(status_code=400, detail="Only .jpg and .png background images are supported")
 
     @router.get("/api/health")
     def health():
@@ -55,6 +68,37 @@ def create_api_router(manager: CameraManager) -> APIRouter:
         try:
             manager.delete_camera(camera_id)
             return {"ok": True}
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Camera not found")
+
+    @router.post("/api/camera/{camera_id}/background-image")
+    async def upload_background_image(camera_id: str, file: UploadFile = File(...)):
+        try:
+            suffix = _get_upload_suffix(file)
+            data = await file.read()
+            if not data:
+                raise HTTPException(status_code=400, detail="Background image file is empty")
+            manager.save_background_image(camera_id, suffix=suffix, data=data)
+            return {"ok": True, "camera_id": camera_id, "has_background_image": True}
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Camera not found")
+
+    @router.get("/api/camera/{camera_id}/background-image")
+    async def get_background_image(camera_id: str):
+        try:
+            path = manager.get_background_image_path(camera_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Camera not found")
+        if path is None:
+            raise HTTPException(status_code=404, detail="Background image not found")
+        media_type = "image/png" if path.suffix.lower() == ".png" else "image/jpeg"
+        return FileResponse(path, media_type=media_type, filename=path.name)
+
+    @router.delete("/api/camera/{camera_id}/background-image")
+    async def delete_background_image(camera_id: str):
+        try:
+            deleted = manager.delete_background_image(camera_id)
+            return {"ok": True, "camera_id": camera_id, "deleted": deleted}
         except KeyError:
             raise HTTPException(status_code=404, detail="Camera not found")
 

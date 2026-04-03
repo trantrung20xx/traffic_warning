@@ -2,8 +2,11 @@ import React, { useEffect, useMemo, useState } from "react";
 import CameraCanvas from "../components/CameraCanvas";
 import {
   createCamera,
+  deleteBackgroundImage,
   deleteCamera,
   fetchCameraDetail,
+  getBackgroundImageUrl,
+  uploadBackgroundImage,
   updateCamera,
 } from "../api";
 import {
@@ -85,6 +88,59 @@ function ActionIcon({ type }) {
     );
   }
 
+  if (type === "image-upload") {
+    return (
+      <svg {...commonProps}>
+        <path d="M12 16V8" />
+        <path d="M9 11l3-3 3 3" />
+        <rect x="4" y="16" width="16" height="4" rx="1.5" />
+        <path d="M6 16v-6a2 2 0 0 1 2-2h1" />
+        <path d="M15 8h1a2 2 0 0 1 2 2v6" />
+      </svg>
+    );
+  }
+
+  if (type === "image-delete") {
+    return (
+      <svg {...commonProps}>
+        <rect x="4" y="5" width="12" height="12" rx="2" />
+        <path d="m8 11 2 2 2-3 2 3" />
+        <circle cx="9" cy="9" r="1" />
+        <path d="M17.5 17.5 21 21" />
+        <path d="M21 17.5 17.5 21" />
+      </svg>
+    );
+  }
+
+  if (type === "lane-add") {
+    return (
+      <svg {...commonProps}>
+        <path d="M7 5v14" />
+        <path d="M13 5v14" />
+        <path d="M17 8h4" />
+        <path d="M19 6v4" />
+      </svg>
+    );
+  }
+
+  if (type === "lane-delete") {
+    return (
+      <svg {...commonProps}>
+        <path d="M7 5v14" />
+        <path d="M13 5v14" />
+        <path d="M16 8h5" />
+      </svg>
+    );
+  }
+
+  if (type === "chevron-down") {
+    return (
+      <svg {...commonProps}>
+        <path d="m6 9 6 6 6-6" />
+      </svg>
+    );
+  }
+
   return null;
 }
 
@@ -99,6 +155,9 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
   const [isNewCamera, setIsNewCamera] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
   const [polygonLocked, setPolygonLocked] = useState(false);
+  const [hasBackgroundImage, setHasBackgroundImage] = useState(false);
+  const [backgroundRevision, setBackgroundRevision] = useState("0");
+  const [backgroundBusy, setBackgroundBusy] = useState(false);
 
   useEffect(() => {
     if (!selectedCameraId && cameras[0]?.camera_id) {
@@ -117,12 +176,15 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
         setSelectedVertexIndex(null);
         setIsDirty(false);
         setPolygonLocked(false);
+        setHasBackgroundImage(Boolean(detail.has_background_image));
+        setBackgroundRevision(`${Date.now()}`);
         setMessage(detail.runtime_applied ? "Cấu hình đang được backend áp dụng runtime." : "");
       })
       .catch(() => {
         setDraft(createCameraDraft());
         setSelectedVertexIndex(null);
         setIsDirty(false);
+        setHasBackgroundImage(false);
       });
   }, [activeCameraId, selectedCameraId, isNewCamera]);
 
@@ -157,17 +219,23 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
   const updateDraft = (updater, options = {}) => {
     setDraft((current) => {
       const next = updater(current);
+      const laneIds = next.lane_config.lanes.map((lane) => Number(lane.lane_id));
+      const sanitizedLanes = next.lane_config.lanes.map((lane) => ({
+        ...lane,
+        allowed_lane_changes: (lane.allowed_lane_changes || [lane.lane_id]).filter((value) => laneIds.includes(Number(value))),
+      }));
       return {
         ...next,
         camera: {
           ...next.camera,
-          monitored_lanes: next.lane_config.lanes.map((lane) => Number(lane.lane_id)),
+          monitored_lanes: laneIds,
         },
         lane_config: {
           ...next.lane_config,
           camera_id: next.camera.camera_id,
           frame_width: Number(next.camera.frame_width) || next.lane_config.frame_width,
           frame_height: Number(next.camera.frame_height) || next.lane_config.frame_height,
+          lanes: sanitizedLanes,
         },
       };
     });
@@ -280,7 +348,42 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
     setEditTarget("lane");
     setIsDirty(false);
     setPolygonLocked(false);
+    setHasBackgroundImage(false);
+    setBackgroundRevision("0");
     setMessage("");
+  };
+
+  const handleBackgroundUpload = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file || !draft.camera.camera_id || isNewCamera) return;
+
+    setBackgroundBusy(true);
+    try {
+      await uploadBackgroundImage(draft.camera.camera_id, file);
+      setHasBackgroundImage(true);
+      setBackgroundRevision(`${Date.now()}`);
+      setMessage("Đã cập nhật ảnh nền cho camera hiện tại.");
+    } catch (error) {
+      setMessage(error.message || "Không thể upload ảnh nền.");
+    } finally {
+      setBackgroundBusy(false);
+    }
+  };
+
+  const handleBackgroundClear = async () => {
+    if (!draft.camera.camera_id || isNewCamera) return;
+    setBackgroundBusy(true);
+    try {
+      await deleteBackgroundImage(draft.camera.camera_id);
+      setHasBackgroundImage(false);
+      setBackgroundRevision(`${Date.now()}`);
+      setMessage("Đã xóa ảnh nền của camera hiện tại.");
+    } catch (error) {
+      setMessage(error.message || "Không thể xóa ảnh nền.");
+    } finally {
+      setBackgroundBusy(false);
+    }
   };
 
   const saveCurrentCamera = async () => {
@@ -307,6 +410,8 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
       setSelectedLaneId(normalized.lane_config.lanes[0]?.lane_id || 1);
       setSelectedVertexIndex(null);
       setIsDirty(false);
+      setHasBackgroundImage(Boolean(freshDetail.has_background_image));
+      setBackgroundRevision(`${Date.now()}`);
       setMessage(response.runtime_applied ? "Đã lưu và backend đã áp dụng ngay cấu hình lane mới." : "Đã lưu cấu hình camera.");
     } catch (error) {
       setMessage(error.message || "Không thể lưu cấu hình camera.");
@@ -330,6 +435,8 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
       setSelectedLaneId(1);
       setSelectedVertexIndex(null);
       setIsDirty(false);
+      setHasBackgroundImage(false);
+      setBackgroundRevision("0");
       setMessage(`Đã xóa ${activeCameraId}.`);
     } catch (error) {
       setMessage(error.message || "Không thể xóa camera.");
@@ -381,7 +488,7 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
               <div className="panel-kicker">Thông tin camera</div>
               <h2>{isNewCamera ? "Thêm camera mới" : `Chỉnh sửa ${draft.camera.camera_id || "camera"}`}</h2>
             </div>
-            <div className="action-row">
+            <div className="action-row management-header-actions">
               {!isNewCamera && activeCameraId ? (
                 <button className="button danger" onClick={handleDelete} disabled={saving}>
                   Xóa camera
@@ -548,6 +655,7 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
           </div>
 
           {message ? <div className="message-bar">{message}</div> : null}
+
         </section>
 
         <section className="panel lane-panel">
@@ -556,29 +664,37 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
               <div className="panel-kicker">Trình chỉnh sửa làn</div>
               <h3>Số lượng làn, chức năng làn và vùng đa giác rẽ</h3>
             </div>
-            <div className="action-row">
-              <button className="button secondary" onClick={addLane}>
-                Thêm làn
-              </button>
-              {selectedLane ? (
-                <button className="button ghost" onClick={() => removeLane(selectedLane.lane_id)}>
-                  Xóa làn
-                </button>
-              ) : null}
-            </div>
           </div>
 
           <div className="lane-editor-grid">
-            <div className="lane-list">
-              {draft.lane_config.lanes.map((lane) => (
-                <button
-                  key={lane.lane_id}
-                  className={lane.lane_id === selectedLaneId ? "lane-chip active" : "lane-chip"}
-                  onClick={() => setSelectedLaneId(lane.lane_id)}
-                >
-                  Làn {lane.lane_id}
-                </button>
-              ))}
+            <div className="lane-list-panel">
+              <div className="lane-list">
+                {draft.lane_config.lanes.map((lane) => (
+                  <div
+                    key={lane.lane_id}
+                    className={lane.lane_id === selectedLaneId ? "lane-chip lane-chip-row active" : "lane-chip lane-chip-row"}
+                  >
+                    <button className="lane-chip-main" onClick={() => setSelectedLaneId(lane.lane_id)}>
+                      Làn {lane.lane_id}
+                    </button>
+                    <button
+                      className="lane-chip-delete"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        removeLane(lane.lane_id);
+                      }}
+                      aria-label={`Xóa làn ${lane.lane_id}`}
+                      title={`Xóa làn ${lane.lane_id}`}
+                    >
+                      <ActionIcon type="lane-delete" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <button className="button secondary lane-add-button" onClick={addLane}>
+                <ActionIcon type="lane-add" />
+                Thêm làn
+              </button>
             </div>
 
             {selectedLane ? (
@@ -598,18 +714,47 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
                   </label>
                   <label className="field">
                     <span>Các làn được phép chuyển</span>
-                    <input
-                      value={(selectedLane.allowed_lane_changes || []).join(",")}
-                      onChange={(event) =>
-                        updateLane(selectedLane.lane_id, (lane) => ({
-                          ...lane,
-                          allowed_lane_changes: event.target.value
-                            .split(",")
-                            .map((value) => Number(value.trim()))
-                            .filter((value) => Number.isFinite(value)),
-                        }))
-                      }
-                    />
+                    <details className="lane-change-dropdown">
+                      <summary className="lane-change-summary">
+                        <span className="lane-change-summary-text">
+                          {draft.lane_config.lanes
+                            .filter((laneOption) => (selectedLane.allowed_lane_changes || []).includes(laneOption.lane_id))
+                            .map((laneOption) => `Làn ${laneOption.lane_id}`)
+                            .join(", ") || "Chọn làn"}
+                        </span>
+                        <span className="lane-change-summary-icon">
+                          <ActionIcon type="chevron-down" />
+                        </span>
+                      </summary>
+                      <div className="lane-change-menu">
+                        {draft.lane_config.lanes.map((laneOption) => {
+                          const checked = (selectedLane.allowed_lane_changes || []).includes(laneOption.lane_id);
+                          const disabled = laneOption.lane_id === selectedLane.lane_id;
+                          return (
+                            <label
+                              key={laneOption.lane_id}
+                              className={disabled ? "lane-change-option lane-change-option-disabled" : "lane-change-option"}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                disabled={disabled}
+                                onChange={(event) =>
+                                  updateLane(selectedLane.lane_id, (lane) => ({
+                                    ...lane,
+                                    allowed_lane_changes: event.target.checked
+                                      ? [...new Set([...(lane.allowed_lane_changes || []), laneOption.lane_id])]
+                                      : (lane.allowed_lane_changes || []).filter((value) => value !== laneOption.lane_id),
+                                  }))
+                                }
+                              />
+                              <span className="lane-change-option-label">{`Làn ${laneOption.lane_id}`}</span>
+                              {disabled ? <span className="lane-change-option-note">Hiện tại</span> : null}
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </details>
                   </label>
                   <label className="field">
                     <span>Đối tượng đa giác</span>
@@ -647,34 +792,67 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
                   })}
                 </div>
 
-                <div className="editor-action-toolbar">
-                  <div className="editor-action-toolbar-label">Thao tác polygon</div>
-                  <div className="editor-actions">
-                  <button
-                    className={polygonLocked ? "button secondary compact-button" : "button ghost compact-button"}
-                    onClick={() => {
-                      setPolygonLocked((value) => {
-                        const nextValue = !value;
-                        setMessage(nextValue ? "Đã khóa polygon để tránh chỉnh nhầm." : "Đã mở khóa polygon để tiếp tục chỉnh.");
-                        return nextValue;
-                      });
-                    }}
-                  >
-                    <ActionIcon type={polygonLocked ? "unlock" : "lock"} />
-                    {polygonLocked ? "Mở khóa polygon" : "Khóa polygon"}
-                  </button>
-                  <button className="button secondary compact-button" onClick={undoPoint}>
-                    <ActionIcon type="undo" />
-                    Xóa điểm vừa vẽ
-                  </button>
-                  <button className="button ghost compact-button" onClick={deleteSelectedVertex} disabled={selectedVertexIndex == null}>
-                    <ActionIcon type="vertex-delete" />
-                    Xóa vertex đang chọn
-                  </button>
-                  <button className="button ghost compact-button" onClick={clearPolygon}>
-                    <ActionIcon type="polygon-delete" />
-                    Xóa đa giác hiện tại
-                  </button>
+                <div className="editor-toolbar-row">
+                  <div className="editor-action-toolbar compact-toolbar">
+                    <div className="editor-action-toolbar-label">Ảnh nền camera</div>
+                    <div className="editor-actions tight-actions">
+                      <label className={`button secondary compact-button smaller-button${isNewCamera || backgroundBusy ? " disabled" : ""}`}>
+                        <input
+                          type="file"
+                          accept=".jpg,.png,image/jpeg,image/png"
+                          hidden
+                          disabled={isNewCamera || backgroundBusy}
+                          onChange={handleBackgroundUpload}
+                        />
+                        <ActionIcon type="image-upload" />
+                        {backgroundBusy ? "Đang xử lý" : "Tải ảnh"}
+                      </label>
+                      <button
+                        className="button ghost compact-button smaller-button"
+                        onClick={handleBackgroundClear}
+                        disabled={isNewCamera || backgroundBusy || !hasBackgroundImage}
+                      >
+                        <ActionIcon type="image-delete" />
+                        Xóa ảnh
+                      </button>
+                      <div className={hasBackgroundImage ? "badge success toolbar-badge" : "badge subtle toolbar-badge"}>
+                        {hasBackgroundImage ? "Có ảnh nền" : "Chưa có ảnh"}
+                      </div>
+                    </div>
+                    {isNewCamera ? (
+                      <div className="toolbar-note">Lưu camera trước để gắn ảnh nền theo `camera_id` cố định.</div>
+                    ) : null}
+                  </div>
+
+                  <div className="editor-action-toolbar compact-toolbar">
+                    <div className="editor-action-toolbar-label">Thao tác polygon</div>
+                    <div className="editor-actions tight-actions">
+                    <button
+                      className={`${polygonLocked ? "button secondary" : "button ghost"} compact-button smaller-button`}
+                      onClick={() => {
+                        setPolygonLocked((value) => {
+                          const nextValue = !value;
+                          setMessage(nextValue ? "Đã khóa polygon để tránh chỉnh nhầm." : "Đã mở khóa polygon để tiếp tục chỉnh.");
+                          return nextValue;
+                        });
+                      }}
+                    >
+                      <ActionIcon type={polygonLocked ? "unlock" : "lock"} />
+                      {polygonLocked ? "Mở khóa" : "Khóa"}
+                    </button>
+                    <button className="button secondary compact-button smaller-button" onClick={undoPoint}>
+                      <ActionIcon type="undo" />
+                      Xóa điểm
+                    </button>
+                    <button className="button ghost compact-button smaller-button" onClick={deleteSelectedVertex} disabled={selectedVertexIndex == null}>
+                      <ActionIcon type="vertex-delete" />
+                      Xóa vertex
+                    </button>
+                    <button className="button ghost compact-button smaller-button" onClick={clearPolygon}>
+                      <ActionIcon type="polygon-delete" />
+                      Xóa đa giác
+                    </button>
+                  </div>
                 </div>
                 </div>
 
@@ -697,6 +875,11 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
               frameHeight={draft.camera.frame_height}
               lanes={draft.lane_config.lanes}
               vehicles={[]}
+              backgroundImageUrl={
+                !isNewCamera && hasBackgroundImage && draft.camera.camera_id
+                  ? getBackgroundImageUrl(draft.camera.camera_id, backgroundRevision)
+                  : null
+              }
               showTurnRegions
               selectedLaneId={selectedLaneId}
               selectedVertexIndex={selectedVertexIndex}

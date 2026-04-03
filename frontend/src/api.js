@@ -22,11 +22,14 @@ function withQuery(path, params) {
 }
 
 async function request(path, options) {
+  const isFormData = options?.body instanceof FormData;
   const response = await fetch(apiUrl(path), {
-    headers: {
-      "Content-Type": "application/json",
-      ...(options?.headers || {}),
-    },
+    headers: isFormData
+      ? options?.headers || {}
+      : {
+          "Content-Type": "application/json",
+          ...(options?.headers || {}),
+        },
     ...options,
   });
   if (!response.ok) {
@@ -91,6 +94,25 @@ export async function deleteCamera(cameraId) {
   return await request(`/api/cameras/${cameraId}`, {
     method: "DELETE",
   });
+}
+
+export async function uploadBackgroundImage(cameraId, file) {
+  const body = new FormData();
+  body.set("file", file);
+  return await request(`/api/camera/${cameraId}/background-image`, {
+    method: "POST",
+    body,
+  });
+}
+
+export async function deleteBackgroundImage(cameraId) {
+  return await request(`/api/camera/${cameraId}/background-image`, {
+    method: "DELETE",
+  });
+}
+
+export function getBackgroundImageUrl(cameraId, revision = "0") {
+  return apiUrl(`/api/camera/${cameraId}/background-image?rev=${encodeURIComponent(revision)}`);
 }
 
 export function connectTracks(cameraId, onMessage) {

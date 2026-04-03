@@ -8,7 +8,7 @@ from typing import Any, Callable, Optional
 
 import cv2
 
-from app.core.config import CameraLaneConfig, CameraConfig
+from app.core.config import CameraConfig, RuntimeCameraLaneConfig
 from app.db.repository import insert_violation
 from app.logic.lane_logic import LaneLogic, TemporalLaneAssigner
 from app.logic.violation_logic import ViolationLogic
@@ -36,7 +36,7 @@ class CameraContext:
         self,
         *,
         camera_config: CameraConfig,
-        lane_config: CameraLaneConfig,
+        lane_config: RuntimeCameraLaneConfig,
         db_session_factory,
         on_track: Callable[[TrackMessage], None],
         on_violation: Callable[[ViolationEvent], None],
@@ -55,7 +55,8 @@ class CameraContext:
         self.on_violation = on_violation
         self.on_log = on_log or (lambda msg: None)
 
-        # RTSP reader: optionally resize to match polygon coordinates.
+        # RTSP reader: resize into the configured frame space that normalized
+        # polygons are denormalized into before lane/violation logic runs.
         self.rtsp_reader = RtspFrameReader(
             camera_config.rtsp_url,
             frame_width=camera_config.frame_width,
@@ -99,7 +100,7 @@ class CameraContext:
 
     def get_lane_polygons_for_ui(self) -> dict[str, Any]:
         """
-        Used by frontend to draw lane polygons on Canvas.
+        Used by frontend to draw lane polygons on Canvas in pixel space.
         """
         lanes = []
         for lp in self.lane_config.lanes:

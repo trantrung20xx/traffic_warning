@@ -1,5 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { drawBackgroundImage, useBackgroundImage } from "./canvas/BackgroundImageLayer";
+import { drawPolygon } from "./canvas/PolygonLayer";
 import { getManeuverLabel, getVehicleTypeLabel } from "../utils";
+import { denormalizeLane, normalizePoint } from "../utils";
 
 const VERTEX_HIT_RADIUS = 12;
 const EDGE_HIT_DISTANCE = 10;
@@ -91,6 +94,7 @@ export default function CameraCanvas({
   onPolygonReplace = null,
   onVertexSelect = null,
   editTarget = "lane",
+  backgroundImageUrl = null,
 }) {
   const canvasRef = useRef(null);
   const dragStateRef = useRef(null);
@@ -98,6 +102,7 @@ export default function CameraCanvas({
   const [hoverEdge, setHoverEdge] = useState(null);
   const [hoverVertexIndex, setHoverVertexIndex] = useState(null);
   const [isDragging, setIsDragging] = useState(false);
+  const backgroundImage = useBackgroundImage(backgroundImageUrl);
 
   const laneColors = useMemo(() => {
     const palette = [
@@ -111,16 +116,26 @@ export default function CameraCanvas({
     return m;
   }, [lanes]);
 
+  const renderedLanes = useMemo(
+    () => lanes.map((lane) => denormalizeLane(lane, frameWidth, frameHeight)),
+    [frameHeight, frameWidth, lanes],
+  );
+
   const selectedLane = useMemo(
     () => lanes.find((lane) => lane.lane_id === selectedLaneId) || null,
     [lanes, selectedLaneId],
   );
 
+  const renderedSelectedLane = useMemo(
+    () => renderedLanes.find((lane) => lane.lane_id === selectedLaneId) || null,
+    [renderedLanes, selectedLaneId],
+  );
+
   const editablePoints = useMemo(() => {
-    if (!selectedLane) return [];
-    if (editTarget === "lane") return selectedLane.polygon || [];
-    return selectedLane.turn_regions?.[editTarget] || [];
-  }, [editTarget, selectedLane]);
+    if (!renderedSelectedLane) return [];
+    if (editTarget === "lane") return renderedSelectedLane.polygon || [];
+    return renderedSelectedLane.turn_regions?.[editTarget] || [];
+  }, [editTarget, renderedSelectedLane]);
 
   useEffect(() => {
     editablePointsRef.current = editablePoints;
@@ -135,7 +150,7 @@ export default function CameraCanvas({
 
   const replaceEditablePolygon = (points) => {
     if (!onPolygonReplace) return;
-    onPolygonReplace(points.map((point) => clampPoint(point, frameWidth, frameHeight)));
+    onPolygonReplace(points.map((point) => normalizePoint(clampPoint(point, frameWidth, frameHeight), frameWidth, frameHeight)));
   };
 
   const getCanvasPointFromClient = (clientX, clientY) => {
@@ -169,44 +184,6 @@ export default function CameraCanvas({
     setHoverEdge(findClosestEdge(editablePointsRef.current, point));
   };
 
-  const drawPolygon = (ctx, points, options = {}) => {
-    if (!points || points.length < 2) return;
-    ctx.beginPath();
-    ctx.moveTo(points[0][0], points[0][1]);
-    for (let i = 1; i < points.length; i += 1) {
-      ctx.lineTo(points[i][0], points[i][1]);
-    }
-    if (points.length >= 3) {
-      ctx.closePath();
-    }
-    ctx.strokeStyle = options.strokeStyle || "rgba(255,255,255,0.9)";
-    ctx.lineWidth = options.lineWidth || 2;
-    if (options.dashed) ctx.setLineDash([8, 6]);
-    if (options.fillStyle && points.length >= 3) {
-      ctx.fillStyle = options.fillStyle;
-      ctx.fill();
-    }
-    ctx.stroke();
-    ctx.setLineDash([]);
-    points.forEach(([x, y], index) => {
-      const hovered = options.isEditableTarget && index === hoverVertexIndex;
-      const selected = options.isEditableTarget && index === selectedVertexIndex;
-      ctx.beginPath();
-      ctx.arc(x, y, hovered || selected ? 7 : 5, 0, Math.PI * 2);
-      ctx.fillStyle = selected
-        ? "rgba(0, 214, 143, 0.96)"
-        : hovered
-          ? "rgba(255, 209, 102, 0.96)"
-          : options.pointColor || ctx.strokeStyle;
-      ctx.fill();
-      if (options.isEditableTarget) {
-        ctx.lineWidth = 2;
-        ctx.strokeStyle = "rgba(7, 19, 31, 0.9)";
-        ctx.stroke();
-      }
-    });
-  };
-
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -217,8 +194,9 @@ export default function CameraCanvas({
     if (!ctx) return;
 
     ctx.clearRect(0, 0, frameWidth, frameHeight);
+    drawBackgroundImage(ctx, backgroundImage, frameWidth, frameHeight);
 
-    lanes.forEach((lane) => {
+    renderedLanes.forEach((lane) => {
       const pts = lane.polygon;
       if (!pts || pts.length < 2) return;
 
@@ -228,6 +206,8 @@ export default function CameraCanvas({
         strokeStyle: lane.lane_id === selectedLaneId ? "rgba(255,255,255,1)" : "rgba(255,255,255,0.85)",
         lineWidth: lane.lane_id === selectedLaneId ? 3 : 2,
         isEditableTarget: isEditableLane,
+        hoverVertexIndex,
+        selectedVertexIndex,
       });
 
       if (pts.length >= 3) {
@@ -249,6 +229,8 @@ export default function CameraCanvas({
                 : "rgba(255,255,255,0.7)",
             lineWidth: isEditableRegion ? 3 : 2,
             isEditableTarget: isEditableRegion,
+            hoverVertexIndex,
+            selectedVertexIndex,
           });
           if (region.length >= 1) {
             ctx.fillStyle = "rgba(255,255,255,0.88)";
@@ -300,10 +282,11 @@ export default function CameraCanvas({
     editable,
     frameWidth,
     frameHeight,
+    backgroundImage,
     hoverEdge,
     hoverVertexIndex,
     laneColors,
-    lanes,
+    renderedLanes,
     selectedVertexIndex,
     selectedLaneId,
     showTurnRegions,
@@ -348,7 +331,7 @@ export default function CameraCanvas({
 
     if (onCanvasClick) {
       onVertexSelect?.(null);
-      onCanvasClick(clampPoint(point, frameWidth, frameHeight));
+      onCanvasClick(normalizePoint(clampPoint(point, frameWidth, frameHeight), frameWidth, frameHeight));
     }
   };
 

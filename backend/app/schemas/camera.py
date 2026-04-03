@@ -26,7 +26,8 @@ class CameraConfig(BaseModel):
     # lanes monitored by THIS camera (must be unique per camera)
     monitored_lanes: list[int]
 
-    # Fixed resolution for this camera (polygons are defined in this pixel coordinate system)
+    # Fixed resolution for this camera. Polygon configs are stored normalized and
+    # denormalized back into this frame space at runtime.
     frame_width: int
     frame_height: int
 

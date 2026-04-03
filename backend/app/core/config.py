@@ -11,7 +11,9 @@ from app.schemas.camera import CameraConfig
 
 class LanePolygon(BaseModel):
     lane_id: int
-    # Polygon points in pixel coordinates for this camera frame
+    # Polygon points are stored normalized in [0, 1].
+    # This keeps manual polygon configs deterministic across canvas resizes while
+    # runtime logic can still denormalize back to camera-frame pixels.
     polygon: list[list[float]]  # [[x,y], ...]
 
     # Geometry-based maneuver classification:
@@ -32,6 +34,12 @@ class LanePolygon(BaseModel):
     def validate_polygon(cls, value: list[list[float]]) -> list[list[float]]:
         if len(value) < 3:
             raise ValueError("lane polygon must contain at least 3 points")
+        for point in value:
+            if len(point) != 2:
+                raise ValueError("lane polygon points must be [x, y]")
+            x, y = point
+            if not (0.0 <= x <= 1.0 and 0.0 <= y <= 1.0):
+                raise ValueError("lane polygon points must be normalized to [0, 1]")
         return value
 
     @field_validator("turn_regions")
@@ -44,6 +52,12 @@ class LanePolygon(BaseModel):
         for maneuver, points in value.items():
             if len(points) < 3:
                 raise ValueError(f"turn region '{maneuver}' must contain at least 3 points")
+            for point in points:
+                if len(point) != 2:
+                    raise ValueError(f"turn region '{maneuver}' points must be [x, y]")
+                x, y = point
+                if not (0.0 <= x <= 1.0 and 0.0 <= y <= 1.0):
+                    raise ValueError(f"turn region '{maneuver}' points must be normalized to [0, 1]")
         return value
 
 
@@ -54,11 +68,27 @@ class CameraLaneConfig(BaseModel):
     lanes: list[LanePolygon]
 
 
+class RuntimeLanePolygon(BaseModel):
+    lane_id: int
+    polygon: list[list[float]]
+    turn_regions: Optional[dict[str, list[list[float]]]] = None
+    allowed_maneuvers: Optional[list[str]] = None
+    allowed_lane_changes: Optional[list[int]] = None
+
+
+class RuntimeCameraLaneConfig(BaseModel):
+    camera_id: str
+    frame_width: int
+    frame_height: int
+    lanes: list[RuntimeLanePolygon]
+
+
 class AppConfig(BaseModel):
     settings_path: Path
     config_dir: Path
     cameras_path: Path
     lane_configs_dir: Path
+    background_images_dir: Path
     db_path: Path
 
     # Detector / performance settings
@@ -83,11 +113,76 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
         json.dump(payload, f, ensure_ascii=False, indent=2)
 
 
+def normalize_point(point: list[float], frame_width: int, frame_height: int) -> list[float]:
+    x, y = point
+    if 0.0 <= x <= 1.0 and 0.0 <= y <= 1.0:
+        return [float(x), float(y)]
+    return [float(x) / max(frame_width, 1), float(y) / max(frame_height, 1)]
+
+
+def denormalize_point(point: list[float], frame_width: int, frame_height: int) -> list[float]:
+    x, y = point
+    return [float(x) * frame_width, float(y) * frame_height]
+
+
+def normalize_polygon(points: list[list[float]], frame_width: int, frame_height: int) -> list[list[float]]:
+    return [normalize_point(point, frame_width, frame_height) for point in points]
+
+
+def denormalize_polygon(points: list[list[float]], frame_width: int, frame_height: int) -> list[list[float]]:
+    return [denormalize_point(point, frame_width, frame_height) for point in points]
+
+
+def denormalize_lane_config(lane_config: CameraLaneConfig) -> RuntimeCameraLaneConfig:
+    frame_width = lane_config.frame_width
+    frame_height = lane_config.frame_height
+    return RuntimeCameraLaneConfig.model_validate(
+        {
+            "camera_id": lane_config.camera_id,
+            "frame_width": frame_width,
+            "frame_height": frame_height,
+            "lanes": [
+                {
+                    "lane_id": lane.lane_id,
+                    "polygon": denormalize_polygon(lane.polygon, frame_width, frame_height),
+                    "turn_regions": {
+                        maneuver: denormalize_polygon(points, frame_width, frame_height)
+                        for maneuver, points in (lane.turn_regions or {}).items()
+                    },
+                    "allowed_maneuvers": lane.allowed_maneuvers,
+                    "allowed_lane_changes": lane.allowed_lane_changes,
+                }
+                for lane in lane_config.lanes
+            ],
+        }
+    )
+
+
+def _normalize_lane_config_payload(raw: dict[str, Any]) -> dict[str, Any]:
+    frame_width = int(raw.get("frame_width") or 1)
+    frame_height = int(raw.get("frame_height") or 1)
+    return {
+        **raw,
+        "lanes": [
+            {
+                **lane,
+                "polygon": normalize_polygon(lane.get("polygon", []), frame_width, frame_height),
+                "turn_regions": {
+                    maneuver: normalize_polygon(points, frame_width, frame_height)
+                    for maneuver, points in (lane.get("turn_regions") or {}).items()
+                },
+            }
+            for lane in raw.get("lanes", [])
+        ],
+    }
+
+
 def load_app_config(repo_root: Path) -> AppConfig:
     config_dir = repo_root / "config"
     settings_path = config_dir / "settings.json"
     cameras_path = config_dir / "cameras.json"
     lane_configs_dir = config_dir / "lane_configs"
+    background_images_dir = config_dir / "background_images"
 
     db_path = config_dir / "traffic_warning.sqlite"
 
@@ -102,6 +197,7 @@ def load_app_config(repo_root: Path) -> AppConfig:
             config_dir=config_dir,
             cameras_path=cameras_path,
             lane_configs_dir=lane_configs_dir,
+            background_images_dir=background_images_dir,
             db_path=db_path,
             detector_conf_threshold=float(settings.get("detector_conf_threshold", 0.35)),
             detector_iou_threshold=float(settings.get("detector_iou_threshold", 0.7)),
@@ -122,6 +218,7 @@ def load_app_config(repo_root: Path) -> AppConfig:
         config_dir=config_dir,
         cameras_path=cameras_path,
         lane_configs_dir=lane_configs_dir,
+        background_images_dir=background_images_dir,
         db_path=db_path,
     )
 
@@ -145,7 +242,7 @@ def load_lane_config_for_camera(repo_root: Path, camera_id: str) -> CameraLaneCo
     cfg = load_app_config(repo_root)
     path = cfg.lane_configs_dir / f"{camera_id}.json"
     raw = _read_json(path)
-    return CameraLaneConfig.model_validate(raw)
+    return CameraLaneConfig.model_validate(_normalize_lane_config_payload(raw))
 
 
 def save_lane_config_for_camera(repo_root: Path, lane_config: CameraLaneConfig) -> None:

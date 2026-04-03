@@ -12,4 +12,5 @@ lap>=0.5.12
 
 # Optional but commonly useful for better decoding/robust RTSP:
 # ffmpeg-python==0.2.0
+python-multipart
 

@@ -28,6 +28,39 @@ export const CAMERA_TYPE_LABELS = {
   intersection: "Nút giao",
 };
 
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
+
+export function normalizePoint([x, y], frameWidth, frameHeight) {
+  return [clamp(Number(x) / Math.max(frameWidth, 1), 0, 1), clamp(Number(y) / Math.max(frameHeight, 1), 0, 1)];
+}
+
+export function denormalizePoint([x, y], frameWidth, frameHeight) {
+  return [Number(x) * frameWidth, Number(y) * frameHeight];
+}
+
+export function normalizePoints(points, frameWidth, frameHeight) {
+  return (points || []).map((point) => normalizePoint(point, frameWidth, frameHeight));
+}
+
+export function denormalizePoints(points, frameWidth, frameHeight) {
+  return (points || []).map((point) => denormalizePoint(point, frameWidth, frameHeight));
+}
+
+export function denormalizeLane(lane, frameWidth, frameHeight) {
+  return {
+    ...lane,
+    polygon: denormalizePoints(lane.polygon || [], frameWidth, frameHeight),
+    turn_regions: Object.fromEntries(
+      Object.entries(lane.turn_regions || {}).map(([maneuver, points]) => [
+        maneuver,
+        denormalizePoints(points, frameWidth, frameHeight),
+      ]),
+    ),
+  };
+}
+
 export function nowLocalInput() {
   const now = new Date();
   const pad = (value) => String(value).padStart(2, "0");
@@ -76,12 +109,16 @@ export function createEmptyLane(laneId, frameWidth, frameHeight) {
   const top = Math.max(120, Math.round(frameHeight * 0.55));
   return {
     lane_id: laneId,
-    polygon: [
+    polygon: normalizePoints(
+      [
       [left, top],
       [Math.min(frameWidth - 80, left + 280), top],
       [Math.min(frameWidth - 40, left + 320), frameHeight - 40],
       [left + 40, frameHeight - 40],
-    ],
+      ],
+      frameWidth,
+      frameHeight,
+    ),
     allowed_maneuvers: ["straight"],
     allowed_lane_changes: [laneId],
     turn_regions: {},
@@ -149,6 +186,8 @@ export function buildPayload(draft) {
   const frameHeight = Number(draft.camera.frame_height) || 720;
   const lanes = draft.lane_config.lanes.map((lane) => ({
     lane_id: Number(lane.lane_id),
+    // Polygons stay normalized in state and payload so the manual config remains
+    // resolution-independent. Rendering converts them back to canvas pixels.
     polygon: (lane.polygon || []).map(([x, y]) => [Number(x), Number(y)]),
     allowed_maneuvers: lane.allowed_maneuvers || [],
     allowed_lane_changes: (lane.allowed_lane_changes || []).map((value) => Number(value)),

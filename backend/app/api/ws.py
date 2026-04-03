@@ -22,7 +22,7 @@ def create_ws_router(manager: CameraManager) -> APIRouter:
                 msg: TrackMessage = await q.get()
                 if camera_id and msg.camera_id != camera_id:
                     continue
-                await ws.send_json(msg.model_dump())
+                await ws.send_json(msg.model_dump(mode="json"))
         except WebSocketDisconnect:
             return
         finally:
@@ -39,7 +39,7 @@ def create_ws_router(manager: CameraManager) -> APIRouter:
                 ev: ViolationEvent = await q.get()
                 if camera_id and ev.camera_id != camera_id:
                     continue
-                await ws.send_json({"type": "violation", "event": ev.model_dump()})
+                await ws.send_json({"type": "violation", "event": ev.model_dump(mode="json")})
         except WebSocketDisconnect:
             return
         finally:
