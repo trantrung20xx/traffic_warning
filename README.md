@@ -66,6 +66,69 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
+## Dùng GPU cho nhận diện
+
+Nếu máy có GPU NVIDIA và driver hỗ trợ CUDA, backend có thể chạy YOLO trên GPU để tăng tốc suy luận.
+
+### 1. Cài PyTorch đúng bản
+
+Sau khi kích hoạt `backend/.venv`, cài một trong hai lựa chọn:
+
+CPU:
+
+```powershell
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+```
+
+GPU NVIDIA, ví dụ CUDA 13.0:
+
+```powershell
+pip install torch==2.10.0 torchvision==0.25.0 --index-url https://download.pytorch.org/whl/cu130
+```
+
+Lưu ý:
+
+- Không chỉ cài driver NVIDIA là đủ, Python backend phải dùng bản `torch` có CUDA.
+- Nếu đang cài `torch` bản CPU-only thì model vẫn sẽ chạy trên CPU.
+- Cần chọn đúng bản CUDA tương thích với driver và wheel PyTorch đang có.
+
+### 2. Bật GPU trong cấu hình
+
+Trong [config/settings.json](/d:/Personal/DATN/traffic_warning/config/settings.json):
+
+```json
+"detector_device": "auto"
+```
+
+Các giá trị hỗ trợ:
+
+- `auto`: ưu tiên `cuda:0` nếu có GPU, nếu không thì fallback về `cpu`
+- `cuda` hoặc `cuda:0`: ép chạy GPU, nếu không có CUDA backend sẽ báo lỗi khi khởi động
+- `cpu`: ép chạy CPU
+
+### 3. Kiểm tra PyTorch đã thấy GPU chưa
+
+```powershell
+cd backend
+.\.venv\Scripts\Activate.ps1
+python -c "import torch; print(torch.__version__); print(torch.version.cuda); print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'NO GPU')"
+```
+
+Nếu cấu hình đúng, bạn sẽ thấy:
+
+- `torch.cuda.is_available()` trả về `True`
+- tên GPU NVIDIA được in ra
+
+### 4. Kiểm tra backend đang dùng GPU thật
+
+Khi backend khởi động, log sẽ có dòng tương tự:
+
+```text
+[camera_id] detector=... requested_device=auto resolved_device=cuda:0
+```
+
+Nếu log ra `resolved_device=cpu` thì có nghĩa là backend chưa dùng được GPU.
+
 ## Cài đặt frontend
 
 ```powershell
