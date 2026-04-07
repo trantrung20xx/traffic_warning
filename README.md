@@ -126,6 +126,7 @@ Khai báo:
 Cấu hình runtime quan trọng:
 
 - `detector_weights_path`: model YOLO đang dùng
+- `detector_device`: `auto`, `cpu`, `cuda`, `cuda:0`...
 - `detector_conf_threshold`: confidence threshold
 - `detector_iou_threshold`: IoU threshold
 - `vehicle_type_history_window_ms`
@@ -140,6 +141,7 @@ Ví dụ:
 {
   "db_path": "config/traffic_warning.sqlite",
   "detector_weights_path": "backend/yolov8m.pt",
+  "detector_device": "auto",
   "detector_conf_threshold": 0.28,
   "detector_iou_threshold": 0.7,
   "vehicle_type_history_window_ms": 4000,
@@ -153,6 +155,12 @@ Ví dụ:
   "turn_region_min_hits": 3
 }
 ```
+
+`detector_device` hoạt động như sau:
+
+- `auto`: ưu tiên GPU CUDA nếu PyTorch nhìn thấy GPU, nếu không thì fallback về CPU
+- `cuda` hoặc `cuda:0`: ép chạy GPU, nếu không có CUDA sẽ báo lỗi khi khởi động
+- `cpu`: ép chạy CPU
 
 ## Model YOLO khuyên dùng
 
@@ -209,6 +217,14 @@ Chỉ cần sửa trong `config/settings.json`:
 ```
 
 Sau đó restart backend.
+
+Nếu muốn ép hẳn GPU:
+
+```json
+"detector_device": "cuda:0"
+```
+
+Lưu ý: để chạy được GPU, môi trường Python backend phải cài bản `torch` có CUDA tương thích driver/NVIDIA của máy. Nếu cài `torch` bản CPU-only thì hệ thống vẫn phải chạy trên CPU dù có card NVIDIA.
 
 ## API và realtime chính
 

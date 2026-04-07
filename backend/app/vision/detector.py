@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Sequence
+from typing import Optional
 
 import numpy as np
 from ultralytics import YOLO
@@ -23,10 +23,18 @@ class YoloV8VehicleDetector:
 
     ALLOWED_CLASSES = {"motorcycle", "car", "truck", "bus"}
 
-    def __init__(self, weights_path: str = "yolov8n.pt", conf_threshold: float = 0.35, iou_threshold: float = 0.7):
+    def __init__(
+        self,
+        weights_path: str = "yolov8n.pt",
+        conf_threshold: float = 0.35,
+        iou_threshold: float = 0.7,
+        device: str = "auto",
+    ):
         self.model = self._load_model_with_fallback(weights_path)
         self.conf_threshold = float(conf_threshold)
         self.iou_threshold = float(iou_threshold)
+        self.requested_device = (device or "auto").strip()
+        self.device = self._resolve_inference_device(self.requested_device)
 
         # Map COCO class indices -> names and filter to required vehicle types.
         self.class_names: dict[int, str] = dict(self.model.names)
@@ -36,6 +44,37 @@ class YoloV8VehicleDetector:
             if name in self.ALLOWED_CLASSES
         ]
         # If weights aren't COCO-compatible, the user will need to adjust.
+
+    def _resolve_inference_device(self, requested_device: str) -> str:
+        normalized = requested_device.lower()
+        if normalized == "auto":
+            torch = self._safe_import_torch()
+            if torch is not None and torch.cuda.is_available():
+                return "cuda:0"
+            return "cpu"
+
+        if normalized.startswith("cuda"):
+            torch = self._safe_import_torch()
+            if torch is None:
+                raise RuntimeError(
+                    "detector_device requests CUDA but PyTorch is not installed in this environment."
+                )
+            if not torch.cuda.is_available():
+                raise RuntimeError(
+                    "detector_device requests CUDA but torch.cuda.is_available() is False."
+                )
+            if normalized == "cuda":
+                return "cuda:0"
+            return normalized
+
+        return normalized
+
+    def _safe_import_torch(self) -> Optional[object]:
+        try:
+            import torch
+        except Exception:
+            return None
+        return torch
 
     def _load_model_with_fallback(self, weights_path: str):
         candidate_paths = self._build_weight_candidates(weights_path)
@@ -69,6 +108,7 @@ class YoloV8VehicleDetector:
     def detect(self, frame_bgr: np.ndarray) -> list[Detection]:
         results = self.model.predict(
             frame_bgr,
+            device=self.device,
             conf=self.conf_threshold,
             iou=self.iou_threshold,
             classes=self.vehicle_class_ids if self.vehicle_class_ids else None,

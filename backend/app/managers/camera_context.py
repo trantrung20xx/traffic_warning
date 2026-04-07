@@ -44,6 +44,7 @@ class CameraContext:
         on_violation: Callable[[ViolationEvent], None],
         on_log: Optional[Callable[[str], None]] = None,
         detector_weights_path: str = "yolov8n.pt",
+        detector_device: str = "auto",
         detector_conf_threshold: float = 0.35,
         detector_iou_threshold: float = 0.7,
         vehicle_type_history_window_ms: int = 4000,
@@ -73,10 +74,15 @@ class CameraContext:
         # AI components (backend-only)
         self.detector = YoloV8VehicleDetector(
             weights_path=detector_weights_path,
+            device=detector_device,
             conf_threshold=detector_conf_threshold,
             iou_threshold=detector_iou_threshold,
         )
         self.tracker = YoloByteTrackVehicleTracker(self.detector)
+        self.on_log(
+            f"[{self.camera_id}] detector={detector_weights_path} requested_device={self.detector.requested_device} "
+            f"resolved_device={self.detector.device}"
+        )
 
         # Lane / violation rules (hand-crafted polygons)
         self.lane_logic = LaneLogic(lane_config.lanes)

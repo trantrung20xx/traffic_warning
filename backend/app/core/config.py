@@ -93,6 +93,7 @@ class AppConfig(BaseModel):
 
     # Detector / performance settings
     detector_weights_path: str = "backend/yolov8n.pt"
+    detector_device: str = "auto"
     detector_conf_threshold: float = 0.35
     detector_iou_threshold: float = 0.7
     vehicle_type_history_window_ms: int = 4000
@@ -206,6 +207,7 @@ def load_app_config(repo_root: Path) -> AppConfig:
             background_images_dir=background_images_dir,
             db_path=db_path,
             detector_weights_path=str(settings.get("detector_weights_path", "backend/yolov8n.pt")),
+            detector_device=str(settings.get("detector_device", "auto")),
             detector_conf_threshold=float(settings.get("detector_conf_threshold", 0.35)),
             detector_iou_threshold=float(settings.get("detector_iou_threshold", 0.7)),
             vehicle_type_history_window_ms=int(settings.get("vehicle_type_history_window_ms", 4000)),
@@ -233,6 +235,7 @@ def load_app_config(repo_root: Path) -> AppConfig:
         background_images_dir=background_images_dir,
         db_path=db_path,
         detector_weights_path="backend/yolov8n.pt",
+        detector_device="auto",
     )
 
 

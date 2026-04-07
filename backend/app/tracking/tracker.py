@@ -33,6 +33,7 @@ class YoloByteTrackVehicleTracker:
     def track(self, frame_bgr: np.ndarray) -> list[Track]:
         results = self.detector.model.track(
             frame_bgr,
+            device=self.detector.device,
             persist=True,
             conf=self.detector.conf_threshold,
             iou=self.detector.iou_threshold,

@@ -7,6 +7,11 @@ pydantic-settings
 SQLAlchemy
 sqlalchemy-utils
 ultralytics
+# PyTorch is installed separately depending on the target machine:
+# CPU only:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+# NVIDIA GPU (example used on this machine: CUDA 13.0):
+#   pip install torch==2.10.0 torchvision==0.25.0 --index-url https://download.pytorch.org/whl/cu130
 # ByteTrack trong Ultralytics cần lap (tránh AutoUpdate lúc chạy lần đầu)
 lap>=0.5.12
 
