@@ -13,6 +13,29 @@ from app.schemas.events import TrackMessage, ViolationEvent
 def create_ws_router(manager: CameraManager) -> APIRouter:
     router = APIRouter()
 
+    async def _wait_for_queue_or_disconnect(ws: WebSocket, q: asyncio.Queue):
+        queue_task = asyncio.create_task(q.get())
+        receive_task = asyncio.create_task(ws.receive())
+        done, pending = await asyncio.wait(
+            {queue_task, receive_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+
+        for task in pending:
+            task.cancel()
+
+        if receive_task in done:
+            message = receive_task.result()
+            if message.get("type") == "websocket.disconnect":
+                if not queue_task.done():
+                    queue_task.cancel()
+                return "disconnect", None
+            if queue_task.done():
+                return "queue", queue_task.result()
+            return "noop", None
+
+        return "queue", queue_task.result()
+
     @router.websocket("/ws/tracks")
     async def ws_tracks(ws: WebSocket, camera_id: Optional[str] = None):
         await ws.accept()
@@ -21,7 +44,12 @@ def create_ws_router(manager: CameraManager) -> APIRouter:
         try:
             q = manager.create_track_listener()
             while True:
-                msg = await q.get()
+                event_type, payload = await _wait_for_queue_or_disconnect(ws, q)
+                if event_type == "disconnect":
+                    break
+                if event_type != "queue":
+                    continue
+                msg = payload
                 if msg is None:
                     break
                 if camera_id and msg.camera_id != camera_id:
@@ -49,7 +77,12 @@ def create_ws_router(manager: CameraManager) -> APIRouter:
         try:
             q = manager.create_violation_listener()
             while True:
-                ev = await q.get()
+                event_type, payload = await _wait_for_queue_or_disconnect(ws, q)
+                if event_type == "disconnect":
+                    break
+                if event_type != "queue":
+                    continue
+                ev = payload
                 if ev is None:
                     break
                 if camera_id and ev.camera_id != camera_id:

@@ -1,6 +1,6 @@
 {
   "db_path": "config/traffic_warning.sqlite",
-  "detector_weights_path": "backend/yolov8x.pt",
+  "detector_weights_path": "backend/yolov8m.pt",
   "detector_conf_threshold": 0.28,
   "detector_iou_threshold": 0.7,
   "vehicle_type_history_window_ms": 4000,
