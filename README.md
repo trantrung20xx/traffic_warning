@@ -114,7 +114,7 @@ cd backend
 python -c "import torch; print(torch.__version__); print(torch.version.cuda); print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'NO GPU')"
 ```
 
-Nếu cấu hình đúng, bạn sẽ thấy:
+Nếu cấu hình đúng, sẽ thấy:
 
 - `torch.cuda.is_available()` trả về `True`
 - tên GPU NVIDIA được in ra
