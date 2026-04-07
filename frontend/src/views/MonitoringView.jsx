@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import CameraCanvas from "../components/CameraCanvas";
 import StatPill from "../components/StatPill";
 import { connectTracks, connectViolations, fetchCameraDetail, getCameraPreviewUrl } from "../api";
@@ -8,6 +8,8 @@ export default function MonitoringView({ cameras, selectedCameraId, onSelectCame
   const [detail, setDetail] = useState(null);
   const [vehicles, setVehicles] = useState([]);
   const [violations, setViolations] = useState([]);
+  const vehicleSeenOrderRef = useRef(new Map());
+  const nextVehicleOrderRef = useRef(0);
 
   useEffect(() => {
     if (!selectedCameraId) {
@@ -17,6 +19,8 @@ export default function MonitoringView({ cameras, selectedCameraId, onSelectCame
     fetchCameraDetail(selectedCameraId).then(setDetail).catch(() => setDetail(null));
     setVehicles([]);
     setViolations([]);
+    vehicleSeenOrderRef.current = new Map();
+    nextVehicleOrderRef.current = 0;
   }, [configRevision, selectedCameraId]);
 
   useEffect(() => {
@@ -35,6 +39,25 @@ export default function MonitoringView({ cameras, selectedCameraId, onSelectCame
 
   const camera = detail?.camera || null;
   const laneConfig = detail?.lane_config || null;
+  const orderedVehicles = [...vehicles]
+    .map((vehicle) => {
+      if (!vehicleSeenOrderRef.current.has(vehicle.vehicle_id)) {
+        vehicleSeenOrderRef.current.set(vehicle.vehicle_id, nextVehicleOrderRef.current);
+        nextVehicleOrderRef.current += 1;
+      }
+      return {
+        ...vehicle,
+        seenOrder: vehicleSeenOrderRef.current.get(vehicle.vehicle_id) ?? 0,
+      };
+    })
+    .sort((left, right) => right.seenOrder - left.seenOrder);
+
+  const activeVehicleIds = new Set(vehicles.map((vehicle) => vehicle.vehicle_id));
+  vehicleSeenOrderRef.current.forEach((_, vehicleId) => {
+    if (!activeVehicleIds.has(vehicleId)) {
+      vehicleSeenOrderRef.current.delete(vehicleId);
+    }
+  });
 
   return (
     <div className="monitor-layout">
@@ -94,9 +117,9 @@ export default function MonitoringView({ cameras, selectedCameraId, onSelectCame
             </div>
             <div className="badge">{vehicles.length} xe</div>
           </div>
-          <div className="entity-list">
-            {vehicles.length === 0 ? <div className="empty-state slim">Chưa có phương tiện đang hoạt động.</div> : null}
-            {vehicles.map((vehicle) => (
+          <div className="entity-list tracked-vehicle-list">
+            {orderedVehicles.length === 0 ? <div className="empty-state slim">Chưa có phương tiện đang hoạt động.</div> : null}
+            {orderedVehicles.map((vehicle) => (
               <article className="list-row" key={`${vehicle.vehicle_id}-${vehicle.lane_id ?? "na"}`}>
                 <div>
                   <div className="row-title">

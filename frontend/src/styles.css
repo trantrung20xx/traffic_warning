@@ -273,6 +273,44 @@ select {
   max-height: 268px;
   overflow-y: auto;
   padding-right: 4px;
+  scrollbar-color: rgba(28, 166, 255, 0.42) rgba(255, 255, 255, 0.04);
+}
+
+.lane-list::-webkit-scrollbar {
+  width: 8px;
+}
+
+.lane-list::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 999px;
+}
+
+.lane-list::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(28, 166, 255, 0.72), rgba(0, 214, 143, 0.62));
+  border-radius: 999px;
+  border: 1px solid rgba(160, 210, 229, 0.14);
+}
+
+.tracked-vehicle-list {
+  max-height: calc(5 * 84px);
+  overflow-y: auto;
+  padding-right: 6px;
+  scrollbar-color: rgba(28, 166, 255, 0.42) rgba(255, 255, 255, 0.04);
+}
+
+.tracked-vehicle-list::-webkit-scrollbar {
+  width: 8px;
+}
+
+.tracked-vehicle-list::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 999px;
+}
+
+.tracked-vehicle-list::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(28, 166, 255, 0.72), rgba(0, 214, 143, 0.62));
+  border-radius: 999px;
+  border: 1px solid rgba(160, 210, 229, 0.14);
 }
 
 .list-row,
@@ -422,9 +460,39 @@ select {
   overflow: auto;
 }
 
+.history-scroll-list {
+  max-height: min(78vh, calc(100 * 45px));
+  padding-right: 6px;
+  scrollbar-color: rgba(28, 166, 255, 0.42) rgba(255, 255, 255, 0.04);
+}
+
+.history-scroll-list::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.history-scroll-list::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 999px;
+}
+
+.history-scroll-list::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(28, 166, 255, 0.72), rgba(0, 214, 143, 0.62));
+  border-radius: 999px;
+  border: 1px solid rgba(160, 210, 229, 0.14);
+}
+
 .history-table {
   width: 100%;
   border-collapse: collapse;
+}
+
+.history-table thead {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: rgba(12, 37, 55, 0.98);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.16);
 }
 
 .history-table th,
@@ -433,6 +501,10 @@ select {
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   text-align: left;
   font-size: 14px;
+}
+
+.history-table th {
+  color: var(--text);
 }
 
 .sidebar-panel {

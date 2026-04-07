@@ -146,7 +146,7 @@ export default function AnalyticsView({ cameras, selectedCameraId, onSelectCamer
           </div>
           <div className="badge">{history.length} dòng</div>
         </div>
-        <div className="history-table-wrap">
+        <div className="history-table-wrap history-scroll-list">
           <table className="history-table">
             <thead>
               <tr>
