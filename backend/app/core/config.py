@@ -92,8 +92,14 @@ class AppConfig(BaseModel):
     db_path: Path
 
     # Detector / performance settings
+    detector_weights_path: str = "backend/yolov8n.pt"
     detector_conf_threshold: float = 0.35
     detector_iou_threshold: float = 0.7
+    vehicle_type_history_window_ms: int = 4000
+    vehicle_type_history_size: int = 12
+    stable_track_max_idle_ms: int = 1500
+    stable_track_min_iou_for_rebind: float = 0.15
+    stable_track_max_normalized_distance: float = 1.6
     resize_frame: bool = True
 
     # Realtime streaming / logic thresholds
@@ -199,8 +205,14 @@ def load_app_config(repo_root: Path) -> AppConfig:
             lane_configs_dir=lane_configs_dir,
             background_images_dir=background_images_dir,
             db_path=db_path,
+            detector_weights_path=str(settings.get("detector_weights_path", "backend/yolov8n.pt")),
             detector_conf_threshold=float(settings.get("detector_conf_threshold", 0.35)),
             detector_iou_threshold=float(settings.get("detector_iou_threshold", 0.7)),
+            vehicle_type_history_window_ms=int(settings.get("vehicle_type_history_window_ms", 4000)),
+            vehicle_type_history_size=int(settings.get("vehicle_type_history_size", 12)),
+            stable_track_max_idle_ms=int(settings.get("stable_track_max_idle_ms", 1500)),
+            stable_track_min_iou_for_rebind=float(settings.get("stable_track_min_iou_for_rebind", 0.15)),
+            stable_track_max_normalized_distance=float(settings.get("stable_track_max_normalized_distance", 1.6)),
             resize_frame=bool(settings.get("resize_frame", True)),
             track_push_interval_ms=int(settings.get("track_push_interval_ms", 200)),
             wrong_lane_min_duration_ms=int(
@@ -220,6 +232,7 @@ def load_app_config(repo_root: Path) -> AppConfig:
         lane_configs_dir=lane_configs_dir,
         background_images_dir=background_images_dir,
         db_path=db_path,
+        detector_weights_path="backend/yolov8n.pt",
     )
 
 

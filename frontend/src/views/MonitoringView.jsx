@@ -10,6 +10,7 @@ export default function MonitoringView({ cameras, selectedCameraId, onSelectCame
   const [violations, setViolations] = useState([]);
   const vehicleSeenOrderRef = useRef(new Map());
   const nextVehicleOrderRef = useRef(0);
+  const violatingVehicleIdsRef = useRef(new Map());
 
   useEffect(() => {
     if (!selectedCameraId) {
@@ -21,14 +22,27 @@ export default function MonitoringView({ cameras, selectedCameraId, onSelectCame
     setViolations([]);
     vehicleSeenOrderRef.current = new Map();
     nextVehicleOrderRef.current = 0;
+    violatingVehicleIdsRef.current = new Map();
   }, [configRevision, selectedCameraId]);
 
   useEffect(() => {
     if (!selectedCameraId) return undefined;
     const trackWs = connectTracks(selectedCameraId, (message) => {
-      setVehicles(message.vehicles || []);
+      const now = Date.now();
+      violatingVehicleIdsRef.current.forEach((expiresAt, vehicleId) => {
+        if (expiresAt <= now) {
+          violatingVehicleIdsRef.current.delete(vehicleId);
+        }
+      });
+      setVehicles(
+        (message.vehicles || []).map((vehicle) => ({
+          ...vehicle,
+          isViolating: (violatingVehicleIdsRef.current.get(vehicle.vehicle_id) || 0) > now,
+        })),
+      );
     });
     const violationWs = connectViolations(selectedCameraId, (event) => {
+      violatingVehicleIdsRef.current.set(event.vehicle_id, Date.now() + 15000);
       setViolations((prev) => [event, ...prev].slice(0, 80));
     });
     return () => {

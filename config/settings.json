@@ -1,7 +1,13 @@
 {
   "db_path": "config/traffic_warning.sqlite",
-  "detector_conf_threshold": 0.35,
+  "detector_weights_path": "backend/yolov8x.pt",
+  "detector_conf_threshold": 0.28,
   "detector_iou_threshold": 0.7,
+  "vehicle_type_history_window_ms": 4000,
+  "vehicle_type_history_size": 12,
+  "stable_track_max_idle_ms": 1500,
+  "stable_track_min_iou_for_rebind": 0.15,
+  "stable_track_max_normalized_distance": 1.6,
   "resize_frame": true,
 
   "track_push_interval_ms": 200,

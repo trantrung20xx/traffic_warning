@@ -257,14 +257,16 @@ export default function CameraCanvas({
       const y1 = v.bbox.y1;
       const w = v.bbox.x2 - v.bbox.x1;
       const h = v.bbox.y2 - v.bbox.y1;
+      const strokeColor = v.isViolating ? "rgba(255, 107, 87, 0.98)" : "rgba(0, 214, 143, 0.98)";
+      const labelBackground = v.isViolating ? "rgba(120, 28, 18, 0.82)" : "rgba(7, 76, 54, 0.82)";
 
-      ctx.strokeStyle = v.lane_id != null ? "rgba(255, 80, 80, 0.95)" : "rgba(140,140,140,0.95)";
+      ctx.strokeStyle = strokeColor;
       ctx.lineWidth = 3;
       ctx.strokeRect(x1, y1, w, h);
 
       const label = `#${v.vehicle_id} ${getVehicleTypeLabel(v.vehicle_type)}${v.lane_id != null ? ` làn ${v.lane_id}` : ""}`;
       ctx.font = "14px sans-serif";
-      ctx.fillStyle = "rgba(0,0,0,0.6)";
+      ctx.fillStyle = labelBackground;
       ctx.fillRect(x1, y1 - 22, ctx.measureText(label).width + 10, 22);
       ctx.fillStyle = "rgba(255,255,255,0.95)";
       ctx.fillText(label, x1 + 5, y1 - 7);

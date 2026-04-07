@@ -11,6 +11,8 @@ import cv2
 from app.core.config import CameraConfig, RuntimeCameraLaneConfig
 from app.db.repository import insert_violation
 from app.logic.lane_logic import LaneLogic, TemporalLaneAssigner
+from app.logic.track_id_logic import StableTrackIdAssigner
+from app.logic.vehicle_type_logic import TemporalVehicleTypeAssigner
 from app.logic.violation_logic import ViolationLogic
 from app.schemas.camera import CameraLocation
 from app.schemas.events import (
@@ -44,6 +46,11 @@ class CameraContext:
         detector_weights_path: str = "yolov8n.pt",
         detector_conf_threshold: float = 0.35,
         detector_iou_threshold: float = 0.7,
+        vehicle_type_history_window_ms: int = 4000,
+        vehicle_type_history_size: int = 12,
+        stable_track_max_idle_ms: int = 1500,
+        stable_track_min_iou_for_rebind: float = 0.15,
+        stable_track_max_normalized_distance: float = 1.6,
         track_push_interval_ms: int = 200,
         wrong_lane_min_duration_ms: int = 1200,
         turn_region_min_hits: int = 3,
@@ -73,7 +80,16 @@ class CameraContext:
 
         # Lane / violation rules (hand-crafted polygons)
         self.lane_logic = LaneLogic(lane_config.lanes)
+        self.stable_track_id_assigner = StableTrackIdAssigner(
+            max_idle_ms=stable_track_max_idle_ms,
+            min_iou_for_rebind=stable_track_min_iou_for_rebind,
+            max_normalized_distance=stable_track_max_normalized_distance,
+        )
         self.temporal_lane_assigner = TemporalLaneAssigner()
+        self.temporal_vehicle_type_assigner = TemporalVehicleTypeAssigner(
+            history_window_ms=vehicle_type_history_window_ms,
+            history_size=vehicle_type_history_size,
+        )
         self.violation_logic = ViolationLogic(
             lane_config.lanes,
             wrong_lane_min_duration_ms=wrong_lane_min_duration_ms,
@@ -148,11 +164,18 @@ class CameraContext:
 
                 ts_dt = datetime.fromtimestamp(frame.timestamp_utc_ms / 1000.0, tz=timezone.utc)
                 tracks = await asyncio.to_thread(self.tracker.track, frame.bgr)
+                tracks = await asyncio.to_thread(self.stable_track_id_assigner.assign, raw_tracks=tracks, ts=ts_dt)
 
                 vehicles: list[TrackVehicle] = []
                 violation_candidates: list[tuple[int, str, dict]] = []
 
                 for tr in tracks:
+                    vehicle_type = self.temporal_vehicle_type_assigner.resolve_type(
+                        vehicle_id=tr.vehicle_id,
+                        predicted_type=tr.vehicle_type,
+                        confidence=tr.confidence,
+                        ts=ts_dt,
+                    )
                     raw_lane_id = self.lane_logic.assign_lane_id_from_bbox_xyxy(tr.bbox_xyxy)
                     lane_id = self.temporal_lane_assigner.resolve_lane(
                         vehicle_id=tr.vehicle_id,
@@ -162,7 +185,7 @@ class CameraContext:
                     vehicles.append(
                         TrackVehicle(
                             vehicle_id=tr.vehicle_id,
-                            vehicle_type=tr.vehicle_type,
+                            vehicle_type=vehicle_type,
                             lane_id=lane_id,
                             raw_lane_id=raw_lane_id,
                             bbox=BBox(x1=tr.bbox_xyxy[0], y1=tr.bbox_xyxy[1], x2=tr.bbox_xyxy[2], y2=tr.bbox_xyxy[3]),
@@ -171,13 +194,13 @@ class CameraContext:
 
                     candidates = self.violation_logic.update_and_maybe_generate_violation(
                         vehicle_id=tr.vehicle_id,
-                        vehicle_type=tr.vehicle_type,
+                        vehicle_type=vehicle_type,
                         lane_id=lane_id,
                         bbox_xyxy=tr.bbox_xyxy,
                         ts=ts_dt,
                     )
                     for c in candidates:
-                        violation_candidates.append((tr.vehicle_id, tr.vehicle_type, c))
+                        violation_candidates.append((tr.vehicle_id, vehicle_type, c))
 
                 if frame.timestamp_utc_ms - self._last_track_push_ts_ms >= self._track_push_interval_ms:
                     self._last_track_push_ts_ms = frame.timestamp_utc_ms
@@ -188,7 +211,9 @@ class CameraContext:
                     await self._handle_violations(violation_candidates, ts_dt)
 
                 await asyncio.to_thread(self.violation_logic.prune, current_ts=ts_dt, max_age_s=60.0)
+                await asyncio.to_thread(self.stable_track_id_assigner.prune, current_ts=ts_dt, max_age_s=60.0)
                 await asyncio.to_thread(self.temporal_lane_assigner.prune, current_ts=ts_dt, max_age_s=60.0)
+                await asyncio.to_thread(self.temporal_vehicle_type_assigner.prune, current_ts=ts_dt, max_age_s=60.0)
         finally:
             await asyncio.to_thread(self.rtsp_reader.close)
 

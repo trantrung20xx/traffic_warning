@@ -4,6 +4,7 @@ import asyncio
 from pathlib import Path
 from typing import Optional
 
+from fastapi import WebSocket
 from app.core.background_images import (
     delete_background_image,
     get_background_image_path,
@@ -43,8 +44,10 @@ class CameraManager:
         self._running = False
 
         # WebSocket listeners
-        self._track_listeners: set[asyncio.Queue[TrackMessage]] = set()
-        self._violation_listeners: set[asyncio.Queue[ViolationEvent]] = set()
+        self._track_listeners: set[asyncio.Queue[TrackMessage | None]] = set()
+        self._violation_listeners: set[asyncio.Queue[ViolationEvent | None]] = set()
+        self._track_websockets: set[WebSocket] = set()
+        self._violation_websockets: set[WebSocket] = set()
 
     @property
     def session_factory(self):
@@ -150,7 +153,7 @@ class CameraManager:
     def _on_track(self, msg: TrackMessage) -> None:
         # Called inside the event loop (CameraContext.run_forever).
         dead: list[asyncio.Queue] = []
-        for q in self._track_listeners:
+        for q in list(self._track_listeners):
             try:
                 q.put_nowait(msg)
             except asyncio.QueueFull:
@@ -160,7 +163,7 @@ class CameraManager:
 
     def _on_violation(self, ev: ViolationEvent) -> None:
         dead: list[asyncio.Queue] = []
-        for q in self._violation_listeners:
+        for q in list(self._violation_listeners):
             try:
                 q.put_nowait(ev)
             except asyncio.QueueFull:
@@ -168,21 +171,33 @@ class CameraManager:
         for q in dead:
             self._violation_listeners.discard(q)
 
-    def create_track_listener(self, *, maxsize: int = 200) -> asyncio.Queue[TrackMessage]:
-        q: asyncio.Queue[TrackMessage] = asyncio.Queue(maxsize=maxsize)
+    def create_track_listener(self, *, maxsize: int = 200) -> asyncio.Queue[TrackMessage | None]:
+        q: asyncio.Queue[TrackMessage | None] = asyncio.Queue(maxsize=maxsize)
         self._track_listeners.add(q)
         return q
 
-    def create_violation_listener(self, *, maxsize: int = 200) -> asyncio.Queue[ViolationEvent]:
-        q: asyncio.Queue[ViolationEvent] = asyncio.Queue(maxsize=maxsize)
+    def create_violation_listener(self, *, maxsize: int = 200) -> asyncio.Queue[ViolationEvent | None]:
+        q: asyncio.Queue[ViolationEvent | None] = asyncio.Queue(maxsize=maxsize)
         self._violation_listeners.add(q)
         return q
 
-    def remove_track_listener(self, q: asyncio.Queue[TrackMessage]) -> None:
+    def remove_track_listener(self, q: asyncio.Queue[TrackMessage | None]) -> None:
         self._track_listeners.discard(q)
 
-    def remove_violation_listener(self, q: asyncio.Queue[ViolationEvent]) -> None:
+    def remove_violation_listener(self, q: asyncio.Queue[ViolationEvent | None]) -> None:
         self._violation_listeners.discard(q)
+
+    def register_track_websocket(self, ws: WebSocket) -> None:
+        self._track_websockets.add(ws)
+
+    def unregister_track_websocket(self, ws: WebSocket) -> None:
+        self._track_websockets.discard(ws)
+
+    def register_violation_websocket(self, ws: WebSocket) -> None:
+        self._violation_websockets.add(ws)
+
+    def unregister_violation_websocket(self, ws: WebSocket) -> None:
+        self._violation_websockets.discard(ws)
 
     def get_lane_polygons(self, camera_id: str) -> dict:
         ctx = self._contexts.get(camera_id)
@@ -242,10 +257,19 @@ class CameraManager:
 
     async def stop(self) -> None:
         self._stop_event.set()
-        for t in self._tasks.values():
+        self._notify_listener_shutdown()
+        await self._close_active_websockets()
+        tasks = list(self._tasks.values())
+        for t in tasks:
             t.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
         self._tasks.clear()
         self._contexts.clear()
+        self._track_listeners.clear()
+        self._violation_listeners.clear()
+        self._track_websockets.clear()
+        self._violation_websockets.clear()
         self._running = False
 
     def _build_context(self, camera_id: str) -> CameraContext:
@@ -258,9 +282,14 @@ class CameraManager:
             db_session_factory=self._SessionLocal,
             on_track=self._on_track,
             on_violation=self._on_violation,
-            detector_weights_path=str(self.repo_root / "backend" / "yolov8n.pt"),
+            detector_weights_path=str((self.repo_root / self.cfg.detector_weights_path).resolve()),
             detector_conf_threshold=self.cfg.detector_conf_threshold,
             detector_iou_threshold=self.cfg.detector_iou_threshold,
+            vehicle_type_history_window_ms=self.cfg.vehicle_type_history_window_ms,
+            vehicle_type_history_size=self.cfg.vehicle_type_history_size,
+            stable_track_max_idle_ms=self.cfg.stable_track_max_idle_ms,
+            stable_track_min_iou_for_rebind=self.cfg.stable_track_min_iou_for_rebind,
+            stable_track_max_normalized_distance=self.cfg.stable_track_max_normalized_distance,
             track_push_interval_ms=self.cfg.track_push_interval_ms,
             wrong_lane_min_duration_ms=self.cfg.wrong_lane_min_duration_ms,
             turn_region_min_hits=self.cfg.turn_region_min_hits,
@@ -289,4 +318,27 @@ class CameraManager:
     def _require_camera_exists(self, camera_id: str) -> None:
         if not any(cam.camera_id == camera_id for cam in self.cameras):
             raise KeyError(camera_id)
+
+    def _notify_listener_shutdown(self) -> None:
+        for q in list(self._track_listeners):
+            try:
+                q.put_nowait(None)
+            except asyncio.QueueFull:
+                pass
+        for q in list(self._violation_listeners):
+            try:
+                q.put_nowait(None)
+            except asyncio.QueueFull:
+                pass
+
+    async def _close_active_websockets(self) -> None:
+        async def close_one(ws: WebSocket) -> None:
+            try:
+                await ws.close(code=1001, reason="Server shutting down")
+            except Exception:
+                pass
+
+        sockets = list(self._track_websockets) + list(self._violation_websockets)
+        if sockets:
+            await asyncio.gather(*(close_one(ws) for ws in sockets), return_exceptions=True)
 
