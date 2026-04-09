@@ -7,6 +7,8 @@ export const MANEUVER_LABELS = {
   u_turn: "Quay đầu",
 };
 
+export const VEHICLE_TYPES = ["motorcycle", "car", "truck", "bus"];
+
 export const VEHICLE_TYPE_LABELS = {
   motorcycle: "Xe máy",
   car: "Ô tô",
@@ -16,6 +18,7 @@ export const VEHICLE_TYPE_LABELS = {
 
 export const VIOLATION_LABELS = {
   wrong_lane: "Đi sai làn",
+  vehicle_type_not_allowed: "Loại phương tiện không đúng quy định",
   turn_left_not_allowed: "Rẽ trái không đúng quy định",
   turn_right_not_allowed: "Rẽ phải không đúng quy định",
   turn_straight_not_allowed: "Đi thẳng không đúng quy định",
@@ -107,12 +110,13 @@ export function getCameraTypeLabel(value) {
 export function createEmptyLane(laneId, frameWidth, frameHeight) {
   const left = 80 + (laneId - 1) * 40;
   const top = Math.max(120, Math.round(frameHeight * 0.55));
+  const right = Math.min(frameWidth - 80, left + 280);
   return {
     lane_id: laneId,
     polygon: normalizePoints(
       [
       [left, top],
-      [Math.min(frameWidth - 80, left + 280), top],
+      [right, top],
       [Math.min(frameWidth - 40, left + 320), frameHeight - 40],
       [left + 40, frameHeight - 40],
       ],
@@ -121,6 +125,7 @@ export function createEmptyLane(laneId, frameWidth, frameHeight) {
     ),
     allowed_maneuvers: ["straight"],
     allowed_lane_changes: [laneId],
+    allowed_vehicle_types: [...VEHICLE_TYPES],
     turn_regions: {},
   };
 }
@@ -172,6 +177,7 @@ export function normalizeCameraDetail(detail) {
       polygon: lane.polygon || [],
       allowed_maneuvers: lane.allowed_maneuvers || [],
       allowed_lane_changes: lane.allowed_lane_changes || [lane.lane_id],
+      allowed_vehicle_types: lane.allowed_vehicle_types || [...VEHICLE_TYPES],
       turn_regions: lane.turn_regions || {},
     })),
   };
@@ -191,6 +197,7 @@ export function buildPayload(draft) {
     polygon: (lane.polygon || []).map(([x, y]) => [Number(x), Number(y)]),
     allowed_maneuvers: lane.allowed_maneuvers || [],
     allowed_lane_changes: (lane.allowed_lane_changes || []).map((value) => Number(value)),
+    allowed_vehicle_types: lane.allowed_vehicle_types || [...VEHICLE_TYPES],
     turn_regions: Object.fromEntries(
       Object.entries(lane.turn_regions || {})
         .filter(([, points]) => Array.isArray(points) && points.length >= 3)
@@ -285,6 +292,10 @@ export function validatePolygonDraft(draft) {
       errors.push(`Làn ${lane.lane_id} phải có polygon ít nhất 3 điểm.`);
     } else if (polygonSelfIntersects(lanePoints)) {
       warnings.push(`Polygon của làn ${lane.lane_id} đang tự cắt nhau.`);
+    }
+
+    if (!Array.isArray(lane.allowed_vehicle_types) || lane.allowed_vehicle_types.length === 0) {
+      errors.push(`Làn ${lane.lane_id} phải có ít nhất một loại phương tiện được phép.`);
     }
 
     Object.entries(lane.turn_regions || {}).forEach(([maneuver, points]) => {

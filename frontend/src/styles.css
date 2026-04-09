@@ -136,6 +136,29 @@ select {
 
 .monitor-layout {
   grid-template-columns: minmax(0, 1.6fr) minmax(320px, 0.9fr);
+  align-items: stretch;
+}
+
+.monitor-full-width {
+  grid-column: 1 / -1;
+}
+
+.monitor-sidebar {
+  height: 100%;
+}
+
+.monitor-realtime-panel {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.monitor-realtime-panel .tracked-vehicle-list {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: calc(8 * 84px);
+  max-height: calc(8 * 84px);
 }
 
 .analytics-layout,
@@ -209,6 +232,26 @@ select {
 
 .inline-fields {
   grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.lane-inline-fields {
+  grid-template-columns: minmax(240px, 1.7fr) minmax(240px, 1.7fr) minmax(180px, 1fr);
+  align-items: end;
+}
+
+.lane-field-target {
+  grid-column: 3;
+  grid-row: 1;
+}
+
+.lane-field-changes {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.lane-field-vehicles {
+  grid-column: 2;
+  grid-row: 1;
 }
 
 .lane-editor-grid {
@@ -292,13 +335,25 @@ select {
 }
 
 .tracked-vehicle-list {
-  max-height: calc(5 * 84px);
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
   padding-right: 6px;
   scrollbar-color: rgba(28, 166, 255, 0.42) rgba(255, 255, 255, 0.04);
 }
 
+.violation-list {
+  max-height: calc(12 * 84px);
+  overflow-y: auto;
+  padding-right: 6px;
+  scrollbar-color: rgba(255, 107, 87, 0.38) rgba(255, 255, 255, 0.04);
+}
+
 .tracked-vehicle-list::-webkit-scrollbar {
+  width: 8px;
+}
+
+.violation-list::-webkit-scrollbar {
   width: 8px;
 }
 
@@ -307,10 +362,21 @@ select {
   border-radius: 999px;
 }
 
+.violation-list::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 999px;
+}
+
 .tracked-vehicle-list::-webkit-scrollbar-thumb {
   background: linear-gradient(180deg, rgba(28, 166, 255, 0.72), rgba(0, 214, 143, 0.62));
   border-radius: 999px;
   border: 1px solid rgba(160, 210, 229, 0.14);
+}
+
+.violation-list::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(255, 107, 87, 0.68), rgba(255, 152, 120, 0.52));
+  border-radius: 999px;
+  border: 1px solid rgba(255, 166, 146, 0.18);
 }
 
 .list-row,
@@ -833,6 +899,14 @@ select {
 
   .editor-toolbar-row {
     grid-template-columns: 1fr;
+  }
+
+  .lane-inline-fields,
+  .lane-field-target,
+  .lane-field-changes,
+  .lane-field-vehicles {
+    grid-column: auto;
+    grid-row: auto;
   }
 
   .editor-actions .button {

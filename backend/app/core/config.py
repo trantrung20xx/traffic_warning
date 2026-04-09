@@ -8,6 +8,8 @@ from pydantic import BaseModel, field_validator
 
 from app.schemas.camera import CameraConfig
 
+ALLOWED_VEHICLE_TYPES = {"motorcycle", "car", "truck", "bus"}
+
 
 class LanePolygon(BaseModel):
     lane_id: int
@@ -28,6 +30,9 @@ class LanePolygon(BaseModel):
     # If a vehicle enters a lane not in allowed_lane_changes, we consider it illegal.
     # By default skeleton allows only staying in its primary lane.
     allowed_lane_changes: Optional[list[int]] = None
+
+    # Allowed vehicle classes for this lane, e.g. motorcycle/car/truck/bus.
+    allowed_vehicle_types: Optional[list[str]] = None
 
     @field_validator("polygon")
     @classmethod
@@ -60,6 +65,21 @@ class LanePolygon(BaseModel):
                     raise ValueError(f"turn region '{maneuver}' points must be normalized to [0, 1]")
         return value
 
+    @field_validator("allowed_vehicle_types")
+    @classmethod
+    def validate_allowed_vehicle_types(
+        cls, value: Optional[list[str]]
+    ) -> Optional[list[str]]:
+        if value is None:
+            return value
+        normalized = list(dict.fromkeys(str(item) for item in value))
+        if not normalized:
+            raise ValueError("allowed_vehicle_types must contain at least one vehicle type")
+        invalid = [item for item in normalized if item not in ALLOWED_VEHICLE_TYPES]
+        if invalid:
+            raise ValueError(f"unsupported vehicle types: {', '.join(invalid)}")
+        return normalized
+
 
 class CameraLaneConfig(BaseModel):
     camera_id: str
@@ -74,6 +94,7 @@ class RuntimeLanePolygon(BaseModel):
     turn_regions: Optional[dict[str, list[list[float]]]] = None
     allowed_maneuvers: Optional[list[str]] = None
     allowed_lane_changes: Optional[list[int]] = None
+    allowed_vehicle_types: Optional[list[str]] = None
 
 
 class RuntimeCameraLaneConfig(BaseModel):
@@ -94,7 +115,7 @@ class AppConfig(BaseModel):
     # Detector / performance settings
     detector_weights_path: str = "backend/yolov8n.pt"
     detector_device: str = "auto"
-    detector_conf_threshold: float = 0.35
+    detector_conf_threshold: float = 0.28
     detector_iou_threshold: float = 0.7
     vehicle_type_history_window_ms: int = 4000
     vehicle_type_history_size: int = 12
@@ -158,6 +179,7 @@ def denormalize_lane_config(lane_config: CameraLaneConfig) -> RuntimeCameraLaneC
                     },
                     "allowed_maneuvers": lane.allowed_maneuvers,
                     "allowed_lane_changes": lane.allowed_lane_changes,
+                    "allowed_vehicle_types": lane.allowed_vehicle_types,
                 }
                 for lane in lane_config.lanes
             ],
@@ -208,7 +230,7 @@ def load_app_config(repo_root: Path) -> AppConfig:
             db_path=db_path,
             detector_weights_path=str(settings.get("detector_weights_path", "backend/yolov8n.pt")),
             detector_device=str(settings.get("detector_device", "auto")),
-            detector_conf_threshold=float(settings.get("detector_conf_threshold", 0.35)),
+            detector_conf_threshold=float(settings.get("detector_conf_threshold", 0.28)),
             detector_iou_threshold=float(settings.get("detector_iou_threshold", 0.7)),
             vehicle_type_history_window_ms=int(settings.get("vehicle_type_history_window_ms", 4000)),
             vehicle_type_history_size=int(settings.get("vehicle_type_history_size", 12)),

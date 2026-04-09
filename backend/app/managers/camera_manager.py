@@ -215,6 +215,7 @@ class CameraManager:
                         "turn_regions": lane.turn_regions or {},
                         "allowed_maneuvers": lane.allowed_maneuvers or [],
                         "allowed_lane_changes": lane.allowed_lane_changes or [lane.lane_id],
+                        "allowed_vehicle_types": lane.allowed_vehicle_types or ["motorcycle", "car", "truck", "bus"],
                     }
                     for lane in lane_cfg_pixels.lanes
                 ],

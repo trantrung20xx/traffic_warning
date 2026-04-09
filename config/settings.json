@@ -4,7 +4,7 @@
   "detector_device": "auto",
   "detector_conf_threshold": 0.28,
   "detector_iou_threshold": 0.7,
-  "vehicle_type_history_window_ms": 4000,
+  "vehicle_type_history_window_ms": 5000,
   "vehicle_type_history_size": 12,
   "stable_track_max_idle_ms": 1500,
   "stable_track_min_iou_for_rebind": 0.15,
@@ -15,4 +15,3 @@
   "wrong_lane_min_duration_ms": 1200,
   "turn_region_min_hits": 3
 }
-

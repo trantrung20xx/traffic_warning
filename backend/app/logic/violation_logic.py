@@ -91,6 +91,15 @@ class ViolationLogic:
         violations: list[dict] = []
 
         # ----------------------
+        # Vehicle type restriction
+        # ----------------------
+        allowed_vehicle_types = lp.allowed_vehicle_types
+        if allowed_vehicle_types:
+            if vehicle_type not in allowed_vehicle_types and "vehicle_type_not_allowed" not in st.emitted:
+                st.emitted.add("vehicle_type_not_allowed")
+                violations.append({"lane_id": primary_lane_id, "violation": "vehicle_type_not_allowed"})
+
+        # ----------------------
         # Wrong lane
         # ----------------------
         allowed_lane_changes = lp.allowed_lane_changes

@@ -133,6 +133,7 @@ class CameraContext:
                     "turn_regions": lp.turn_regions or {},
                     "allowed_maneuvers": lp.allowed_maneuvers or [],
                     "allowed_lane_changes": lp.allowed_lane_changes or [lp.lane_id],
+                    "allowed_vehicle_types": lp.allowed_vehicle_types or ["motorcycle", "car", "truck", "bus"],
                 }
             )
         return {

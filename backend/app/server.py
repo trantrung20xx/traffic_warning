@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -9,6 +10,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes import create_api_router
 from app.api.ws import create_ws_router
 from app.managers.camera_manager import CameraManager
+
+if sys.platform.startswith("win") and hasattr(asyncio, "WindowsSelectorEventLoopPolicy"):
+    # ProactorEventLoop on Windows can emit noisy WinError 10054 stack traces when
+    # browsers/tabs drop websocket connections abruptly. Selector policy is more
+    # stable for this FastAPI/WebSocket workload.
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 
 def create_app() -> FastAPI:

@@ -11,10 +11,12 @@ import {
 } from "../api";
 import {
   MANEUVERS,
+  VEHICLE_TYPES,
   buildPayload,
   createCameraDraft,
   createEmptyLane,
   getManeuverLabel,
+  getVehicleTypeLabel,
   normalizeCameraDetail,
   polygonSelfIntersects,
   validatePolygonDraft,
@@ -144,6 +146,34 @@ function ActionIcon({ type }) {
   return null;
 }
 
+function MultiSelectDropdown({ summary, placeholder, options, getKey, getLabel, isChecked, onToggle, getNote, isDisabled }) {
+  return (
+    <details className="lane-change-dropdown">
+      <summary className="lane-change-summary">
+        <span className="lane-change-summary-text">{summary || placeholder}</span>
+        <span className="lane-change-summary-icon">
+          <ActionIcon type="chevron-down" />
+        </span>
+      </summary>
+      <div className="lane-change-menu">
+        {options.map((option) => {
+          const key = getKey(option);
+          const checked = isChecked(option);
+          const disabled = isDisabled ? isDisabled(option) : false;
+          const note = getNote ? getNote(option) : null;
+          return (
+            <label key={key} className={disabled ? "lane-change-option lane-change-option-disabled" : "lane-change-option"}>
+              <input type="checkbox" checked={checked} disabled={disabled} onChange={(event) => onToggle(option, event.target.checked)} />
+              <span className="lane-change-option-label">{getLabel(option)}</span>
+              {note ? <span className="lane-change-option-note">{note}</span> : null}
+            </label>
+          );
+        })}
+      </div>
+    </details>
+  );
+}
+
 export default function ManagementView({ cameras, selectedCameraId, onSelectCamera, onRefreshCameras }) {
   const [draft, setDraft] = useState(createCameraDraft());
   const [activeCameraId, setActiveCameraId] = useState(selectedCameraId || null);
@@ -203,8 +233,9 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
     if (!selectedLane) return { warnings: [] };
     const targetLabel = editTarget === "lane" ? `Polygon làn ${selectedLane.lane_id}` : `${getManeuverLabel(editTarget)} của làn ${selectedLane.lane_id}`;
     const warnings = [];
-    if (selectedPoints.length > 0 && selectedPoints.length < 3) {
-      warnings.push(`${targetLabel} hiện có dưới 3 điểm, chưa đủ để tạo vùng hợp lệ.`);
+    const minimumPoints = 3;
+    if (selectedPoints.length > 0 && selectedPoints.length < minimumPoints) {
+      warnings.push(`${targetLabel} hiện có dưới ${minimumPoints} điểm, chưa đủ để tạo vùng hợp lệ.`);
     }
     if (selectedPoints.length >= 4 && polygonSelfIntersects(selectedPoints)) {
       warnings.push(`${targetLabel} đang tự cắt nhau, nên chỉnh lại để tránh vùng hình học khó kiểm soát.`);
@@ -699,65 +730,58 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
 
             {selectedLane ? (
               <div className="lane-settings">
-                <div className="inline-fields">
-                  <label className="field">
-                    <span>ID làn</span>
-                    <input
-                      type="number"
-                      value={selectedLane.lane_id}
-                      onChange={(event) => {
-                        const nextId = Number(event.target.value) || selectedLane.lane_id;
-                        updateLane(selectedLane.lane_id, (lane) => ({ ...lane, lane_id: nextId }));
-                        setSelectedLaneId(nextId);
-                      }}
+                <div className="inline-fields lane-inline-fields">
+                  <label className="field lane-field-changes">
+                    <span>Các làn được phép chuyển</span>
+                    <MultiSelectDropdown
+                      summary={
+                        draft.lane_config.lanes
+                          .filter((laneOption) => (selectedLane.allowed_lane_changes || []).includes(laneOption.lane_id))
+                          .map((laneOption) => `Làn ${laneOption.lane_id}`)
+                          .join(", ")
+                      }
+                      placeholder="Chọn làn"
+                      options={draft.lane_config.lanes}
+                      getKey={(laneOption) => laneOption.lane_id}
+                      getLabel={(laneOption) => `Làn ${laneOption.lane_id}`}
+                      isChecked={(laneOption) => (selectedLane.allowed_lane_changes || []).includes(laneOption.lane_id)}
+                      isDisabled={(laneOption) => laneOption.lane_id === selectedLane.lane_id}
+                      getNote={(laneOption) => (laneOption.lane_id === selectedLane.lane_id ? "Hiện tại" : null)}
+                      onToggle={(laneOption, checked) =>
+                        updateLane(selectedLane.lane_id, (lane) => ({
+                          ...lane,
+                          allowed_lane_changes: checked
+                            ? [...new Set([...(lane.allowed_lane_changes || []), laneOption.lane_id])]
+                            : (lane.allowed_lane_changes || []).filter((value) => value !== laneOption.lane_id),
+                        }))
+                      }
                     />
                   </label>
-                  <label className="field">
-                    <span>Các làn được phép chuyển</span>
-                    <details className="lane-change-dropdown">
-                      <summary className="lane-change-summary">
-                        <span className="lane-change-summary-text">
-                          {draft.lane_config.lanes
-                            .filter((laneOption) => (selectedLane.allowed_lane_changes || []).includes(laneOption.lane_id))
-                            .map((laneOption) => `Làn ${laneOption.lane_id}`)
-                            .join(", ") || "Chọn làn"}
-                        </span>
-                        <span className="lane-change-summary-icon">
-                          <ActionIcon type="chevron-down" />
-                        </span>
-                      </summary>
-                      <div className="lane-change-menu">
-                        {draft.lane_config.lanes.map((laneOption) => {
-                          const checked = (selectedLane.allowed_lane_changes || []).includes(laneOption.lane_id);
-                          const disabled = laneOption.lane_id === selectedLane.lane_id;
-                          return (
-                            <label
-                              key={laneOption.lane_id}
-                              className={disabled ? "lane-change-option lane-change-option-disabled" : "lane-change-option"}
-                            >
-                              <input
-                                type="checkbox"
-                                checked={checked}
-                                disabled={disabled}
-                                onChange={(event) =>
-                                  updateLane(selectedLane.lane_id, (lane) => ({
-                                    ...lane,
-                                    allowed_lane_changes: event.target.checked
-                                      ? [...new Set([...(lane.allowed_lane_changes || []), laneOption.lane_id])]
-                                      : (lane.allowed_lane_changes || []).filter((value) => value !== laneOption.lane_id),
-                                  }))
-                                }
-                              />
-                              <span className="lane-change-option-label">{`Làn ${laneOption.lane_id}`}</span>
-                              {disabled ? <span className="lane-change-option-note">Hiện tại</span> : null}
-                            </label>
-                          );
-                        })}
-                      </div>
-                    </details>
+                  <label className="field lane-field-vehicles">
+                    <span>Loại phương tiện được phép</span>
+                    <MultiSelectDropdown
+                      summary={
+                        VEHICLE_TYPES.filter((vehicleType) => (selectedLane.allowed_vehicle_types || []).includes(vehicleType))
+                          .map((vehicleType) => getVehicleTypeLabel(vehicleType))
+                          .join(", ")
+                      }
+                      placeholder="Chọn phương tiện"
+                      options={VEHICLE_TYPES}
+                      getKey={(vehicleType) => vehicleType}
+                      getLabel={(vehicleType) => getVehicleTypeLabel(vehicleType)}
+                      isChecked={(vehicleType) => (selectedLane.allowed_vehicle_types || []).includes(vehicleType)}
+                      onToggle={(vehicleType, checked) =>
+                        updateLane(selectedLane.lane_id, (lane) => ({
+                          ...lane,
+                          allowed_vehicle_types: checked
+                            ? [...new Set([...(lane.allowed_vehicle_types || []), vehicleType])]
+                            : (lane.allowed_vehicle_types || []).filter((value) => value !== vehicleType),
+                        }))
+                      }
+                    />
                   </label>
-                  <label className="field">
-                    <span>Đối tượng đa giác</span>
+                  <label className="field lane-field-target">
+                    <span>Đối tượng chỉnh sửa</span>
                     <select value={editTarget} onChange={(event) => setEditTarget(event.target.value)}>
                       <option value="lane">Đa giác làn</option>
                       {MANEUVERS.map((maneuver) => (

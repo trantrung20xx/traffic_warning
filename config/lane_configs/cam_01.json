@@ -38,6 +38,12 @@
       ],
       "allowed_lane_changes": [
         1
+      ],
+      "allowed_vehicle_types": [
+        "motorcycle",
+        "truck",
+        "bus",
+        "car"
       ]
     },
     {
@@ -71,6 +77,11 @@
       ],
       "allowed_lane_changes": [
         2
+      ],
+      "allowed_vehicle_types": [
+        "motorcycle",
+        "truck",
+        "bus"
       ]
     }
   ]

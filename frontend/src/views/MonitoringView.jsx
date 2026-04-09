@@ -122,8 +122,8 @@ export default function MonitoringView({ cameras, selectedCameraId, onSelectCame
         ) : null}
       </section>
 
-      <aside className="stack-column">
-        <section className="panel">
+      <aside className="stack-column monitor-sidebar">
+        <section className="panel monitor-realtime-panel">
           <div className="panel-header compact">
             <div>
               <div className="panel-kicker">Thời gian thực</div>
@@ -143,38 +143,38 @@ export default function MonitoringView({ cameras, selectedCameraId, onSelectCame
                     Làn ổn định: {vehicle.lane_id ?? "đang ổn định"}{vehicle.raw_lane_id != null ? ` · hit hiện tại: ${vehicle.raw_lane_id}` : ""}
                   </div>
                 </div>
-                <div className="badge subtle">{vehicle.bbox ? "Đang theo dõi" : "Chờ xử lý"}</div>
-              </article>
-            ))}
-          </div>
-        </section>
-
-        <section className="panel">
-          <div className="panel-header compact">
-            <div>
-              <div className="panel-kicker">Luồng vi phạm</div>
-              <h3>Danh sách vi phạm của camera đang xem</h3>
-            </div>
-            <div className="badge danger">{violations.length}</div>
-          </div>
-          <div className="entity-list">
-            {violations.length === 0 ? <div className="empty-state slim">Chưa có vi phạm thời gian thực.</div> : null}
-            {violations.map((event) => (
-              <article className="list-row violation-row" key={`${event.camera_id}-${event.vehicle_id}-${event.violation}-${event.timestamp}`}>
-                <div>
-                  <div className="row-title">
-                    {getViolationLabel(event.violation)} · làn {event.lane_id}
-                  </div>
-                  <div className="row-sub">
-                    {getVehicleTypeLabel(event.vehicle_type)} · xe #{event.vehicle_id}
-                  </div>
-                </div>
-                <div className="row-meta">{formatTimestamp(event.timestamp)}</div>
+                <div className={vehicle.bbox ? "badge success" : "badge subtle"}>{vehicle.bbox ? "Đang theo dõi" : "Chờ xử lý"}</div>
               </article>
             ))}
           </div>
         </section>
       </aside>
+
+      <section className="panel monitor-full-width">
+        <div className="panel-header compact">
+          <div>
+            <div className="panel-kicker">Luồng vi phạm</div>
+            <h3>Danh sách vi phạm của camera đang xem</h3>
+          </div>
+          <div className="badge danger">{violations.length}</div>
+        </div>
+        <div className="entity-list violation-list">
+          {violations.length === 0 ? <div className="empty-state slim">Chưa có vi phạm thời gian thực.</div> : null}
+          {violations.map((event) => (
+            <article className="list-row violation-row" key={`${event.camera_id}-${event.vehicle_id}-${event.violation}-${event.timestamp}`}>
+              <div>
+                <div className="row-title">
+                  {getViolationLabel(event.violation)} · làn {event.lane_id}
+                </div>
+                <div className="row-sub">
+                  {getVehicleTypeLabel(event.vehicle_type)} · xe #{event.vehicle_id}
+                </div>
+              </div>
+              <div className="row-meta">{formatTimestamp(event.timestamp)}</div>
+            </article>
+          ))}
+        </div>
+      </section>
     </div>
   );
 }
