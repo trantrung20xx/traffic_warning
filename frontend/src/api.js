@@ -66,14 +66,15 @@ export async function fetchDashboard({ cameraId, fromTs, toTs }) {
 }
 
 export async function fetchViolationHistory({ cameraId, fromTs, toTs, limit }) {
-  return await request(
-    withQuery("/api/violations/history", {
-      camera_id: cameraId,
-      from_ts: fromTs,
-      to_ts: toTs,
-      limit,
-    }),
-  );
+  const params = {
+    camera_id: cameraId,
+    from_ts: fromTs,
+    to_ts: toTs,
+  };
+  if (limit !== undefined && limit !== null) {
+    params.limit = limit;
+  }
+  return await request(withQuery("/api/violations/history", params));
 }
 
 export async function createCamera(payload) {
@@ -115,6 +116,18 @@ export function getBackgroundImageUrl(cameraId, revision = "0") {
   return apiUrl(`/api/camera/${cameraId}/background-image?rev=${encodeURIComponent(revision)}`);
 }
 
+export function getViolationEvidenceUrl(imageUrlOrPath) {
+  if (!imageUrlOrPath) return null;
+  const value = String(imageUrlOrPath);
+  if (/^https?:\/\//i.test(value)) {
+    return value;
+  }
+  if (value.startsWith("/")) {
+    return apiUrl(value);
+  }
+  return apiUrl(`/api/violations/evidence/${encodeURIComponent(value).replaceAll("%2F", "/")}`);
+}
+
 export function connectTracks(cameraId, onMessage) {
   const socket = new WebSocket(`${wsUrl("/ws/tracks")}?camera_id=${encodeURIComponent(cameraId)}`);
   socket.onmessage = (event) => {
@@ -127,7 +140,8 @@ export function connectTracks(cameraId, onMessage) {
 }
 
 export function connectViolations(cameraId, onMessage) {
-  const socket = new WebSocket(`${wsUrl("/ws/violations")}?camera_id=${encodeURIComponent(cameraId)}`);
+  const path = cameraId ? `/ws/violations?camera_id=${encodeURIComponent(cameraId)}` : "/ws/violations";
+  const socket = new WebSocket(wsUrl(path));
   socket.onmessage = (event) => {
     const message = JSON.parse(event.data);
     if (message.type === "violation") {

@@ -43,12 +43,15 @@ class ViolationLocation(BaseModel):
 
 class ViolationEvent(BaseModel):
     # Must match the JSON schema you provided (field names)
+    id: Optional[int] = None
     camera_id: str
     location: ViolationLocation
     vehicle_id: int
     vehicle_type: str
     lane_id: int
     violation: str
+    image_path: Optional[str] = None
+    image_url: Optional[str] = None
     timestamp: str = Field(
         description="ISO-8601 timestamp string"
     )
@@ -62,6 +65,8 @@ class ViolationEvent(BaseModel):
         vehicle_type: str,
         lane_id: int,
         violation: str,
+        image_path: Optional[str] = None,
+        image_url: Optional[str] = None,
         ts: Optional[datetime] = None,
     ) -> "ViolationEvent":
         if ts is None:
@@ -74,6 +79,8 @@ class ViolationEvent(BaseModel):
             vehicle_type=vehicle_type,
             lane_id=lane_id,
             violation=violation,
+            image_path=image_path,
+            image_url=image_url,
             timestamp=ts.replace(microsecond=0).isoformat(),
         )
 

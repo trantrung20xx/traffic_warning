@@ -10,6 +10,7 @@ from app.core.background_images import (
     get_background_image_path,
     save_background_image,
 )
+from app.core.evidence_images import delete_evidence_images_for_camera, resolve_evidence_image_path
 from app.core.config import (
     CameraLaneConfig,
     denormalize_lane_config,
@@ -130,8 +131,16 @@ class CameraManager:
         save_cameras(self.repo_root, self.cameras)
         delete_lane_config_for_camera(self.repo_root, camera_id)
         delete_background_image(self.repo_root, camera_id)
+        delete_evidence_images_for_camera(self.repo_root, camera_id)
 
-    def query_history(self, *, from_ts: Optional[str], to_ts: Optional[str], camera_id: Optional[str], limit: int):
+    def query_history(
+        self,
+        *,
+        from_ts: Optional[str],
+        to_ts: Optional[str],
+        camera_id: Optional[str],
+        limit: Optional[int],
+    ):
         with self._SessionLocal() as session:
             return query_violation_history(
                 session,
@@ -248,6 +257,9 @@ class CameraManager:
             return None
         return ctx.get_latest_preview_jpeg()
 
+    def get_violation_evidence_path(self, relative_path: str) -> Optional[Path]:
+        return resolve_evidence_image_path(self.repo_root, relative_path)
+
     async def start(self) -> None:
         if self._running:
             return
@@ -278,6 +290,7 @@ class CameraManager:
         lane_cfg = load_lane_config_for_camera(self.repo_root, cam.camera_id)
         lane_cfg_pixels = denormalize_lane_config(lane_cfg)
         return CameraContext(
+            repo_root=self.repo_root,
             camera_config=cam,
             lane_config=lane_cfg_pixels,
             db_session_factory=self._SessionLocal,

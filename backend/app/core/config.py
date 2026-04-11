@@ -110,6 +110,7 @@ class AppConfig(BaseModel):
     cameras_path: Path
     lane_configs_dir: Path
     background_images_dir: Path
+    evidence_images_dir: Path
     db_path: Path
 
     # Detector / performance settings
@@ -212,6 +213,7 @@ def load_app_config(repo_root: Path) -> AppConfig:
     cameras_path = config_dir / "cameras.json"
     lane_configs_dir = config_dir / "lane_configs"
     background_images_dir = config_dir / "background_images"
+    evidence_images_dir = config_dir / "evidence_images"
 
     db_path = config_dir / "traffic_warning.sqlite"
 
@@ -227,6 +229,7 @@ def load_app_config(repo_root: Path) -> AppConfig:
             cameras_path=cameras_path,
             lane_configs_dir=lane_configs_dir,
             background_images_dir=background_images_dir,
+            evidence_images_dir=evidence_images_dir,
             db_path=db_path,
             detector_weights_path=str(settings.get("detector_weights_path", "backend/yolov8n.pt")),
             detector_device=str(settings.get("detector_device", "auto")),
@@ -255,6 +258,7 @@ def load_app_config(repo_root: Path) -> AppConfig:
         cameras_path=cameras_path,
         lane_configs_dir=lane_configs_dir,
         background_images_dir=background_images_dir,
+        evidence_images_dir=evidence_images_dir,
         db_path=db_path,
         detector_weights_path="backend/yolov8n.pt",
         detector_device="auto",

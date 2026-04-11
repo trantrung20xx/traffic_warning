@@ -25,6 +25,7 @@ class Violation(Base):
     vehicle_type = Column(String, nullable=False)
     lane_id = Column(Integer, nullable=False)
     violation = Column(String, nullable=False, index=True)
+    evidence_image_path = Column(String, nullable=True)
 
     timestamp_utc = Column(DateTime(timezone=True), nullable=False, index=True)
 

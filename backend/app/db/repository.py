@@ -1,20 +1,20 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import desc, func, select
 
+from app.core.evidence_images import build_evidence_image_url
+from app.core.timezone import ensure_utc_datetime, to_vietnam_datetime, to_vietnam_isoformat
 from app.db.models import Violation
 from app.schemas.events import ViolationEvent
 
 
-def insert_violation(session, event: ViolationEvent) -> None:
+def insert_violation(session, event: ViolationEvent) -> int:
     # Parse timestamp string back to datetime for DB storage
-    ts = datetime.fromisoformat(event.timestamp)
-    if ts.tzinfo is None:
-        ts = ts.replace(tzinfo=timezone.utc)
+    ts = ensure_utc_datetime(datetime.fromisoformat(event.timestamp))
 
     row = Violation(
         camera_id=event.camera_id,
@@ -26,10 +26,13 @@ def insert_violation(session, event: ViolationEvent) -> None:
         vehicle_type=event.vehicle_type,
         lane_id=event.lane_id,
         violation=event.violation,
+        evidence_image_path=event.image_path,
         timestamp_utc=ts,
     )
     session.add(row)
     session.commit()
+    session.refresh(row)
+    return int(row.id)
 
 
 def query_violation_counts(
@@ -53,16 +56,12 @@ def query_violation_counts(
         Violation.violation,
     )
 
-    if from_ts:
-        f = datetime.fromisoformat(from_ts)
-        if f.tzinfo is None:
-            f = f.replace(tzinfo=timezone.utc)
-        q = q.where(Violation.timestamp_utc >= f)
-    if to_ts:
-        t = datetime.fromisoformat(to_ts)
-        if t.tzinfo is None:
-            t = t.replace(tzinfo=timezone.utc)
-        q = q.where(Violation.timestamp_utc <= t)
+    parsed_from = _parse_ts(from_ts)
+    parsed_to = _parse_ts(to_ts)
+    if parsed_from:
+        q = q.where(Violation.timestamp_utc >= parsed_from)
+    if parsed_to:
+        q = q.where(Violation.timestamp_utc <= parsed_to)
 
     rows = session.execute(q).all()
     return [
@@ -81,10 +80,7 @@ def query_violation_counts(
 def _parse_ts(value: Optional[str]) -> Optional[datetime]:
     if not value:
         return None
-    ts = datetime.fromisoformat(value)
-    if ts.tzinfo is None:
-        ts = ts.replace(tzinfo=timezone.utc)
-    return ts
+    return ensure_utc_datetime(datetime.fromisoformat(value))
 
 
 def _base_violation_query(
@@ -112,13 +108,15 @@ def query_violation_history(
     from_ts: Optional[str] = None,
     to_ts: Optional[str] = None,
     camera_id: Optional[str] = None,
-    limit: int = 200,
+    limit: Optional[int] = None,
 ):
     q = _base_violation_query(session, from_ts=from_ts, to_ts=to_ts, camera_id=camera_id).order_by(
         desc(Violation.timestamp_utc),
         desc(Violation.id),
     )
-    rows = session.execute(q.limit(int(limit))).scalars().all()
+    if limit is not None:
+        q = q.limit(int(limit))
+    rows = session.execute(q).scalars().all()
     return [
         {
             "id": row.id,
@@ -133,7 +131,9 @@ def query_violation_history(
             "vehicle_type": row.vehicle_type,
             "lane_id": row.lane_id,
             "violation": row.violation,
-            "timestamp": row.timestamp_utc.isoformat(),
+            "image_path": row.evidence_image_path,
+            "image_url": build_evidence_image_url(row.evidence_image_path),
+            "timestamp": to_vietnam_isoformat(row.timestamp_utc),
         }
         for row in rows
     ]
@@ -192,7 +192,8 @@ def query_dashboard_analytics(
         road_entry["vehicle_type_totals"][row.vehicle_type] += 1
         road_entry["violation_totals"][row.violation] += 1
 
-        bucket = row.timestamp_utc.replace(minute=0, second=0, microsecond=0).isoformat()
+        bucket_dt = to_vietnam_datetime(row.timestamp_utc).replace(minute=0, second=0, microsecond=0)
+        bucket = bucket_dt.isoformat()
         hourly_entry = hourly_map.setdefault(
             bucket,
             {

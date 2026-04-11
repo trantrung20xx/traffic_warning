@@ -12,6 +12,7 @@
     "timestamp"
   ],
   "properties": {
+    "id": { "type": ["integer", "null"] },
     "camera_id": { "type": "string" },
     "location": {
       "type": "object",
@@ -27,6 +28,8 @@
     "vehicle_type": { "type": "string" },
     "lane_id": { "type": "integer" },
     "violation": { "type": "string" },
+    "image_path": { "type": ["string", "null"] },
+    "image_url": { "type": ["string", "null"] },
     "timestamp": { "type": "string" }
   }
 }

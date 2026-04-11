@@ -4,11 +4,13 @@ import asyncio
 import threading
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Callable, Optional
 
 import cv2
 
 from app.core.config import CameraConfig, RuntimeCameraLaneConfig
+from app.core.evidence_images import build_evidence_image_url, save_evidence_image
 from app.db.repository import insert_violation
 from app.logic.lane_logic import LaneLogic, TemporalLaneAssigner
 from app.logic.track_id_logic import StableTrackIdAssigner
@@ -37,6 +39,7 @@ class CameraContext:
     def __init__(
         self,
         *,
+        repo_root: Path,
         camera_config: CameraConfig,
         lane_config: RuntimeCameraLaneConfig,
         db_session_factory,
@@ -56,6 +59,7 @@ class CameraContext:
         wrong_lane_min_duration_ms: int = 1200,
         turn_region_min_hits: int = 3,
     ):
+        self.repo_root = Path(repo_root)
         self.camera_config = camera_config
         self.lane_config = lane_config
 
@@ -174,7 +178,7 @@ class CameraContext:
                 tracks = await asyncio.to_thread(self.stable_track_id_assigner.assign, raw_tracks=tracks, ts=ts_dt)
 
                 vehicles: list[TrackVehicle] = []
-                violation_candidates: list[tuple[int, str, dict]] = []
+                violation_candidates: list[tuple[int, str, dict, list[float]]] = []
 
                 for tr in tracks:
                     vehicle_type = self.temporal_vehicle_type_assigner.resolve_type(
@@ -207,7 +211,7 @@ class CameraContext:
                         ts=ts_dt,
                     )
                     for c in candidates:
-                        violation_candidates.append((tr.vehicle_id, vehicle_type, c))
+                        violation_candidates.append((tr.vehicle_id, vehicle_type, c, list(tr.bbox_xyxy)))
 
                 if frame.timestamp_utc_ms - self._last_track_push_ts_ms >= self._track_push_interval_ms:
                     self._last_track_push_ts_ms = frame.timestamp_utc_ms
@@ -215,7 +219,12 @@ class CameraContext:
                     self.on_track(track_msg)
 
                 if violation_candidates:
-                    await self._handle_violations(violation_candidates, ts_dt)
+                    await self._handle_violations(
+                        violation_candidates,
+                        ts_dt,
+                        frame_bgr=frame.bgr,
+                        frame_timestamp_utc_ms=frame.timestamp_utc_ms,
+                    )
 
                 await asyncio.to_thread(self.violation_logic.prune, current_ts=ts_dt, max_age_s=60.0)
                 await asyncio.to_thread(self.stable_track_id_assigner.prune, current_ts=ts_dt, max_age_s=60.0)
@@ -226,8 +235,11 @@ class CameraContext:
 
     async def _handle_violations(
         self,
-        violation_candidates: list[tuple[int, str, dict]],
+        violation_candidates: list[tuple[int, str, dict, list[float]]],
         ts_dt: datetime,
+        *,
+        frame_bgr,
+        frame_timestamp_utc_ms: int,
     ) -> None:
         camera_loc: CameraLocation = self.camera_config.location
         violation_loc = ViolationLocation(
@@ -237,8 +249,17 @@ class CameraContext:
             gps_lng=camera_loc.gps_lng,
         )
 
-        # Each candidate is (vehicle_id, vehicle_type, {"lane_id":..., "violation":...})
-        for vehicle_id, vehicle_type, cand in violation_candidates:
+        # Each candidate is (vehicle_id, vehicle_type, {"lane_id":..., "violation":...}, bbox_xyxy)
+        for vehicle_id, vehicle_type, cand, bbox_xyxy in violation_candidates:
+            image_path = await asyncio.to_thread(
+                self._create_violation_evidence,
+                frame_bgr,
+                bbox_xyxy,
+                frame_timestamp_utc_ms=frame_timestamp_utc_ms,
+                vehicle_id=vehicle_id,
+                lane_id=int(cand["lane_id"]),
+                violation=str(cand["violation"]),
+            )
 
             event = ViolationEvent.from_parts(
                 camera_id=self.camera_id,
@@ -247,6 +268,8 @@ class CameraContext:
                 vehicle_type=vehicle_type,
                 lane_id=int(cand["lane_id"]),
                 violation=str(cand["violation"]),
+                image_path=image_path,
+                image_url=build_evidence_image_url(image_path),
                 ts=ts_dt,
             )
 
@@ -257,7 +280,54 @@ class CameraContext:
             self.stats.update_realtime(event)
             self.on_violation(event)
 
+    def _crop_violation_evidence(self, frame_bgr, bbox_xyxy: list[float]):
+        frame_height, frame_width = frame_bgr.shape[:2]
+        if frame_height <= 0 or frame_width <= 0:
+            return frame_bgr
+
+        x1, y1, x2, y2 = [float(value) for value in bbox_xyxy]
+        box_width = max(x2 - x1, 1.0)
+        box_height = max(y2 - y1, 1.0)
+
+        expand_x = box_width * 0.28
+        expand_y_top = box_height * 0.32
+        expand_y_bottom = box_height * 0.27
+
+        crop_x1 = max(int(round(x1 - expand_x)), 0)
+        crop_y1 = max(int(round(y1 - expand_y_top)), 0)
+        crop_x2 = min(int(round(x2 + expand_x)), frame_width)
+        crop_y2 = min(int(round(y2 + expand_y_bottom)), frame_height)
+
+        if crop_x2 - crop_x1 < 24 or crop_y2 - crop_y1 < 24:
+            return frame_bgr
+        return frame_bgr[crop_y1:crop_y2, crop_x1:crop_x2].copy()
+
+    def _create_violation_evidence(
+        self,
+        frame_bgr,
+        bbox_xyxy: list[float],
+        *,
+        frame_timestamp_utc_ms: int,
+        vehicle_id: int,
+        lane_id: int,
+        violation: str,
+    ) -> Optional[str]:
+        try:
+            evidence_bgr = self._crop_violation_evidence(frame_bgr, bbox_xyxy)
+            return save_evidence_image(
+                self.repo_root,
+                camera_id=self.camera_id,
+                timestamp_utc_ms=frame_timestamp_utc_ms,
+                vehicle_id=vehicle_id,
+                lane_id=lane_id,
+                violation=violation,
+                image_bgr=evidence_bgr,
+            )
+        except Exception as exc:
+            self.on_log(f"[{self.camera_id}] failed to save evidence image for vehicle {vehicle_id}: {exc}")
+            return None
+
     def _save_event_to_db(self, event: ViolationEvent) -> None:
         with self._db_session_factory() as session:
-            insert_violation(session, event)
+            event.id = insert_violation(session, event)
 

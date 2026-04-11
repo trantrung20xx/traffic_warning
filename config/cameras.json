@@ -4,6 +4,7 @@
       "camera_id": "cam_01",
       "rtsp_url": "C:\\Users\\trant\\Videos\\Captures\\video.mp4",
       "camera_type": "roadside",
+      "view_direction": "Đông - Bắc",
       "location": {
         "road_name": "QL1A",
         "intersection_name": "Ngã tư Phố Nối",

@@ -31,8 +31,73 @@ export const CAMERA_TYPE_LABELS = {
   intersection: "Nút giao",
 };
 
+export const VIETNAM_TIMEZONE = "Asia/Ho_Chi_Minh";
+
+const VIETNAM_UTC_OFFSET_HOURS = 7;
+
+const VIETNAM_DATE_TIME_FORMATTER = new Intl.DateTimeFormat("en-GB", {
+  timeZone: VIETNAM_TIMEZONE,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hour12: false,
+});
+
+const VIETNAM_TIMESTAMP_FORMATTER = new Intl.DateTimeFormat("vi-VN", {
+  timeZone: VIETNAM_TIMEZONE,
+  dateStyle: "short",
+  timeStyle: "medium",
+});
+
+const VIETNAM_HOUR_FORMATTER = new Intl.DateTimeFormat("en-GB", {
+  timeZone: VIETNAM_TIMEZONE,
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+});
+
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
+}
+
+function formatDateTimePartsInVietnam(date) {
+  const parts = Object.fromEntries(
+    VIETNAM_DATE_TIME_FORMATTER
+      .formatToParts(date)
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, part.value]),
+  );
+  return {
+    year: parts.year,
+    month: parts.month,
+    day: parts.day,
+    hour: parts.hour,
+    minute: parts.minute,
+    second: parts.second,
+  };
+}
+
+function parseVietnamLocalInput(value) {
+  if (!value) return null;
+  const match = String(value)
+    .trim()
+    .match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/);
+  if (!match) return null;
+
+  const [, year, month, day, hour, minute, second = "00"] = match;
+  const utcTime = Date.UTC(
+    Number(year),
+    Number(month) - 1,
+    Number(day),
+    Number(hour) - VIETNAM_UTC_OFFSET_HOURS,
+    Number(minute),
+    Number(second),
+    0,
+  );
+  return new Date(utcTime);
 }
 
 export function normalizePoint([x, y], frameWidth, frameHeight) {
@@ -65,30 +130,37 @@ export function denormalizeLane(lane, frameWidth, frameHeight) {
 }
 
 export function nowLocalInput() {
-  const now = new Date();
-  const pad = (value) => String(value).padStart(2, "0");
-  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
+  const now = formatDateTimePartsInVietnam(new Date());
+  return `${now.year}-${now.month}-${now.day}T${now.hour}:${now.minute}`;
 }
 
 export function startOfDayLocalInput() {
-  const now = new Date();
-  now.setHours(0, 0, 0, 0);
-  const pad = (value) => String(value).padStart(2, "0");
-  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
+  const now = formatDateTimePartsInVietnam(new Date());
+  return `${now.year}-${now.month}-${now.day}T00:00`;
 }
 
 export function toIsoOrNull(value) {
   if (!value) return null;
-  return new Date(value).toISOString();
+  const vietnamDate = parseVietnamLocalInput(value);
+  if (vietnamDate) {
+    return vietnamDate.toISOString();
+  }
+  const fallback = new Date(value);
+  return Number.isNaN(fallback.getTime()) ? null : fallback.toISOString();
 }
 
 export function formatTimestamp(value) {
   if (!value) return "-";
   const dt = new Date(value);
-  return new Intl.DateTimeFormat("vi-VN", {
-    dateStyle: "short",
-    timeStyle: "medium",
-  }).format(dt);
+  if (Number.isNaN(dt.getTime())) return "-";
+  return VIETNAM_TIMESTAMP_FORMATTER.format(dt);
+}
+
+export function formatHourBucket(value) {
+  if (!value) return "";
+  const dt = new Date(value);
+  if (Number.isNaN(dt.getTime())) return "";
+  return VIETNAM_HOUR_FORMATTER.format(dt);
 }
 
 export function getManeuverLabel(value) {

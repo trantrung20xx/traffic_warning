@@ -1,10 +1,5 @@
 import React from "react";
-
-function formatBucket(bucket) {
-  if (!bucket) return "";
-  const dt = new Date(bucket);
-  return `${String(dt.getHours()).padStart(2, "0")}:00`;
-}
+import { formatHourBucket } from "../utils";
 
 export default function TimeSeriesChart({ series }) {
   const points = series || [];
@@ -45,7 +40,7 @@ export default function TimeSeriesChart({ series }) {
               <g key={point.bucket}>
                 <circle cx={x} cy={y} r="5" className="point-dot" />
                 <text x={x} y={height - 8} textAnchor="middle" className="axis-label">
-                  {formatBucket(point.bucket)}
+                  {formatHourBucket(point.bucket)}
                 </text>
                 <text x={x} y={y - 12} textAnchor="middle" className="value-label">
                   {point.total}

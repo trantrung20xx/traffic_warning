@@ -129,12 +129,19 @@ def create_api_router(manager: CameraManager) -> APIRouter:
             media_type="multipart/x-mixed-replace; boundary=frame",
         )
 
+    @router.get("/api/violations/evidence/{evidence_path:path}")
+    async def get_violation_evidence(evidence_path: str):
+        path = manager.get_violation_evidence_path(evidence_path)
+        if path is None:
+            raise HTTPException(status_code=404, detail="Violation evidence image not found")
+        return FileResponse(path, media_type="image/jpeg", filename=path.name)
+
     @router.get("/api/violations/history")
     def violation_history(
         camera_id: Optional[str] = Query(default=None),
         from_ts: Optional[str] = Query(default=None),
         to_ts: Optional[str] = Query(default=None),
-        limit: int = Query(default=200, ge=1, le=1000),
+        limit: Optional[int] = Query(default=None, ge=1),
     ):
         rows = manager.query_history(
             from_ts=from_ts,
@@ -169,4 +176,3 @@ def create_api_router(manager: CameraManager) -> APIRouter:
         return {"rows": rows, "from_timestamp": from_ts, "to_timestamp": to_ts}
 
     return router
-
