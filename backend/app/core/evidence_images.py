@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
 
 import cv2
 
 from app.core.config import load_app_config
+from app.core.timezone import to_vietnam_datetime
 
 
 def _sanitize_fragment(value: str) -> str:
@@ -33,8 +35,14 @@ def build_evidence_filename(
     )
 
 
-def build_evidence_relative_path(camera_id: str, filename: str) -> str:
-    return (Path(_sanitize_fragment(camera_id)) / filename).as_posix()
+def build_evidence_date_folder(timestamp_utc_ms: int) -> str:
+    timestamp = datetime.fromtimestamp(timestamp_utc_ms / 1000.0, tz=timezone.utc)
+    vietnam_dt = to_vietnam_datetime(timestamp)
+    return f"{vietnam_dt.day:02d}-{vietnam_dt.month:02d}-{vietnam_dt.year:04d}"
+
+
+def build_evidence_relative_path(camera_id: str, timestamp_utc_ms: int, filename: str) -> str:
+    return (Path(_sanitize_fragment(camera_id)) / build_evidence_date_folder(timestamp_utc_ms) / filename).as_posix()
 
 
 def build_evidence_image_url(relative_path: str | None) -> str | None:
@@ -76,7 +84,7 @@ def save_evidence_image(
         lane_id=lane_id,
         violation=violation,
     )
-    relative_path = build_evidence_relative_path(camera_id, filename)
+    relative_path = build_evidence_relative_path(camera_id, timestamp_utc_ms, filename)
     destination = cfg.evidence_images_dir / relative_path
     destination.parent.mkdir(parents=True, exist_ok=True)
 
