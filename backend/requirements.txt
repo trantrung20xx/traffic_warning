@@ -1,22 +1,46 @@
 fastapi
+# Framework xây dựng API backend cho hệ thống
+
 uvicorn[standard]
+# ASGI server dùng để chạy ứng dụng FastAPI
+
 opencv-python
+# Thư viện xử lý ảnh và video (đọc frame từ camera, xử lý hình ảnh)
+
 numpy
+# Thư viện tính toán số học, xử lý ma trận (dùng trong xử lý ảnh)
+
 pydantic
+# Định nghĩa schema dữ liệu và validate dữ liệu đầu vào/đầu ra API
+
 pydantic-settings
+# Quản lý cấu hình ứng dụng (biến môi trường, config hệ thống)
+
 SQLAlchemy
+# ORM dùng để thao tác với cơ sở dữ liệu (SQLite)
+
 sqlalchemy-utils
+# Thư viện bổ sung tiện ích cho SQLAlchemy
+
 ultralytics
-# PyTorch is installed separately depending on the target machine:
-# CPU only:
+# Thư viện chứa mô hình YOLOv8 dùng để phát hiện phương tiện
+
+# PyTorch được cài riêng tùy theo môi trường phần cứng:
+# CPU:
 #   pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-# NVIDIA GPU (example used on this machine: CUDA 13.0):
+# GPU NVIDIA (ví dụ CUDA 13.0):
 #   pip install torch==2.10.0 torchvision==0.25.0 --index-url https://download.pytorch.org/whl/cu130
-# ByteTrack trong Ultralytics cần lap (tránh AutoUpdate lúc chạy lần đầu)
+
 lap>=0.5.12
+# Thư viện phục vụ thuật toán ByteTrack (matching bounding box)
+# Cài sẵn để tránh việc Ultralytics tự tải khi chạy lần đầu
 
 # Optional but commonly useful for better decoding/robust RTSP:
 # ffmpeg-python==0.2.0
-python-multipart
-openpyxl
+# Thư viện hỗ trợ xử lý luồng video (RTSP) ổn định hơn
 
+python-multipart
+# Xử lý upload file (form-data) trong FastAPI
+
+openpyxl
+# Thư viện dùng để tạo và xuất file Excel (.xlsx)
