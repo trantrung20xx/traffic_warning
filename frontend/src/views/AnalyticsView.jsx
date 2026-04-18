@@ -3,7 +3,7 @@ import SimpleBarChart from "../components/SimpleBarChart";
 import StatPill from "../components/StatPill";
 import TimeSeriesChart from "../components/TimeSeriesChart";
 import ViolationDetailModal from "../components/ViolationDetailModal";
-import { connectViolations, fetchDashboard, fetchViolationHistory } from "../api";
+import { connectViolations, exportViolationHistory, fetchDashboard, fetchViolationHistory } from "../api";
 import {
   formatTimestamp,
   getVehicleTypeLabel,
@@ -21,6 +21,8 @@ export default function AnalyticsView({ cameras, selectedCameraId, onSelectCamer
   const [dashboard, setDashboard] = useState(null);
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [exportingFormat, setExportingFormat] = useState("");
+  const [exportMessage, setExportMessage] = useState("");
   const [selectedViolation, setSelectedViolation] = useState(null);
   const refreshTimerRef = useRef(null);
 
@@ -66,6 +68,10 @@ export default function AnalyticsView({ cameras, selectedCameraId, onSelectCamer
     return () => {
       active = false;
     };
+  }, [cameraFilter, fromTs, toTs, autoFollowNow]);
+
+  useEffect(() => {
+    setExportMessage("");
   }, [cameraFilter, fromTs, toTs, autoFollowNow]);
 
   useEffect(() => {
@@ -150,6 +156,29 @@ export default function AnalyticsView({ cameras, selectedCameraId, onSelectCamer
     }
   };
 
+  const handleExport = async (format) => {
+    setExportMessage("");
+    if (history.length === 0) {
+      setExportMessage("Không có dữ liệu vi phạm trong khoảng thời gian đã chọn để xuất file.");
+      return;
+    }
+
+    const currentToTs = autoFollowNow ? new Date().toISOString() : toTs;
+    setExportingFormat(format);
+    try {
+      await exportViolationHistory({
+        format,
+        cameraId: cameraFilter || null,
+        fromTs,
+        toTs: currentToTs,
+      });
+    } catch (error) {
+      setExportMessage(error?.message || "Không thể xuất lịch sử vi phạm.");
+    } finally {
+      setExportingFormat("");
+    }
+  };
+
   return (
     <>
       <div className="analytics-layout">
@@ -229,8 +258,27 @@ export default function AnalyticsView({ cameras, selectedCameraId, onSelectCamer
               <div className="panel-kicker">Lịch sử</div>
               <h3>Lịch sử xe vi phạm</h3>
             </div>
-            <div className="badge">{history.length} vi phạm</div>
+            <div className="history-header-actions">
+              <button
+                className="button export-button compact-button"
+                type="button"
+                onClick={() => handleExport("csv")}
+                disabled={loading || Boolean(exportingFormat)}
+              >
+                {exportingFormat === "csv" ? "Đang xuất CSV..." : "Export CSV"}
+              </button>
+              <button
+                className="button export-button compact-button"
+                type="button"
+                onClick={() => handleExport("xlsx")}
+                disabled={loading || Boolean(exportingFormat)}
+              >
+                {exportingFormat === "xlsx" ? "Đang xuất Excel..." : "Export Excel"}
+              </button>
+              <div className="badge">{history.length} vi phạm</div>
+            </div>
           </div>
+          {exportMessage ? <div className="message-bar warning">{exportMessage}</div> : null}
           <div className="history-table-wrap history-scroll-list">
             <table className="history-table">
               <thead>

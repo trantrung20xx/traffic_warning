@@ -120,6 +120,18 @@ select {
   background: rgba(255, 255, 255, 0.02);
 }
 
+.button.export-button {
+  background: linear-gradient(135deg, rgba(0, 214, 143, 0.36), rgba(33, 191, 115, 0.3));
+  border-color: rgba(70, 214, 154, 0.48);
+  color: #effff8;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 8px 20px rgba(0, 214, 143, 0.16);
+}
+
+.button.export-button:hover:not(:disabled) {
+  background: linear-gradient(135deg, rgba(0, 214, 143, 0.5), rgba(33, 191, 115, 0.42));
+  border-color: rgba(106, 231, 181, 0.62);
+}
+
 .button.danger,
 .badge.danger {
   background: rgba(255, 107, 87, 0.16);
@@ -215,6 +227,14 @@ select {
 .management-header-actions {
   display: flex;
   flex-wrap: nowrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 10px;
+}
+
+.history-header-actions {
+  display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   align-items: center;
   gap: 10px;
@@ -1042,6 +1062,10 @@ select {
   .panel-header {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .history-header-actions {
+    justify-content: flex-start;
   }
 
   .editor-actions {

@@ -46,6 +46,50 @@ async function request(path, options) {
   return await response.json();
 }
 
+function getDownloadFilename(contentDisposition, fallback) {
+  if (!contentDisposition) return fallback;
+  const encodedMatch = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (encodedMatch?.[1]) {
+    try {
+      return decodeURIComponent(encodedMatch[1]);
+    } catch {
+      return fallback;
+    }
+  }
+  const simpleMatch = contentDisposition.match(/filename="?([^"]+)"?/i);
+  return simpleMatch?.[1] || fallback;
+}
+
+async function download(path, { fallbackFilename } = {}) {
+  const response = await fetch(apiUrl(path));
+  if (!response.ok) {
+    let detail = `${response.status}`;
+    try {
+      const body = await response.json();
+      detail = body.detail || JSON.stringify(body);
+    } catch {
+      try {
+        detail = await response.text();
+      } catch {
+        detail = `${response.status}`;
+      }
+    }
+    throw new Error(detail);
+  }
+
+  const blob = await response.blob();
+  const filename = getDownloadFilename(response.headers.get("Content-Disposition"), fallbackFilename || "download");
+  const objectUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = objectUrl;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
+  return { filename };
+}
+
 export async function fetchCameras() {
   const data = await request("/api/cameras");
   return data.cameras || [];
@@ -75,6 +119,21 @@ export async function fetchViolationHistory({ cameraId, fromTs, toTs, limit }) {
     params.limit = limit;
   }
   return await request(withQuery("/api/violations/history", params));
+}
+
+export async function exportViolationHistory({ format, cameraId, fromTs, toTs }) {
+  const extension = format === "xlsx" ? "xlsx" : "csv";
+  const params = {
+    format: extension,
+    camera_id: cameraId,
+    from_ts: fromTs,
+    to_ts: toTs,
+  };
+  const fromDate = fromTs ? String(fromTs).slice(0, 10) : "start";
+  const toDate = toTs ? String(toTs).slice(0, 10) : "end";
+  return await download(withQuery("/api/violations/export", params), {
+    fallbackFilename: `violation_history_${fromDate}_${toDate}.${extension}`,
+  });
 }
 
 export async function createCamera(payload) {

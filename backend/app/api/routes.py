@@ -1,14 +1,21 @@
 from __future__ import annotations
 
 import asyncio
+from io import BytesIO
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import ValidationError
 
 from app.core.config import CameraLaneConfig
+from app.core.violation_exports import (
+    build_violation_export_filename,
+    build_violation_export_rows,
+    build_violation_history_csv,
+    build_violation_history_xlsx,
+)
 from app.managers.camera_manager import CameraManager
 from app.schemas.camera import CameraConfig
 from app.db.repository import query_violation_counts
@@ -28,6 +35,20 @@ def create_api_router(manager: CameraManager) -> APIRouter:
         if suffix in {".jpg", ".png"}:
             return suffix
         raise HTTPException(status_code=400, detail="Only .jpg and .png background images are supported")
+
+    def _query_history_rows(
+        *,
+        camera_id: Optional[str],
+        from_ts: Optional[str],
+        to_ts: Optional[str],
+        limit: Optional[int],
+    ):
+        return manager.query_history(
+            from_ts=from_ts,
+            to_ts=to_ts,
+            camera_id=camera_id,
+            limit=limit,
+        )
 
     @router.get("/api/health")
     def health():
@@ -143,13 +164,43 @@ def create_api_router(manager: CameraManager) -> APIRouter:
         to_ts: Optional[str] = Query(default=None),
         limit: Optional[int] = Query(default=None, ge=1),
     ):
-        rows = manager.query_history(
-            from_ts=from_ts,
-            to_ts=to_ts,
-            camera_id=camera_id,
-            limit=limit,
-        )
+        rows = _query_history_rows(camera_id=camera_id, from_ts=from_ts, to_ts=to_ts, limit=limit)
         return {"rows": rows}
+
+    @router.get("/api/violations/export")
+    def export_violation_history(
+        request: Request,
+        format: str = Query(default="csv", pattern="^(csv|xlsx)$"),
+        camera_id: Optional[str] = Query(default=None),
+        from_ts: Optional[str] = Query(default=None),
+        to_ts: Optional[str] = Query(default=None),
+    ):
+        rows = _query_history_rows(camera_id=camera_id, from_ts=from_ts, to_ts=to_ts, limit=None)
+        if not rows:
+            format_label = "Excel" if format == "xlsx" else "CSV"
+            raise HTTPException(
+                status_code=404,
+                detail=f"Không có dữ liệu vi phạm trong khoảng thời gian đã chọn để xuất {format_label}.",
+            )
+
+        export_rows = build_violation_export_rows(rows, base_url=str(request.base_url))
+        try:
+            if format == "xlsx":
+                payload = build_violation_history_xlsx(export_rows)
+                filename = build_violation_export_filename(extension="xlsx", from_ts=from_ts, to_ts=to_ts)
+                media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            else:
+                payload = build_violation_history_csv(export_rows)
+                filename = build_violation_export_filename(extension="csv", from_ts=from_ts, to_ts=to_ts)
+                media_type = "text/csv; charset=utf-8"
+        except RuntimeError as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+
+        return StreamingResponse(
+            BytesIO(payload),
+            media_type=media_type,
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
 
     @router.get("/api/analytics/dashboard")
     def analytics_dashboard(
