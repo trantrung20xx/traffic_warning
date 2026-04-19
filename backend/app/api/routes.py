@@ -139,11 +139,12 @@ def create_api_router(manager: CameraManager) -> APIRouter:
 
         async def frames():
             boundary = b"--frame"
+            preview_fps = max(float(manager.cfg.preview_max_fps), 0.1)
             while True:
                 jpg = manager.get_camera_preview_jpeg(camera_id)
                 if jpg:
                     yield boundary + b"\r\nContent-Type: image/jpeg\r\n\r\n" + jpg + b"\r\n"
-                await asyncio.sleep(1 / 15)
+                await asyncio.sleep(1.0 / preview_fps)
 
         return StreamingResponse(
             frames(),

@@ -51,14 +51,28 @@ class CameraContext:
         detector_device: str = "auto",
         detector_conf_threshold: float = 0.35,
         detector_iou_threshold: float = 0.7,
+        tracker_config: str = "bytetrack.yaml",
         vehicle_type_history_window_ms: int = 4000,
         vehicle_type_history_size: int = 12,
         stable_track_max_idle_ms: int = 1500,
         stable_track_min_iou_for_rebind: float = 0.15,
         stable_track_max_normalized_distance: float = 1.6,
+        temporal_lane_observation_window_ms: int = 1200,
+        temporal_lane_min_majority_hits: int = 3,
+        temporal_lane_switch_min_duration_ms: int = 700,
         track_push_interval_ms: int = 200,
         wrong_lane_min_duration_ms: int = 1200,
         turn_region_min_hits: int = 3,
+        state_prune_max_age_s: float = 60.0,
+        rtsp_reconnect_delay_s: float = 2.0,
+        preview_max_fps: float = 15.0,
+        preview_jpeg_quality: int = 75,
+        processing_fps_window_s: float = 1.5,
+        evidence_crop_expand_x_ratio: float = 0.28,
+        evidence_crop_expand_y_top_ratio: float = 0.32,
+        evidence_crop_expand_y_bottom_ratio: float = 0.27,
+        evidence_crop_min_size_px: int = 24,
+        evidence_jpeg_quality: int = 92,
     ):
         self.repo_root = Path(repo_root)
         self.camera_config = camera_config
@@ -72,6 +86,7 @@ class CameraContext:
         # polygons are denormalized into before lane/violation logic runs.
         self.rtsp_reader = RtspFrameReader(
             camera_config.rtsp_url,
+            reconnect_delay_s=rtsp_reconnect_delay_s,
             frame_width=camera_config.frame_width,
             frame_height=camera_config.frame_height,
         )
@@ -83,7 +98,7 @@ class CameraContext:
             conf_threshold=detector_conf_threshold,
             iou_threshold=detector_iou_threshold,
         )
-        self.tracker = YoloByteTrackVehicleTracker(self.detector)
+        self.tracker = YoloByteTrackVehicleTracker(self.detector, tracker_config=tracker_config)
         self.on_log(
             f"[{self.camera_id}] detector={detector_weights_path} requested_device={self.detector.requested_device} "
             f"resolved_device={self.detector.device}"
@@ -96,7 +111,11 @@ class CameraContext:
             min_iou_for_rebind=stable_track_min_iou_for_rebind,
             max_normalized_distance=stable_track_max_normalized_distance,
         )
-        self.temporal_lane_assigner = TemporalLaneAssigner()
+        self.temporal_lane_assigner = TemporalLaneAssigner(
+            observation_window_ms=temporal_lane_observation_window_ms,
+            min_majority_hits=temporal_lane_min_majority_hits,
+            switch_min_duration_ms=temporal_lane_switch_min_duration_ms,
+        )
         self.temporal_vehicle_type_assigner = TemporalVehicleTypeAssigner(
             history_window_ms=vehicle_type_history_window_ms,
             history_size=vehicle_type_history_size,
@@ -114,15 +133,23 @@ class CameraContext:
         # Throttle push to websocket
         self._last_track_push_ts_ms: int = 0
         self._track_push_interval_ms: int = int(track_push_interval_ms)
+        self._state_prune_max_age_s: float = float(state_prune_max_age_s)
         self._processed_frame_times_s: deque[float] = deque()
         self._processing_fps: Optional[float] = None
-        self._processing_fps_window_s: float = 1.5
+        self._processing_fps_window_s: float = float(processing_fps_window_s)
 
         # Latest frame for browser preview (MJPEG). Updated from processing loop, read from HTTP handlers.
         self._preview_lock = threading.Lock()
         self._latest_preview_jpeg: Optional[bytes] = None
         self._last_preview_encode_ms: int = 0
-        self._preview_min_interval_ms: int = 66  # ~15 FPS max for preview encode
+        self._preview_jpeg_quality: int = int(preview_jpeg_quality)
+        safe_preview_fps = max(float(preview_max_fps), 0.1)
+        self._preview_min_interval_ms: int = max(int(round(1000.0 / safe_preview_fps)), 1)
+        self._evidence_crop_expand_x_ratio: float = float(evidence_crop_expand_x_ratio)
+        self._evidence_crop_expand_y_top_ratio: float = float(evidence_crop_expand_y_top_ratio)
+        self._evidence_crop_expand_y_bottom_ratio: float = float(evidence_crop_expand_y_bottom_ratio)
+        self._evidence_crop_min_size_px: int = int(evidence_crop_min_size_px)
+        self._evidence_jpeg_quality: int = int(evidence_jpeg_quality)
 
     @property
     def camera_id(self) -> str:
@@ -161,7 +188,11 @@ class CameraContext:
         if now - self._last_preview_encode_ms < self._preview_min_interval_ms:
             return
         self._last_preview_encode_ms = now
-        ok, buf = cv2.imencode(".jpg", frame_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 75])
+        ok, buf = cv2.imencode(
+            ".jpg",
+            frame_bgr,
+            [int(cv2.IMWRITE_JPEG_QUALITY), self._preview_jpeg_quality],
+        )
         if not ok:
             return
         data = buf.tobytes()
@@ -235,10 +266,26 @@ class CameraContext:
                         frame_timestamp_utc_ms=frame.timestamp_utc_ms,
                     )
 
-                await asyncio.to_thread(self.violation_logic.prune, current_ts=ts_dt, max_age_s=60.0)
-                await asyncio.to_thread(self.stable_track_id_assigner.prune, current_ts=ts_dt, max_age_s=60.0)
-                await asyncio.to_thread(self.temporal_lane_assigner.prune, current_ts=ts_dt, max_age_s=60.0)
-                await asyncio.to_thread(self.temporal_vehicle_type_assigner.prune, current_ts=ts_dt, max_age_s=60.0)
+                await asyncio.to_thread(
+                    self.violation_logic.prune,
+                    current_ts=ts_dt,
+                    max_age_s=self._state_prune_max_age_s,
+                )
+                await asyncio.to_thread(
+                    self.stable_track_id_assigner.prune,
+                    current_ts=ts_dt,
+                    max_age_s=self._state_prune_max_age_s,
+                )
+                await asyncio.to_thread(
+                    self.temporal_lane_assigner.prune,
+                    current_ts=ts_dt,
+                    max_age_s=self._state_prune_max_age_s,
+                )
+                await asyncio.to_thread(
+                    self.temporal_vehicle_type_assigner.prune,
+                    current_ts=ts_dt,
+                    max_age_s=self._state_prune_max_age_s,
+                )
                 self._mark_processed_frame()
         finally:
             await asyncio.to_thread(self.rtsp_reader.close)
@@ -314,16 +361,19 @@ class CameraContext:
         box_width = max(x2 - x1, 1.0)
         box_height = max(y2 - y1, 1.0)
 
-        expand_x = box_width * 0.28
-        expand_y_top = box_height * 0.32
-        expand_y_bottom = box_height * 0.27
+        expand_x = box_width * self._evidence_crop_expand_x_ratio
+        expand_y_top = box_height * self._evidence_crop_expand_y_top_ratio
+        expand_y_bottom = box_height * self._evidence_crop_expand_y_bottom_ratio
 
         crop_x1 = max(int(round(x1 - expand_x)), 0)
         crop_y1 = max(int(round(y1 - expand_y_top)), 0)
         crop_x2 = min(int(round(x2 + expand_x)), frame_width)
         crop_y2 = min(int(round(y2 + expand_y_bottom)), frame_height)
 
-        if crop_x2 - crop_x1 < 24 or crop_y2 - crop_y1 < 24:
+        if (
+            crop_x2 - crop_x1 < self._evidence_crop_min_size_px
+            or crop_y2 - crop_y1 < self._evidence_crop_min_size_px
+        ):
             return frame_bgr
         return frame_bgr[crop_y1:crop_y2, crop_x1:crop_x2].copy()
 
@@ -347,6 +397,7 @@ class CameraContext:
                 lane_id=lane_id,
                 violation=violation,
                 image_bgr=evidence_bgr,
+                jpeg_quality=self._evidence_jpeg_quality,
             )
         except Exception as exc:
             self.on_log(f"[{self.camera_id}] failed to save evidence image for vehicle {vehicle_id}: {exc}")
@@ -355,4 +406,3 @@ class CameraContext:
     def _save_event_to_db(self, event: ViolationEvent) -> None:
         with self._db_session_factory() as session:
             event.id = insert_violation(session, event)
-

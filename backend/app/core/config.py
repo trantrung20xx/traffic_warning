@@ -118,17 +118,31 @@ class AppConfig(BaseModel):
     detector_device: str = "auto"
     detector_conf_threshold: float = 0.28
     detector_iou_threshold: float = 0.7
+    tracker_config: str = "bytetrack.yaml"
     vehicle_type_history_window_ms: int = 4000
     vehicle_type_history_size: int = 12
     stable_track_max_idle_ms: int = 1500
     stable_track_min_iou_for_rebind: float = 0.15
     stable_track_max_normalized_distance: float = 1.6
+    temporal_lane_observation_window_ms: int = 1200
+    temporal_lane_min_majority_hits: int = 3
+    temporal_lane_switch_min_duration_ms: int = 700
     resize_frame: bool = True
 
     # Realtime streaming / logic thresholds
     track_push_interval_ms: int = 200
     wrong_lane_min_duration_ms: int = 1200
     turn_region_min_hits: int = 3
+    state_prune_max_age_s: float = 60.0
+    rtsp_reconnect_delay_s: float = 2.0
+    preview_max_fps: float = 15.0
+    preview_jpeg_quality: int = 75
+    processing_fps_window_s: float = 1.5
+    evidence_crop_expand_x_ratio: float = 0.28
+    evidence_crop_expand_y_top_ratio: float = 0.32
+    evidence_crop_expand_y_bottom_ratio: float = 0.27
+    evidence_crop_min_size_px: int = 24
+    evidence_jpeg_quality: int = 92
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -235,11 +249,15 @@ def load_app_config(repo_root: Path) -> AppConfig:
             detector_device=str(settings.get("detector_device", "auto")),
             detector_conf_threshold=float(settings.get("detector_conf_threshold", 0.28)),
             detector_iou_threshold=float(settings.get("detector_iou_threshold", 0.7)),
+            tracker_config=str(settings.get("tracker_config", "bytetrack.yaml")),
             vehicle_type_history_window_ms=int(settings.get("vehicle_type_history_window_ms", 4000)),
             vehicle_type_history_size=int(settings.get("vehicle_type_history_size", 12)),
             stable_track_max_idle_ms=int(settings.get("stable_track_max_idle_ms", 1500)),
             stable_track_min_iou_for_rebind=float(settings.get("stable_track_min_iou_for_rebind", 0.15)),
             stable_track_max_normalized_distance=float(settings.get("stable_track_max_normalized_distance", 1.6)),
+            temporal_lane_observation_window_ms=int(settings.get("temporal_lane_observation_window_ms", 1200)),
+            temporal_lane_min_majority_hits=int(settings.get("temporal_lane_min_majority_hits", 3)),
+            temporal_lane_switch_min_duration_ms=int(settings.get("temporal_lane_switch_min_duration_ms", 700)),
             resize_frame=bool(settings.get("resize_frame", True)),
             track_push_interval_ms=int(settings.get("track_push_interval_ms", 200)),
             wrong_lane_min_duration_ms=int(
@@ -250,6 +268,16 @@ def load_app_config(repo_root: Path) -> AppConfig:
                 )
             ),
             turn_region_min_hits=int(settings.get("turn_region_min_hits", 3)),
+            state_prune_max_age_s=float(settings.get("state_prune_max_age_s", 60.0)),
+            rtsp_reconnect_delay_s=float(settings.get("rtsp_reconnect_delay_s", 2.0)),
+            preview_max_fps=float(settings.get("preview_max_fps", 15.0)),
+            preview_jpeg_quality=int(settings.get("preview_jpeg_quality", 75)),
+            processing_fps_window_s=float(settings.get("processing_fps_window_s", 1.5)),
+            evidence_crop_expand_x_ratio=float(settings.get("evidence_crop_expand_x_ratio", 0.28)),
+            evidence_crop_expand_y_top_ratio=float(settings.get("evidence_crop_expand_y_top_ratio", 0.32)),
+            evidence_crop_expand_y_bottom_ratio=float(settings.get("evidence_crop_expand_y_bottom_ratio", 0.27)),
+            evidence_crop_min_size_px=int(settings.get("evidence_crop_min_size_px", 24)),
+            evidence_jpeg_quality=int(settings.get("evidence_jpeg_quality", 92)),
         )
 
     return AppConfig(
