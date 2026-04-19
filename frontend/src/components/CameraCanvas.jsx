@@ -85,6 +85,7 @@ export default function CameraCanvas({
   frameHeight,
   lanes,
   vehicles,
+  processingFps = null,
   overlay = false,
   showTurnRegions = false,
   selectedLaneId = null,
@@ -272,6 +273,37 @@ export default function CameraCanvas({
       ctx.fillText(label, x1 + 5, y1 - 7);
     });
 
+    if (processingFps != null && Number.isFinite(processingFps)) {
+      const fpsLabel = `FPS: ${processingFps.toFixed(1)}`;
+      ctx.font = "700 14px sans-serif";
+      const textWidth = ctx.measureText(fpsLabel).width;
+      const boxWidth = textWidth + 18;
+      const boxHeight = 28;
+      const boxX = frameWidth - boxWidth - 14;
+      const boxY = 14;
+      const radius = 10;
+
+      ctx.beginPath();
+      ctx.moveTo(boxX + radius, boxY);
+      ctx.lineTo(boxX + boxWidth - radius, boxY);
+      ctx.quadraticCurveTo(boxX + boxWidth, boxY, boxX + boxWidth, boxY + radius);
+      ctx.lineTo(boxX + boxWidth, boxY + boxHeight - radius);
+      ctx.quadraticCurveTo(boxX + boxWidth, boxY + boxHeight, boxX + boxWidth - radius, boxY + boxHeight);
+      ctx.lineTo(boxX + radius, boxY + boxHeight);
+      ctx.quadraticCurveTo(boxX, boxY + boxHeight, boxX, boxY + boxHeight - radius);
+      ctx.lineTo(boxX, boxY + radius);
+      ctx.quadraticCurveTo(boxX, boxY, boxX + radius, boxY);
+      ctx.closePath();
+      ctx.fillStyle = "rgba(7, 19, 31, 0.78)";
+      ctx.fill();
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = "rgba(255,255,255,0.16)";
+      ctx.stroke();
+
+      ctx.fillStyle = "rgba(255,255,255,0.96)";
+      ctx.fillText(fpsLabel, boxX + 9, boxY + 18);
+    }
+
     if (editable) {
       // This matches real traffic-camera setup tools: adjust fixed road polygons by vertices or whole-region drag.
       // Scale/rotate are intentionally omitted because the camera image is fixed and rules depend on exact pixels.
@@ -293,6 +325,7 @@ export default function CameraCanvas({
     selectedLaneId,
     showTurnRegions,
     vehicles,
+    processingFps,
   ]);
 
   const handleMouseDown = (event) => {

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -113,6 +114,9 @@ class CameraContext:
         # Throttle push to websocket
         self._last_track_push_ts_ms: int = 0
         self._track_push_interval_ms: int = int(track_push_interval_ms)
+        self._processed_frame_times_s: deque[float] = deque()
+        self._processing_fps: Optional[float] = None
+        self._processing_fps_window_s: float = 1.5
 
         # Latest frame for browser preview (MJPEG). Updated from processing loop, read from HTTP handlers.
         self._preview_lock = threading.Lock()
@@ -215,7 +219,12 @@ class CameraContext:
 
                 if frame.timestamp_utc_ms - self._last_track_push_ts_ms >= self._track_push_interval_ms:
                     self._last_track_push_ts_ms = frame.timestamp_utc_ms
-                    track_msg = TrackMessage(camera_id=self.camera_id, timestamp=ts_dt, vehicles=vehicles)
+                    track_msg = TrackMessage(
+                        camera_id=self.camera_id,
+                        timestamp=ts_dt,
+                        processing_fps=self._processing_fps,
+                        vehicles=vehicles,
+                    )
                     self.on_track(track_msg)
 
                 if violation_candidates:
@@ -230,8 +239,24 @@ class CameraContext:
                 await asyncio.to_thread(self.stable_track_id_assigner.prune, current_ts=ts_dt, max_age_s=60.0)
                 await asyncio.to_thread(self.temporal_lane_assigner.prune, current_ts=ts_dt, max_age_s=60.0)
                 await asyncio.to_thread(self.temporal_vehicle_type_assigner.prune, current_ts=ts_dt, max_age_s=60.0)
+                self._mark_processed_frame()
         finally:
             await asyncio.to_thread(self.rtsp_reader.close)
+
+    def _mark_processed_frame(self) -> None:
+        now_s = time.perf_counter()
+        self._processed_frame_times_s.append(now_s)
+        cutoff_s = now_s - self._processing_fps_window_s
+        while self._processed_frame_times_s and self._processed_frame_times_s[0] < cutoff_s:
+            self._processed_frame_times_s.popleft()
+
+        if len(self._processed_frame_times_s) >= 2:
+            duration_s = self._processed_frame_times_s[-1] - self._processed_frame_times_s[0]
+            self._processing_fps = (
+                (len(self._processed_frame_times_s) - 1) / duration_s if duration_s > 0 else None
+            )
+        else:
+            self._processing_fps = None
 
     async def _handle_violations(
         self,
