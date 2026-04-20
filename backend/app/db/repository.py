@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 from sqlalchemy import desc, func, select
@@ -102,6 +102,140 @@ def _base_violation_query(
     return q
 
 
+def _determine_time_series_granularity(
+    *,
+    from_ts: Optional[str],
+    to_ts: Optional[str],
+    row_count: int,
+) -> str:
+    parsed_from = _parse_ts(from_ts)
+    parsed_to = _parse_ts(to_ts)
+
+    if parsed_from and parsed_to and parsed_to > parsed_from:
+        duration = parsed_to - parsed_from
+        if duration <= timedelta(days=1):
+            return "minute"
+        if duration <= timedelta(days=14):
+            return "hour"
+        if duration <= timedelta(days=120):
+            return "day"
+        if duration <= timedelta(days=365):
+            return "week"
+        return "month"
+
+    if row_count <= 24 * 60:
+        return "minute"
+    if row_count <= 24 * 14:
+        return "hour"
+    if row_count <= 120:
+        return "day"
+    if row_count <= 365:
+        return "week"
+    return "month"
+
+
+def _floor_bucket_in_vietnam(value: datetime, granularity: str) -> datetime:
+    local_dt = to_vietnam_datetime(value).replace(microsecond=0)
+
+    if granularity == "minute":
+        return local_dt.replace(second=0)
+    if granularity == "hour":
+        return local_dt.replace(minute=0, second=0)
+    if granularity == "day":
+        return local_dt.replace(hour=0, minute=0, second=0)
+    if granularity == "week":
+        local_dt = local_dt.replace(hour=0, minute=0, second=0)
+        weekday = local_dt.isoweekday()
+        return local_dt - timedelta(days=weekday - 1)
+    return local_dt.replace(day=1, hour=0, minute=0, second=0)
+
+
+def _advance_bucket_in_vietnam(value: datetime, granularity: str) -> datetime:
+    if granularity == "minute":
+        return value + timedelta(minutes=1)
+    if granularity == "hour":
+        return value + timedelta(hours=1)
+    if granularity == "day":
+        return value + timedelta(days=1)
+    if granularity == "week":
+        return value + timedelta(days=7)
+    if value.month == 12:
+        return value.replace(year=value.year + 1, month=1)
+    return value.replace(month=value.month + 1)
+
+
+def _new_time_series_entry(bucket_dt: datetime, next_bucket_dt: datetime) -> dict:
+    return {
+        "bucket": bucket_dt.isoformat(),
+        "bucket_end": next_bucket_dt.isoformat(),
+        "total": 0,
+        "camera_breakdown": defaultdict(int),
+        "vehicle_breakdown": defaultdict(int),
+        "violation_breakdown": defaultdict(int),
+    }
+
+
+def _build_time_series(
+    rows,
+    *,
+    granularity: str,
+    from_ts: Optional[str],
+    to_ts: Optional[str],
+    fill_missing: bool,
+):
+    bucket_map: dict[str, dict] = {}
+
+    for row in rows:
+        bucket_dt = _floor_bucket_in_vietnam(row.timestamp_utc, granularity)
+        bucket_key = bucket_dt.isoformat()
+        entry = bucket_map.setdefault(
+            bucket_key,
+            _new_time_series_entry(bucket_dt, _advance_bucket_in_vietnam(bucket_dt, granularity)),
+        )
+        entry["total"] += 1
+        entry["camera_breakdown"][row.camera_id] += 1
+        entry["vehicle_breakdown"][row.vehicle_type] += 1
+        entry["violation_breakdown"][row.violation] += 1
+
+    if not fill_missing or not rows:
+        return [
+            {
+                **entry,
+                "camera_breakdown": dict(entry["camera_breakdown"]),
+                "vehicle_breakdown": dict(entry["vehicle_breakdown"]),
+                "violation_breakdown": dict(entry["violation_breakdown"]),
+            }
+            for _, entry in sorted(bucket_map.items())
+        ]
+
+    range_start = _parse_ts(from_ts) or rows[0].timestamp_utc
+    range_end = _parse_ts(to_ts) or rows[-1].timestamp_utc
+    if range_end < range_start:
+        range_start, range_end = range_end, range_start
+
+    current_bucket = _floor_bucket_in_vietnam(range_start, granularity)
+    end_exclusive = _advance_bucket_in_vietnam(_floor_bucket_in_vietnam(range_end, granularity), granularity)
+
+    series = []
+    while current_bucket < end_exclusive:
+        bucket_key = current_bucket.isoformat()
+        entry = bucket_map.get(bucket_key) or _new_time_series_entry(
+            current_bucket,
+            _advance_bucket_in_vietnam(current_bucket, granularity),
+        )
+        series.append(
+            {
+                **entry,
+                "camera_breakdown": dict(entry["camera_breakdown"]),
+                "vehicle_breakdown": dict(entry["vehicle_breakdown"]),
+                "violation_breakdown": dict(entry["violation_breakdown"]),
+            }
+        )
+        current_bucket = _advance_bucket_in_vietnam(current_bucket, granularity)
+
+    return series
+
+
 def query_violation_history(
     session,
     *,
@@ -150,12 +284,16 @@ def query_dashboard_analytics(
     rows = session.execute(
         _base_violation_query(session, from_ts=from_ts, to_ts=to_ts, camera_id=camera_id).order_by(Violation.timestamp_utc)
     ).scalars().all()
+    time_series_granularity = _determine_time_series_granularity(
+        from_ts=from_ts,
+        to_ts=to_ts,
+        row_count=len(rows),
+    )
 
     vehicle_type_totals: dict[str, int] = defaultdict(int)
     violation_totals: dict[str, int] = defaultdict(int)
     camera_summary_map: dict[str, dict] = {}
     road_summary_map: dict[str, dict] = {}
-    hourly_map: dict[str, dict] = {}
 
     for row in rows:
         vehicle_type_totals[row.vehicle_type] += 1
@@ -193,23 +331,6 @@ def query_dashboard_analytics(
         road_entry["vehicle_type_totals"][row.vehicle_type] += 1
         road_entry["violation_totals"][row.violation] += 1
 
-        bucket_dt = to_vietnam_datetime(row.timestamp_utc).replace(minute=0, second=0, microsecond=0)
-        bucket = bucket_dt.isoformat()
-        hourly_entry = hourly_map.setdefault(
-            bucket,
-            {
-                "bucket": bucket,
-                "total": 0,
-                "camera_breakdown": defaultdict(int),
-                "vehicle_breakdown": defaultdict(int),
-                "violation_breakdown": defaultdict(int),
-            },
-        )
-        hourly_entry["total"] += 1
-        hourly_entry["camera_breakdown"][row.camera_id] += 1
-        hourly_entry["vehicle_breakdown"][row.vehicle_type] += 1
-        hourly_entry["violation_breakdown"][row.violation] += 1
-
     def _normalize_summary(entry: dict) -> dict:
         return {
             **entry,
@@ -234,18 +355,20 @@ def query_dashboard_analytics(
         )
     road_summary.sort(key=lambda item: (-item["total_violations"], item["road_name"], item["intersection"] or ""))
 
-    hourly_series = []
-    for bucket in sorted(hourly_map.keys()):
-        hourly_entry = hourly_map[bucket]
-        hourly_series.append(
-            {
-                "bucket": bucket,
-                "total": hourly_entry["total"],
-                "camera_breakdown": dict(hourly_entry["camera_breakdown"]),
-                "vehicle_breakdown": dict(hourly_entry["vehicle_breakdown"]),
-                "violation_breakdown": dict(hourly_entry["violation_breakdown"]),
-            }
-        )
+    hourly_series = _build_time_series(
+        rows,
+        granularity="hour",
+        from_ts=from_ts,
+        to_ts=to_ts,
+        fill_missing=False,
+    )
+    time_series = _build_time_series(
+        rows,
+        granularity=time_series_granularity,
+        from_ts=from_ts,
+        to_ts=to_ts,
+        fill_missing=True,
+    )
 
     return {
         "overview": {
@@ -256,6 +379,8 @@ def query_dashboard_analytics(
         },
         "camera_summary": camera_summary,
         "road_summary": road_summary,
+        "time_series_granularity": time_series_granularity,
+        "time_series": time_series,
         "hourly_series": hourly_series,
     }
 

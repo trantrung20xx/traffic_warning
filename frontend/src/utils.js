@@ -177,6 +177,11 @@ function getTimeBucketRange(value, granularity) {
   const localDate = toVietnamLocalDate(value);
   if (!localDate) return null;
 
+  if (granularity === "minute") {
+    localDate.setUTCSeconds(0, 0);
+    return { start: localDate, end: addUtcMinutes(localDate, 1) };
+  }
+
   if (granularity === "hour") {
     localDate.setUTCMinutes(0, 0, 0);
     return { start: localDate, end: addUtcHours(localDate, 1) };
@@ -289,20 +294,23 @@ export function determineTimeSeriesGranularity({ fromTs, toTs, pointCount = 0 } 
     const durationMs = toMs - fromMs;
     const dayMs = 24 * 60 * 60 * 1000;
 
-    if (durationMs <= 3 * dayMs) return "hour";
-    if (durationMs <= 60 * dayMs) return "day";
-    if (durationMs <= 180 * dayMs) return "week";
+    if (durationMs <= dayMs) return "minute";
+    if (durationMs <= 14 * dayMs) return "hour";
+    if (durationMs <= 120 * dayMs) return "day";
+    if (durationMs <= 365 * dayMs) return "week";
     return "month";
   }
 
-  if (pointCount <= 72) return "hour";
-  if (pointCount <= 24 * 60) return "day";
-  if (pointCount <= 24 * 180) return "week";
+  if (pointCount <= 24 * 60) return "minute";
+  if (pointCount <= 24 * 14) return "hour";
+  if (pointCount <= 120) return "day";
+  if (pointCount <= 365) return "week";
   return "month";
 }
 
 export function getTimeSeriesGranularityLabel(granularity) {
   const labels = {
+    minute: "phút",
     hour: "giờ",
     day: "ngày",
     week: "tuần",
@@ -313,9 +321,9 @@ export function getTimeSeriesGranularityLabel(granularity) {
 
 export function aggregateTimeSeries(points, granularity) {
   const source = Array.isArray(points) ? points : [];
-  if (granularity === "hour") {
+  if (granularity === "minute" || granularity === "hour") {
     return source
-      .map((point) => normalizeTimeSeriesPoint(point, "hour"))
+      .map((point) => normalizeTimeSeriesPoint(point, granularity))
       .filter(Boolean)
       .sort((left, right) => new Date(left.bucket).getTime() - new Date(right.bucket).getTime());
   }
@@ -350,6 +358,13 @@ export function aggregateTimeSeries(points, granularity) {
 
 export function formatTimeSeriesAxisLabel(point, granularity) {
   if (!point?.bucket) return { primary: "", secondary: "" };
+
+  if (granularity === "minute") {
+    return {
+      primary: formatVietnamLocalHourMinute(point.bucket),
+      secondary: formatVietnamLocalDayMonth(point.bucket),
+    };
+  }
 
   if (granularity === "hour") {
     return {
@@ -386,9 +401,16 @@ export function formatTimeSeriesTooltip(point, granularity) {
   const endDisplay = endLocal ? addUtcMinutes(endLocal, -1) : null;
   const endLabel = endDisplay ? formatVietnamLocalDateTime(endDisplay) : startLabel;
 
-  if (granularity === "hour") {
+  if (granularity === "minute") {
     return {
       title: startLabel,
+      total: `Tổng số vi phạm: ${point?.total ?? 0}`,
+    };
+  }
+
+  if (granularity === "hour") {
+    return {
+      title: `Từ ${startLabel} đến ${endLabel}`,
       total: `Tổng số vi phạm: ${point?.total ?? 0}`,
     };
   }

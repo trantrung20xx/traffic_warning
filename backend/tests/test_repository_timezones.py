@@ -14,7 +14,7 @@ from app.schemas.events import ViolationEvent, ViolationLocation
 
 
 class RepositoryTimezoneTests(unittest.TestCase):
-    def test_history_and_hourly_series_are_returned_in_vietnam_time(self) -> None:
+    def test_history_and_time_series_are_returned_in_vietnam_time(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             _, session_factory = create_engine_and_session(Path(tmp_dir) / "test.sqlite")
             event = ViolationEvent(
@@ -34,6 +34,11 @@ class RepositoryTimezoneTests(unittest.TestCase):
 
         self.assertEqual(len(history), 1)
         self.assertEqual(history[0]["timestamp"], "2026-04-10T16:30:00+07:00")
+
+        self.assertEqual(dashboard["time_series_granularity"], "minute")
+        self.assertEqual(len(dashboard["time_series"]), 1)
+        self.assertEqual(dashboard["time_series"][0]["bucket"], "2026-04-10T16:30:00+07:00")
+        self.assertEqual(dashboard["time_series"][0]["bucket_end"], "2026-04-10T16:31:00+07:00")
 
         self.assertEqual(len(dashboard["hourly_series"]), 1)
         self.assertEqual(dashboard["hourly_series"][0]["bucket"], "2026-04-10T16:00:00+07:00")
@@ -59,6 +64,40 @@ class RepositoryTimezoneTests(unittest.TestCase):
                 history = query_violation_history(session)
 
         self.assertEqual(len(history), 3)
+
+    def test_time_series_fills_missing_minute_buckets_for_short_ranges(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            _, session_factory = create_engine_and_session(Path(tmp_dir) / "test.sqlite")
+
+            with session_factory() as session:
+                insert_violation(
+                    session,
+                    ViolationEvent(
+                        camera_id="cam_01",
+                        location=ViolationLocation(road_name="Vo Van Kiet"),
+                        vehicle_id=1,
+                        vehicle_type="car",
+                        lane_id=1,
+                        violation="wrong_lane",
+                        timestamp=datetime(2026, 4, 10, 9, 30, 15, tzinfo=timezone.utc).isoformat(),
+                    ),
+                )
+                dashboard = query_dashboard_analytics(
+                    session,
+                    from_ts=datetime(2026, 4, 10, 9, 29, 0, tzinfo=timezone.utc).isoformat(),
+                    to_ts=datetime(2026, 4, 10, 9, 31, 0, tzinfo=timezone.utc).isoformat(),
+                )
+
+        self.assertEqual(dashboard["time_series_granularity"], "minute")
+        self.assertEqual(
+            [row["bucket"] for row in dashboard["time_series"]],
+            [
+                "2026-04-10T16:29:00+07:00",
+                "2026-04-10T16:30:00+07:00",
+                "2026-04-10T16:31:00+07:00",
+            ],
+        )
+        self.assertEqual([row["total"] for row in dashboard["time_series"]], [0, 1, 0])
 
 
 if __name__ == "__main__":

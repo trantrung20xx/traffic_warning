@@ -132,11 +132,14 @@ export default function AnalyticsView({ cameras, selectedCameraId, onSelectCamer
   }, [cameraFilter, fromTs, toTs, autoFollowNow]);
 
   const overview = dashboard?.overview || {};
-  const timeSeriesGranularity = determineTimeSeriesGranularity({
-    fromTs: dashboard?.from_timestamp || fromTs,
-    toTs: dashboard?.to_timestamp || (autoFollowNow ? new Date().toISOString() : toTs),
-    pointCount: dashboard?.hourly_series?.length || 0,
-  });
+  const chartSeries = dashboard?.time_series || dashboard?.hourly_series || [];
+  const timeSeriesGranularity =
+    dashboard?.time_series_granularity ||
+    determineTimeSeriesGranularity({
+      fromTs: dashboard?.from_timestamp || fromTs,
+      toTs: dashboard?.to_timestamp || (autoFollowNow ? new Date().toISOString() : toTs),
+      pointCount: chartSeries.length,
+    });
   const vehicleData = Object.entries(overview.vehicle_type_totals || {}).map(([label, value]) => ({
     label: getVehicleTypeLabel(label),
     value,
@@ -256,7 +259,7 @@ export default function AnalyticsView({ cameras, selectedCameraId, onSelectCamer
               <h3>Biểu đồ vi phạm theo {getTimeSeriesGranularityLabel(timeSeriesGranularity)}</h3>
             </div>
           </div>
-          <TimeSeriesChart series={dashboard?.hourly_series || []} granularity={timeSeriesGranularity} />
+          <TimeSeriesChart series={chartSeries} granularity={timeSeriesGranularity} />
         </section>
 
         <section className="panel">

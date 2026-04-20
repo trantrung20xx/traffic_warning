@@ -14,6 +14,32 @@ function buildTickIndexSet(points, granularity) {
   const count = points.length;
   if (count === 0) return new Set();
 
+  if (granularity === "minute") {
+    const hourBoundaryIndexes = [];
+    points.forEach((point, index) => {
+      const minute = String(point.bucket).slice(14, 16);
+      if (minute === "00") {
+        hourBoundaryIndexes.push(index);
+      }
+    });
+
+    const indexSet = new Set([0, count - 1]);
+    const step = Math.max(1, Math.ceil(hourBoundaryIndexes.length / 8));
+    for (let index = 0; index < hourBoundaryIndexes.length; index += step) {
+      indexSet.add(hourBoundaryIndexes[index]);
+    }
+
+    for (let index = 1; index < count; index += 1) {
+      const currentDay = String(points[index].bucket).slice(0, 10);
+      const previousDay = String(points[index - 1].bucket).slice(0, 10);
+      if (currentDay !== previousDay) {
+        indexSet.add(index);
+      }
+    }
+
+    return indexSet;
+  }
+
   const maxTicks = granularity === "hour" ? 8 : 7;
   const indexSet = new Set([0, count - 1]);
   const step = Math.max(1, Math.ceil(count / maxTicks));
@@ -36,7 +62,7 @@ function buildTickIndexSet(points, granularity) {
 }
 
 export default function TimeSeriesChart({ series, granularity }) {
-  const [hoveredPoint, setHoveredPoint] = useState(null);
+  const [hoveredIndex, setHoveredIndex] = useState(null);
   const containerRef = useRef(null);
   const points = useMemo(() => aggregateTimeSeries(series, granularity), [granularity, series]);
   const maxValue = Math.max(...points.map((point) => point.total), 1);
@@ -47,43 +73,59 @@ export default function TimeSeriesChart({ series, granularity }) {
   const paddingTop = 28;
   const paddingBottom = 52;
   const tickIndexSet = useMemo(() => buildTickIndexSet(points, granularity), [granularity, points]);
+  const showPointMarkers = points.length <= 240;
+  const hoveredPoint = hoveredIndex !== null ? points[hoveredIndex] : null;
+  const plotWidth = width - paddingLeft - paddingRight;
+  const plotHeight = height - paddingTop - paddingBottom;
 
   const getX = (index) => {
-    return paddingLeft + (index * (width - paddingLeft - paddingRight)) / Math.max(points.length - 1, 1);
+    if (points.length <= 1) {
+      return paddingLeft + plotWidth / 2;
+    }
+    return paddingLeft + (index * plotWidth) / (points.length - 1);
   };
 
   const getY = (point) => {
-    return height - paddingBottom - (point.total / maxValue) * (height - paddingTop - paddingBottom);
+    return height - paddingBottom - (point.total / maxValue) * plotHeight;
   };
 
   const polyline = points
     .map((point, index) => `${getX(index)},${getY(point)}`)
     .join(" ");
 
-  const handleHover = (event, point) => {
+  const setHoveredIndexFromPosition = (clientX) => {
     const rect = containerRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    setHoveredPoint({
-      point,
-      left: clamp(event.clientX - rect.left, 70, rect.width - 70),
-      top: clamp(event.clientY - rect.top - 12, 18, rect.height - 18),
-    });
+    if (!rect || points.length === 0) return;
+    const localX = clamp(((clientX - rect.left) / rect.width) * width, paddingLeft, width - paddingRight);
+    const ratio = plotWidth <= 0 ? 0 : (localX - paddingLeft) / plotWidth;
+    const index = clamp(Math.round(ratio * Math.max(points.length - 1, 0)), 0, Math.max(points.length - 1, 0));
+    setHoveredIndex(index);
   };
 
-  const handleFocusPoint = (point, index) => {
-    const rect = containerRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    setHoveredPoint({
-      point,
-      left: clamp((getX(index) / width) * rect.width, 70, rect.width - 70),
-      top: clamp((getY(point) / height) * rect.height - 12, 18, rect.height - 18),
-    });
+  const handlePlotHover = (event) => {
+    setHoveredIndexFromPosition(event.clientX);
   };
 
-  const hoveredTooltip = hoveredPoint ? formatTimeSeriesTooltip(hoveredPoint.point, granularity) : null;
+  const handleFocusPoint = (index) => {
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    setHoveredIndex(index);
+  };
+
+  const hoveredTooltip = hoveredPoint ? formatTimeSeriesTooltip(hoveredPoint, granularity) : null;
+  const hoveredTooltipPosition = hoveredPoint
+    ? (() => {
+        const rect = containerRef.current?.getBoundingClientRect();
+        if (!rect) return null;
+        return {
+          left: clamp((getX(hoveredIndex) / width) * rect.width, 70, rect.width - 70),
+          top: clamp((getY(hoveredPoint) / height) * rect.height - 12, 18, rect.height - 18),
+        };
+      })()
+    : null;
 
   return (
-    <div className="timeseries-card" ref={containerRef} onMouseLeave={() => setHoveredPoint(null)}>
+    <div className="timeseries-card" ref={containerRef} onMouseLeave={() => setHoveredIndex(null)}>
       <div className="timeseries-meta">Đơn vị tổng hợp: {getTimeSeriesGranularityLabel(granularity)}</div>
       {points.length === 0 ? <div className="empty-state slim">Chưa có dữ liệu biểu đồ.</div> : null}
       {points.length > 0 ? (
@@ -99,7 +141,7 @@ export default function TimeSeriesChart({ series, granularity }) {
               return <line key={ratio} x1={paddingLeft} x2={width - paddingRight} y1={y} y2={y} className="grid-line" />;
             })}
 
-            {granularity === "hour"
+            {granularity === "minute" || granularity === "hour"
               ? points.map((point, index) => {
                   if (index === 0) return null;
                   const currentDay = String(point.bucket).slice(0, 10);
@@ -127,6 +169,16 @@ export default function TimeSeriesChart({ series, granularity }) {
               className="grid-line grid-line-axis"
             />
 
+            {hoveredPoint ? (
+              <line
+                x1={getX(hoveredIndex)}
+                x2={getX(hoveredIndex)}
+                y1={paddingTop}
+                y2={height - paddingBottom}
+                className="grid-line grid-line-hover"
+              />
+            ) : null}
+
             <polyline
               fill="none"
               stroke="var(--accent)"
@@ -136,26 +188,40 @@ export default function TimeSeriesChart({ series, granularity }) {
               points={polyline}
             />
 
+            <rect
+              x={paddingLeft}
+              y={paddingTop}
+              width={plotWidth}
+              height={plotHeight}
+              className="plot-hit-area"
+              onMouseEnter={handlePlotHover}
+              onMouseMove={handlePlotHover}
+            />
+
             {points.map((point, index) => {
               const x = getX(index);
               const y = getY(point);
               const labels = formatTimeSeriesAxisLabel(point, granularity);
               const isTickVisible = tickIndexSet.has(index);
-              const isHovered = hoveredPoint?.point.bucket === point.bucket;
+              const isHovered = hoveredPoint?.bucket === point.bucket;
               return (
                 <g key={point.bucket}>
-                  <circle cx={x} cy={y} r={isHovered ? "6.5" : "4.5"} className="point-dot" />
-                  <circle
-                    cx={x}
-                    cy={y}
-                    r="14"
-                    className="point-hit-area"
-                    onMouseEnter={(event) => handleHover(event, point)}
-                    onMouseMove={(event) => handleHover(event, point)}
-                    onFocus={() => handleFocusPoint(point, index)}
-                    onBlur={() => setHoveredPoint(null)}
-                    tabIndex={0}
-                  />
+                  {showPointMarkers || isHovered ? (
+                    <circle cx={x} cy={y} r={isHovered ? "6.5" : "4.5"} className="point-dot" />
+                  ) : null}
+                  {showPointMarkers ? (
+                    <circle
+                      cx={x}
+                      cy={y}
+                      r="14"
+                      className="point-hit-area"
+                      onMouseEnter={() => setHoveredIndex(index)}
+                      onMouseMove={() => setHoveredIndex(index)}
+                      onFocus={() => handleFocusPoint(index)}
+                      onBlur={() => setHoveredIndex(null)}
+                      tabIndex={0}
+                    />
+                  ) : null}
                   {isTickVisible ? (
                     <text x={x} y={height - 24} textAnchor="middle" className="axis-label">
                       <tspan x={x} dy="0">
@@ -177,8 +243,8 @@ export default function TimeSeriesChart({ series, granularity }) {
             <div
               className="timeseries-tooltip"
               style={{
-                left: `${hoveredPoint.left}px`,
-                top: `${hoveredPoint.top}px`,
+                left: `${hoveredTooltipPosition?.left ?? 0}px`,
+                top: `${hoveredTooltipPosition?.top ?? 0}px`,
               }}
             >
               <div className="timeseries-tooltip-title">{hoveredTooltip.title}</div>
