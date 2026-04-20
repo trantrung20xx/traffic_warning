@@ -10,6 +10,7 @@ import {
   getTimeSeriesGranularityLabel,
   getVehicleTypeLabel,
   getViolationLabel,
+  normalizeAnalyticsChartConfig,
   nowLocalInput,
   startOfDayLocalInput,
   toIsoOrNull,
@@ -133,12 +134,14 @@ export default function AnalyticsView({ cameras, selectedCameraId, onSelectCamer
 
   const overview = dashboard?.overview || {};
   const chartSeries = dashboard?.time_series || dashboard?.hourly_series || [];
+  const chartConfig = normalizeAnalyticsChartConfig(dashboard?.chart_config);
   const timeSeriesGranularity =
     dashboard?.time_series_granularity ||
     determineTimeSeriesGranularity({
       fromTs: dashboard?.from_timestamp || fromTs,
       toTs: dashboard?.to_timestamp || (autoFollowNow ? new Date().toISOString() : toTs),
       pointCount: chartSeries.length,
+      chartConfig,
     });
   const vehicleData = Object.entries(overview.vehicle_type_totals || {}).map(([label, value]) => ({
     label: getVehicleTypeLabel(label),
@@ -259,7 +262,7 @@ export default function AnalyticsView({ cameras, selectedCameraId, onSelectCamer
               <h3>Biểu đồ vi phạm theo {getTimeSeriesGranularityLabel(timeSeriesGranularity)}</h3>
             </div>
           </div>
-          <TimeSeriesChart series={chartSeries} granularity={timeSeriesGranularity} />
+          <TimeSeriesChart series={chartSeries} granularity={timeSeriesGranularity} chartConfig={chartConfig} />
         </section>
 
         <section className="panel">

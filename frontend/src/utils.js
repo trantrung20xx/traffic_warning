@@ -32,6 +32,17 @@ export const CAMERA_TYPE_LABELS = {
 };
 
 export const VIETNAM_TIMEZONE = "Asia/Ho_Chi_Minh";
+export const DEFAULT_ANALYTICS_CHART_CONFIG = {
+  minute_granularity_max_range_hours: 24,
+  hour_granularity_max_range_days: 14,
+  day_granularity_max_range_days: 120,
+  week_granularity_max_range_days: 365,
+  minute_axis_label_interval_minutes: 60,
+  minute_axis_max_ticks: 8,
+  hour_axis_max_ticks: 8,
+  overview_axis_max_ticks: 7,
+  point_markers_max_points: 240,
+};
 
 const VIETNAM_UTC_OFFSET_HOURS = 7;
 
@@ -223,6 +234,13 @@ function normalizeTimeSeriesPoint(point, granularity) {
   };
 }
 
+export function normalizeAnalyticsChartConfig(config) {
+  return {
+    ...DEFAULT_ANALYTICS_CHART_CONFIG,
+    ...(config || {}),
+  };
+}
+
 export function normalizePoint([x, y], frameWidth, frameHeight) {
   return [clamp(Number(x) / Math.max(frameWidth, 1), 0, 1), clamp(Number(y) / Math.max(frameHeight, 1), 0, 1)];
 }
@@ -286,7 +304,8 @@ export function formatHourBucket(value) {
   return VIETNAM_HOUR_FORMATTER.format(dt);
 }
 
-export function determineTimeSeriesGranularity({ fromTs, toTs, pointCount = 0 } = {}) {
+export function determineTimeSeriesGranularity({ fromTs, toTs, pointCount = 0, chartConfig } = {}) {
+  const normalizedChartConfig = normalizeAnalyticsChartConfig(chartConfig);
   const fromMs = fromTs ? new Date(fromTs).getTime() : Number.NaN;
   const toMs = toTs ? new Date(toTs).getTime() : Number.NaN;
 
@@ -294,17 +313,17 @@ export function determineTimeSeriesGranularity({ fromTs, toTs, pointCount = 0 } 
     const durationMs = toMs - fromMs;
     const dayMs = 24 * 60 * 60 * 1000;
 
-    if (durationMs <= dayMs) return "minute";
-    if (durationMs <= 14 * dayMs) return "hour";
-    if (durationMs <= 120 * dayMs) return "day";
-    if (durationMs <= 365 * dayMs) return "week";
+    if (durationMs <= normalizedChartConfig.minute_granularity_max_range_hours * 60 * 60 * 1000) return "minute";
+    if (durationMs <= normalizedChartConfig.hour_granularity_max_range_days * dayMs) return "hour";
+    if (durationMs <= normalizedChartConfig.day_granularity_max_range_days * dayMs) return "day";
+    if (durationMs <= normalizedChartConfig.week_granularity_max_range_days * dayMs) return "week";
     return "month";
   }
 
-  if (pointCount <= 24 * 60) return "minute";
-  if (pointCount <= 24 * 14) return "hour";
-  if (pointCount <= 120) return "day";
-  if (pointCount <= 365) return "week";
+  if (pointCount <= normalizedChartConfig.minute_granularity_max_range_hours * 60) return "minute";
+  if (pointCount <= normalizedChartConfig.hour_granularity_max_range_days * 24) return "hour";
+  if (pointCount <= normalizedChartConfig.day_granularity_max_range_days) return "day";
+  if (pointCount <= normalizedChartConfig.week_granularity_max_range_days) return "week";
   return "month";
 }
 

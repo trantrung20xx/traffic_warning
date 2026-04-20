@@ -215,6 +215,7 @@ def create_api_router(manager: CameraManager) -> APIRouter:
             "from_timestamp": from_ts,
             "to_timestamp": to_ts,
             "camera_id": camera_id,
+            "chart_config": manager.cfg.analytics_chart.model_dump(mode="json"),
         }
 
     @router.get("/api/stats")

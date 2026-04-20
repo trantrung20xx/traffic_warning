@@ -4,27 +4,29 @@ import {
   formatTimeSeriesAxisLabel,
   formatTimeSeriesTooltip,
   getTimeSeriesGranularityLabel,
+  normalizeAnalyticsChartConfig,
 } from "../utils";
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
 
-function buildTickIndexSet(points, granularity) {
+function buildTickIndexSet(points, granularity, chartConfig) {
   const count = points.length;
   if (count === 0) return new Set();
+  const normalizedChartConfig = normalizeAnalyticsChartConfig(chartConfig);
 
   if (granularity === "minute") {
     const hourBoundaryIndexes = [];
     points.forEach((point, index) => {
-      const minute = String(point.bucket).slice(14, 16);
-      if (minute === "00") {
+      const minuteValue = Number(String(point.bucket).slice(14, 16));
+      if (minuteValue % Math.max(normalizedChartConfig.minute_axis_label_interval_minutes, 1) === 0) {
         hourBoundaryIndexes.push(index);
       }
     });
 
     const indexSet = new Set([0, count - 1]);
-    const step = Math.max(1, Math.ceil(hourBoundaryIndexes.length / 8));
+    const step = Math.max(1, Math.ceil(hourBoundaryIndexes.length / Math.max(normalizedChartConfig.minute_axis_max_ticks, 1)));
     for (let index = 0; index < hourBoundaryIndexes.length; index += step) {
       indexSet.add(hourBoundaryIndexes[index]);
     }
@@ -40,7 +42,10 @@ function buildTickIndexSet(points, granularity) {
     return indexSet;
   }
 
-  const maxTicks = granularity === "hour" ? 8 : 7;
+  const maxTicks =
+    granularity === "hour"
+      ? Math.max(normalizedChartConfig.hour_axis_max_ticks, 1)
+      : Math.max(normalizedChartConfig.overview_axis_max_ticks, 1);
   const indexSet = new Set([0, count - 1]);
   const step = Math.max(1, Math.ceil(count / maxTicks));
 
@@ -61,19 +66,23 @@ function buildTickIndexSet(points, granularity) {
   return indexSet;
 }
 
-export default function TimeSeriesChart({ series, granularity }) {
+export default function TimeSeriesChart({ series, granularity, chartConfig }) {
   const [hoveredIndex, setHoveredIndex] = useState(null);
   const containerRef = useRef(null);
   const points = useMemo(() => aggregateTimeSeries(series, granularity), [granularity, series]);
   const maxValue = Math.max(...points.map((point) => point.total), 1);
+  const normalizedChartConfig = useMemo(() => normalizeAnalyticsChartConfig(chartConfig), [chartConfig]);
   const width = 900;
   const height = 280;
   const paddingLeft = 34;
   const paddingRight = 24;
   const paddingTop = 28;
   const paddingBottom = 52;
-  const tickIndexSet = useMemo(() => buildTickIndexSet(points, granularity), [granularity, points]);
-  const showPointMarkers = points.length <= 240;
+  const tickIndexSet = useMemo(
+    () => buildTickIndexSet(points, granularity, normalizedChartConfig),
+    [granularity, normalizedChartConfig, points],
+  );
+  const showPointMarkers = points.length <= normalizedChartConfig.point_markers_max_points;
   const hoveredPoint = hoveredIndex !== null ? points[hoveredIndex] : null;
   const plotWidth = width - paddingLeft - paddingRight;
   const plotHeight = height - paddingTop - paddingBottom;

@@ -6,6 +6,7 @@ from typing import Optional
 
 from sqlalchemy import desc, func, select
 
+from app.core.config import AnalyticsChartConfig
 from app.core.evidence_images import build_evidence_image_url
 from app.core.timezone import ensure_utc_datetime, to_vietnam_datetime, to_vietnam_isoformat
 from app.db.models import Violation
@@ -107,29 +108,30 @@ def _determine_time_series_granularity(
     from_ts: Optional[str],
     to_ts: Optional[str],
     row_count: int,
+    chart_config: AnalyticsChartConfig,
 ) -> str:
     parsed_from = _parse_ts(from_ts)
     parsed_to = _parse_ts(to_ts)
 
     if parsed_from and parsed_to and parsed_to > parsed_from:
         duration = parsed_to - parsed_from
-        if duration <= timedelta(days=1):
+        if duration <= timedelta(hours=chart_config.minute_granularity_max_range_hours):
             return "minute"
-        if duration <= timedelta(days=14):
+        if duration <= timedelta(days=chart_config.hour_granularity_max_range_days):
             return "hour"
-        if duration <= timedelta(days=120):
+        if duration <= timedelta(days=chart_config.day_granularity_max_range_days):
             return "day"
-        if duration <= timedelta(days=365):
+        if duration <= timedelta(days=chart_config.week_granularity_max_range_days):
             return "week"
         return "month"
 
-    if row_count <= 24 * 60:
+    if row_count <= chart_config.minute_granularity_max_range_hours * 60:
         return "minute"
-    if row_count <= 24 * 14:
+    if row_count <= chart_config.hour_granularity_max_range_days * 24:
         return "hour"
-    if row_count <= 120:
+    if row_count <= chart_config.day_granularity_max_range_days:
         return "day"
-    if row_count <= 365:
+    if row_count <= chart_config.week_granularity_max_range_days:
         return "week"
     return "month"
 
@@ -279,8 +281,10 @@ def query_dashboard_analytics(
     from_ts: Optional[str] = None,
     to_ts: Optional[str] = None,
     camera_id: Optional[str] = None,
+    chart_config: Optional[AnalyticsChartConfig] = None,
 ):
     """Tổng hợp dữ liệu dashboard theo camera, tuyến đường và mốc giờ."""
+    chart_config = chart_config or AnalyticsChartConfig()
     rows = session.execute(
         _base_violation_query(session, from_ts=from_ts, to_ts=to_ts, camera_id=camera_id).order_by(Violation.timestamp_utc)
     ).scalars().all()
@@ -288,6 +292,7 @@ def query_dashboard_analytics(
         from_ts=from_ts,
         to_ts=to_ts,
         row_count=len(rows),
+        chart_config=chart_config,
     )
 
     vehicle_type_totals: dict[str, int] = defaultdict(int)

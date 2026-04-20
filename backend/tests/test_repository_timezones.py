@@ -9,6 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.db.database import create_engine_and_session
+from app.core.config import AnalyticsChartConfig
 from app.db.repository import insert_violation, query_dashboard_analytics, query_violation_history
 from app.schemas.events import ViolationEvent, ViolationLocation
 
@@ -98,6 +99,32 @@ class RepositoryTimezoneTests(unittest.TestCase):
             ],
         )
         self.assertEqual([row["total"] for row in dashboard["time_series"]], [0, 1, 0])
+
+    def test_time_series_granularity_uses_chart_config_thresholds(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            _, session_factory = create_engine_and_session(Path(tmp_dir) / "test.sqlite")
+
+            with session_factory() as session:
+                insert_violation(
+                    session,
+                    ViolationEvent(
+                        camera_id="cam_01",
+                        location=ViolationLocation(road_name="Vo Van Kiet"),
+                        vehicle_id=1,
+                        vehicle_type="car",
+                        lane_id=1,
+                        violation="wrong_lane",
+                        timestamp=datetime(2026, 4, 10, 9, 30, 15, tzinfo=timezone.utc).isoformat(),
+                    ),
+                )
+                dashboard = query_dashboard_analytics(
+                    session,
+                    from_ts=datetime(2026, 4, 10, 9, 0, 0, tzinfo=timezone.utc).isoformat(),
+                    to_ts=datetime(2026, 4, 11, 8, 0, 0, tzinfo=timezone.utc).isoformat(),
+                    chart_config=AnalyticsChartConfig(minute_granularity_max_range_hours=12),
+                )
+
+        self.assertEqual(dashboard["time_series_granularity"], "hour")
 
 
 if __name__ == "__main__":

@@ -27,5 +27,16 @@
 	"evidence_crop_expand_y_top_ratio": 0.32,
 	"evidence_crop_expand_y_bottom_ratio": 0.27,
 	"evidence_crop_min_size_px": 24,
-	"evidence_jpeg_quality": 92
+	"evidence_jpeg_quality": 92,
+	"analytics_chart": {
+		"minute_granularity_max_range_hours": 24,
+		"hour_granularity_max_range_days": 3,
+		"day_granularity_max_range_days": 60,
+		"week_granularity_max_range_days": 120,
+		"minute_axis_label_interval_minutes": 60,
+		"minute_axis_max_ticks": 8,
+		"hour_axis_max_ticks": 8,
+		"overview_axis_max_ticks": 7,
+		"point_markers_max_points": 240
+	}
 }

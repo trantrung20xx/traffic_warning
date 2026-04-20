@@ -159,6 +159,7 @@ class CameraManager:
                 from_ts=from_ts,
                 to_ts=to_ts,
                 camera_id=camera_id,
+                chart_config=self.cfg.analytics_chart,
             )
 
     def _on_track(self, msg: TrackMessage) -> None:

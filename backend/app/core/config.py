@@ -11,6 +11,35 @@ from app.schemas.camera import CameraConfig
 ALLOWED_VEHICLE_TYPES = {"motorcycle", "car", "truck", "bus"}
 
 
+class AnalyticsChartConfig(BaseModel):
+    minute_granularity_max_range_hours: int = 24
+    hour_granularity_max_range_days: int = 14
+    day_granularity_max_range_days: int = 120
+    week_granularity_max_range_days: int = 365
+    minute_axis_label_interval_minutes: int = 60
+    minute_axis_max_ticks: int = 8
+    hour_axis_max_ticks: int = 8
+    overview_axis_max_ticks: int = 7
+    point_markers_max_points: int = 240
+
+    @field_validator(
+        "minute_granularity_max_range_hours",
+        "hour_granularity_max_range_days",
+        "day_granularity_max_range_days",
+        "week_granularity_max_range_days",
+        "minute_axis_label_interval_minutes",
+        "minute_axis_max_ticks",
+        "hour_axis_max_ticks",
+        "overview_axis_max_ticks",
+        "point_markers_max_points",
+    )
+    @classmethod
+    def validate_positive_int(cls, value: int) -> int:
+        if int(value) <= 0:
+            raise ValueError("analytics chart config values must be positive")
+        return int(value)
+
+
 class LanePolygon(BaseModel):
     lane_id: int
     # Lưu polygon theo tọa độ chuẩn hóa [0, 1] để cấu hình thủ công không bị lệch
@@ -141,6 +170,7 @@ class AppConfig(BaseModel):
     evidence_crop_expand_y_bottom_ratio: float = 0.27
     evidence_crop_min_size_px: int = 24
     evidence_jpeg_quality: int = 92
+    analytics_chart: AnalyticsChartConfig = AnalyticsChartConfig()
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -281,6 +311,7 @@ def load_app_config(repo_root: Path) -> AppConfig:
             evidence_crop_expand_y_bottom_ratio=float(settings.get("evidence_crop_expand_y_bottom_ratio", 0.27)),
             evidence_crop_min_size_px=int(settings.get("evidence_crop_min_size_px", 24)),
             evidence_jpeg_quality=int(settings.get("evidence_jpeg_quality", 92)),
+            analytics_chart=AnalyticsChartConfig.model_validate(settings.get("analytics_chart") or {}),
         )
 
     return AppConfig(
