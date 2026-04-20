@@ -1,63 +1,79 @@
 # Traffic Warning
 
-Hệ thống giám sát giao thông đa camera với:
+Hệ thống giám sát và cảnh báo vi phạm giao thông theo thời gian thực, gồm:
 
-- backend FastAPI
-- nhận luồng RTSP từ camera hoặc Raspberry Pi 5
-- YOLOv8 + ByteTrack để phát hiện, phân loại và theo dõi xe
-- logic polygon để gán làn và phát hiện vi phạm
-- frontend React hiển thị realtime, quản lý camera và thống kê
+- `backend` FastAPI đọc RTSP/video, chạy YOLOv8 + ByteTrack, gán làn bằng polygon và phát hiện vi phạm theo luật.
+- `frontend` React hiển thị giám sát realtime, thống kê lịch sử và màn hình quản lý camera.
+- `config` chứa cấu hình camera, cấu hình làn, ảnh nền, ảnh bằng chứng và SQLite.
 
-## Tính năng chính
+## Chức năng hiện có
 
-- Theo dõi nhiều camera độc lập
-- Vẽ và chỉnh sửa polygon làn đường thủ công trên giao diện quản lý
-- Hiển thị xe đang theo dõi theo thời gian thực
-- Hiển thị vi phạm theo thời gian thực
-- Lưu lịch sử vi phạm vào SQLite
-- Dashboard thống kê theo camera, khu vực và toàn hệ thống
-- Ổn định `vehicle_id` tốt hơn so với việc dùng raw track id trực tiếp
-- Làm mượt phân loại loại xe theo nhiều frame để giảm nhảy nhãn
+- Theo dõi nhiều camera độc lập.
+- Hỗ trợ nguồn RTSP hoặc file video cục bộ.
+- Phát hiện 4 nhóm phương tiện: `motorcycle`, `car`, `truck`, `bus`.
+- Ổn định `vehicle_id` khi raw track id của tracker bị đổi ngắn hạn.
+- Làm mượt nhãn loại xe theo nhiều frame để giảm nhảy nhãn.
+- Gán `lane_id` bằng polygon thủ công, không dùng AI lane detection.
+- Phát hiện:
+  - đi sai làn
+  - loại phương tiện không đúng làn
+  - hướng đi không đúng quy định qua `turn_regions`
+- Lưu lịch sử vi phạm vào SQLite.
+- Lưu ảnh bằng chứng theo camera/ngày.
+- Xem preview MJPEG trực tiếp trên frontend.
+- Upload/xóa ảnh nền để căn polygon trên màn hình quản lý.
+- Thống kê dashboard theo camera, khu vực, loại xe, loại vi phạm và chuỗi thời gian theo giờ.
+- Export lịch sử vi phạm ra `CSV` hoặc `XLSX`.
 
-## Kiến trúc tổng quát
+## Luồng xử lý
 
 ```text
-Camera / Pi 5 (RTSP)
+RTSP / file video
         |
         v
-  OpenCV VideoCapture
+OpenCV VideoCapture
         |
         v
-  YOLOv8 detector
+YOLOv8 detector
         |
         v
-  ByteTrack tracker
+ByteTrack
         |
         v
-  Stable track id + temporal vehicle type smoothing
+Stable track id + smoothing vehicle type
         |
         v
-  Lane logic + violation logic
+Lane polygon logic + temporal lane assigner
         |
-        +--> WebSocket realtime cho frontend
+        v
+Violation logic
         |
-        +--> SQLite / analytics
+        +--> WebSocket / preview MJPEG
+        +--> SQLite + analytics + export
+        +--> Ảnh bằng chứng
 ```
 
 ## Cấu trúc thư mục
 
-- `backend/`: FastAPI, AI, tracker, lane logic, violation logic, DB
-- `frontend/`: React + Vite + Canvas
-- `config/`: camera config, lane config, settings runtime, SQLite
+- `backend/`: API, xử lý AI, tracker, logic vi phạm, DB, test.
+- `frontend/`: giao diện React + Vite.
+- `config/cameras.json`: danh sách camera.
+- `config/lane_configs/*.json`: polygon làn và rule vi phạm cho từng camera.
+- `config/settings.json`: tham số runtime.
+- `config/background_images/`: ảnh nền để căn polygon trong màn hình quản lý.
+- `config/evidence_images/`: ảnh bằng chứng của vi phạm.
+- `config/traffic_warning.sqlite`: cơ sở dữ liệu SQLite mặc định.
 
 ## Yêu cầu môi trường
 
-- Windows PowerShell
-- Python 3.11+ hoặc tương đương
-- Node.js 18+
-- Nên có GPU nếu dùng model YOLOv8 lớn hơn `yolov8n`
+- Python 3.11 trở lên.
+- Node.js 18 trở lên.
+- Windows PowerShell là môi trường đang được project dùng nhiều nhất.
+- Có thể chạy CPU; nếu có GPU NVIDIA thì có thể cấu hình YOLO chạy CUDA.
 
-## Cài đặt backend
+## Cài đặt
+
+### Backend
 
 ```powershell
 cd backend
@@ -66,13 +82,7 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-## Dùng GPU cho nhận diện
-
-Nếu máy có GPU NVIDIA và driver hỗ trợ CUDA, backend có thể chạy YOLO trên GPU để tăng tốc suy luận.
-
-### 1. Cài PyTorch đúng bản
-
-Sau khi kích hoạt `backend/.venv`, cài một trong hai lựa chọn:
+PyTorch được cài riêng theo phần cứng:
 
 CPU:
 
@@ -86,50 +96,7 @@ GPU NVIDIA, ví dụ CUDA 13.0:
 pip install torch==2.10.0 torchvision==0.25.0 --index-url https://download.pytorch.org/whl/cu130
 ```
 
-Lưu ý:
-
-- Không chỉ cài driver NVIDIA là đủ, Python backend phải dùng bản `torch` có CUDA.
-- Nếu đang cài `torch` bản CPU-only thì model vẫn sẽ chạy trên CPU.
-- Cần chọn đúng bản CUDA tương thích với driver và wheel PyTorch đang có.
-
-### 2. Bật GPU trong cấu hình
-
-Trong [config/settings.json](/d:/Personal/DATN/traffic_warning/config/settings.json):
-
-```json
-"detector_device": "auto"
-```
-
-Các giá trị hỗ trợ:
-
-- `auto`: ưu tiên `cuda:0` nếu có GPU, nếu không thì fallback về `cpu`
-- `cuda` hoặc `cuda:0`: ép chạy GPU, nếu không có CUDA backend sẽ báo lỗi khi khởi động
-- `cpu`: ép chạy CPU
-
-### 3. Kiểm tra PyTorch đã thấy GPU chưa
-
-```powershell
-cd backend
-.\.venv\Scripts\Activate.ps1
-python -c "import torch; print(torch.__version__); print(torch.version.cuda); print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'NO GPU')"
-```
-
-Nếu cấu hình đúng, sẽ thấy:
-
-- `torch.cuda.is_available()` trả về `True`
-- tên GPU NVIDIA được in ra
-
-### 4. Kiểm tra backend đang dùng GPU thật
-
-Khi backend khởi động, log sẽ có dòng tương tự:
-
-```text
-[camera_id] detector=... requested_device=auto resolved_device=cuda:0
-```
-
-Nếu log ra `resolved_device=cpu` thì có nghĩa là backend chưa dùng được GPU.
-
-## Cài đặt frontend
+### Frontend
 
 ```powershell
 cd frontend
@@ -138,7 +105,7 @@ npm install
 
 ## Chạy hệ thống
 
-### 1. Chạy backend
+### Chạy backend
 
 ```powershell
 cd backend
@@ -146,195 +113,158 @@ cd backend
 uvicorn app.server:app --host 0.0.0.0 --port 8000
 ```
 
-Backend mặc định chạy tại:
+Backend mặc định: `http://localhost:8000`
 
-- `http://localhost:8000`
-
-### 2. Chạy frontend
+### Chạy frontend
 
 ```powershell
 cd frontend
 npm run dev
 ```
 
-Frontend mặc định chạy tại:
+Frontend mặc định: `http://localhost:5173`
 
-- `http://localhost:5173`
+Frontend sẽ dùng `VITE_API_BASE` nếu được cấu hình; nếu không sẽ mặc định gọi `http://localhost:8000`.
 
-## Cấu hình chính
+## Cấu hình quan trọng
 
 ### `config/cameras.json`
 
-Khai báo danh sách camera:
+Mỗi camera gồm:
 
 - `camera_id`
 - `rtsp_url`
-- `camera_type`
+- `camera_type`: `roadside`, `overhead`, `intersection`
 - `view_direction`
+- `location`
+- `monitored_lanes`
 - `frame_width`
 - `frame_height`
-- `location`
 
 ### `config/lane_configs/<camera_id>.json`
 
-Khai báo:
+Dữ liệu hiện tại được lưu theo tọa độ chuẩn hóa `[0, 1]`:
 
-- polygon làn đường
+- `polygon`
+- `turn_regions`
 - `allowed_maneuvers`
 - `allowed_lane_changes`
-- `turn_regions`
+- `allowed_vehicle_types`
 
 ### `config/settings.json`
 
-Cấu hình runtime quan trọng:
+Các tham số runtime đang được dùng:
 
-- `detector_weights_path`: model YOLO đang dùng
-- `detector_device`: `auto`, `cpu`, `cuda`, `cuda:0`...
-- `detector_conf_threshold`: confidence threshold
-- `detector_iou_threshold`: IoU threshold
-- `vehicle_type_history_window_ms`
-- `vehicle_type_history_size`
-- `stable_track_max_idle_ms`
-- `stable_track_min_iou_for_rebind`
-- `stable_track_max_normalized_distance`
+- detector/tracker:
+  - `detector_weights_path`
+  - `detector_device`
+  - `detector_conf_threshold`
+  - `detector_iou_threshold`
+  - `tracker_config`
+- ổn định tracking/nhãn:
+  - `vehicle_type_history_window_ms`
+  - `vehicle_type_history_size`
+  - `stable_track_max_idle_ms`
+  - `stable_track_min_iou_for_rebind`
+  - `stable_track_max_normalized_distance`
+- ổn định gán làn:
+  - `temporal_lane_observation_window_ms`
+  - `temporal_lane_min_majority_hits`
+  - `temporal_lane_switch_min_duration_ms`
+- realtime/vi phạm:
+  - `track_push_interval_ms`
+  - `wrong_lane_min_duration_ms`
+  - `turn_region_min_hits`
+  - `state_prune_max_age_s`
+- preview/ảnh bằng chứng:
+  - `preview_max_fps`
+  - `preview_jpeg_quality`
+  - `processing_fps_window_s`
+  - `evidence_crop_expand_x_ratio`
+  - `evidence_crop_expand_y_top_ratio`
+  - `evidence_crop_expand_y_bottom_ratio`
+  - `evidence_crop_min_size_px`
+  - `evidence_jpeg_quality`
 
-Ví dụ:
+## API và realtime
 
-```json
-{
-  "db_path": "config/traffic_warning.sqlite",
-  "detector_weights_path": "backend/yolov8m.pt",
-  "detector_device": "auto",
-  "detector_conf_threshold": 0.28,
-  "detector_iou_threshold": 0.7,
-  "vehicle_type_history_window_ms": 4000,
-  "vehicle_type_history_size": 12,
-  "stable_track_max_idle_ms": 1500,
-  "stable_track_min_iou_for_rebind": 0.15,
-  "stable_track_max_normalized_distance": 1.6,
-  "resize_frame": true,
-  "track_push_interval_ms": 200,
-  "wrong_lane_min_duration_ms": 1200,
-  "turn_region_min_hits": 3
-}
-```
-
-`detector_device` hoạt động như sau:
-
-- `auto`: ưu tiên GPU CUDA nếu PyTorch nhìn thấy GPU, nếu không thì fallback về CPU
-- `cuda` hoặc `cuda:0`: ép chạy GPU, nếu không có CUDA sẽ báo lỗi khi khởi động
-- `cpu`: ép chạy CPU
-
-## Model YOLO khuyên dùng
-
-Theo mức cân bằng giữa tốc độ và độ chính xác:
-
-- `yolov8n.pt`: nhẹ nhất, nhanh nhất, độ chính xác thấp nhất
-- `yolov8s.pt`: nhẹ hơn đáng kể so với `m`, chính xác hơn `n`
-- `yolov8m.pt`: cân bằng tốt giữa hiệu năng và độ chính xác
-- `yolov8x.pt`: chính xác cao hơn nhưng nặng hơn nhiều
-
-Với máy đang chạy tốt `yolov8s`, có thể dùng `yolov8m` để tăng chất lượng nhận diện.
-
-## Link tải model YOLOv8
-
-Nguồn chính thức:
-
-- `yolov8n.pt`: https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8n.pt
-- `yolov8s.pt`: https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8s.pt
-- `yolov8m.pt`: https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8m.pt
-- `yolov8x.pt`: https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8x.pt
-
-## Lệnh tải model trên PowerShell
-
-### Tải `yolov8n.pt`
-
-```powershell
-Invoke-WebRequest -Uri "https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8n.pt" -OutFile ".\backend\yolov8n.pt"
-```
-
-### Tải `yolov8s.pt`
-
-```powershell
-Invoke-WebRequest -Uri "https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8s.pt" -OutFile ".\backend\yolov8s.pt"
-```
-
-### Tải `yolov8m.pt`
-
-```powershell
-Invoke-WebRequest -Uri "https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8m.pt" -OutFile ".\backend\yolov8m.pt"
-```
-
-### Tải `yolov8x.pt`
-
-```powershell
-Invoke-WebRequest -Uri "https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8x.pt" -OutFile ".\backend\yolov8x.pt"
-```
-
-## Cách đổi model
-
-Chỉ cần sửa trong `config/settings.json`:
-
-```json
-"detector_weights_path": "backend/yolov8m.pt"
-```
-
-Sau đó restart backend.
-
-Nếu muốn ép hẳn GPU:
-
-```json
-"detector_device": "cuda:0"
-```
-
-Lưu ý: để chạy được GPU, môi trường Python backend phải cài bản `torch` có CUDA tương thích driver/NVIDIA của máy. Nếu cài `torch` bản CPU-only thì hệ thống vẫn phải chạy trên CPU dù có card NVIDIA.
-
-## API và realtime chính
+### REST API
 
 - `GET /api/health`
 - `GET /api/cameras`
 - `GET /api/cameras/{camera_id}`
+- `POST /api/cameras`
+- `PUT /api/cameras/{camera_id}`
+- `DELETE /api/cameras/{camera_id}`
 - `GET /api/cameras/{camera_id}/lanes`
 - `GET /api/cameras/{camera_id}/preview`
+- `POST /api/camera/{camera_id}/background-image`
+- `GET /api/camera/{camera_id}/background-image`
+- `DELETE /api/camera/{camera_id}/background-image`
+- `GET /api/violations/evidence/{evidence_path}`
 - `GET /api/violations/history`
+- `GET /api/violations/export?format=csv|xlsx`
 - `GET /api/analytics/dashboard`
-- `WS /ws/tracks`
+- `GET /api/stats`
+
+### WebSocket
+
+- `WS /ws/tracks?camera_id=...`
 - `WS /ws/violations`
+- `WS /ws/violations?camera_id=...`
 
-## Lưu ý khi dùng Raspberry Pi 5
+## Các màn hình frontend
 
-- Pi 5 chỉ cần phát RTSP, xử lý AI vẫn chạy ở máy chủ backend
-- đảm bảo mạng ổn định để hạn chế drop frame
-- băng thông mạng
-- độ trễ RTSP
-- độ phân giải stream
-- FPS thực tế
+- `Giám sát`
+  - xem preview MJPEG
+  - overlay polygon làn
+  - xem xe đang track
+  - xem vi phạm realtime và mở modal chi tiết
+- `Thống kê`
+  - lọc theo camera và khoảng thời gian
+  - biểu đồ theo camera, loại xe, loại vi phạm, khu vực
+  - biểu đồ chuỗi thời gian theo giờ
+  - lịch sử vi phạm và export CSV/Excel
+- `Quản lý camera`
+  - thêm/sửa/xóa camera
+  - vẽ polygon làn và turn region
+  - chỉnh loại xe cho phép, làn được phép chuyển, hướng được phép
+  - upload/xóa ảnh nền
 
-## Lưu ý về GitHub và file model
+## Kiểm thử backend
 
-Không nên commit trực tiếp các file model lớn như:
+Project hiện có các test:
 
-- `backend/yolov8x.pt`
-- `backend/yolov8m.pt`
-- `backend/yolov8s.pt`
+- `backend/tests/test_lane_features.py`
+- `backend/tests/test_repository_timezones.py`
+- `backend/tests/test_vehicle_type_logic.py`
 
-Lý do:
-
-- GitHub chặn file lớn hơn 100 MB nếu không dùng Git LFS
-
-Khuyến nghị:
-
-- thêm các file `.pt` vào `.gitignore`
-- giữ model ở máy local hoặc tải bằng lệnh trong README
-
-## Cách build frontend production
+Chạy test:
 
 ```powershell
-cd frontend
-npm run build
+cd backend
+.\.venv\Scripts\Activate.ps1
+python -m unittest discover tests
 ```
 
-## Tài liệu liên quan
+## Model YOLO
 
-- `backend/README.md`
-- `frontend/README.md`
+Project đang kèm sẵn các file:
+
+- `backend/yolov8n.pt`
+- `backend/yolov8s.pt`
+- `backend/yolov8m.pt`
+- `backend/yolov8x.pt`
+
+Chọn model bằng `detector_weights_path` trong `config/settings.json`.
+
+`detector_device` hỗ trợ:
+
+- `auto`: ưu tiên `cuda:0` nếu khả dụng, nếu không thì dùng CPU
+- `cuda` hoặc `cuda:0`: ép dùng GPU
+- `cpu`: ép dùng CPU
+
+## Tài liệu con
+
+- [backend/README.md](backend/README.md)
+- [frontend/README.md](frontend/README.md)
