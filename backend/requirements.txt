@@ -1,6 +1,9 @@
 fastapi
 # Framework xây dựng API backend cho hệ thống
 
+starlette
+# FastAPI phụ thuộc vào Starlette, và code hiện import trực tiếp WebSocketState từ starlette
+
 uvicorn[standard]
 # ASGI server dùng để chạy ứng dụng FastAPI
 
@@ -13,13 +16,13 @@ numpy
 pydantic
 # Định nghĩa schema dữ liệu và validate dữ liệu đầu vào/đầu ra API
 
-pydantic-settings
-# Quản lý cấu hình ứng dụng (biến môi trường, config hệ thống)
-
 SQLAlchemy
 # ORM dùng để thao tác với cơ sở dữ liệu (SQLite)
 
-sqlalchemy-utils
+#pydantic-settings
+# Quản lý cấu hình ứng dụng (biến môi trường, config hệ thống)
+
+#sqlalchemy-utils
 # Thư viện bổ sung tiện ích cho SQLAlchemy
 
 ultralytics
