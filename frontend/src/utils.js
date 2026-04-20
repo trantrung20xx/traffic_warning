@@ -63,13 +63,6 @@ const VIETNAM_TIMESTAMP_FORMATTER = new Intl.DateTimeFormat("vi-VN", {
   timeStyle: "medium",
 });
 
-const VIETNAM_HOUR_FORMATTER = new Intl.DateTimeFormat("en-GB", {
-  timeZone: VIETNAM_TIMEZONE,
-  hour: "2-digit",
-  minute: "2-digit",
-  hour12: false,
-});
-
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
@@ -160,16 +153,24 @@ function addUtcMonths(localDate, months) {
   return next;
 }
 
-function formatVietnamLocalDateTime(value) {
-  const localDate = toVietnamLocalDate(value);
+function formatLocalDateTimeParts(localDate) {
   if (!localDate) return "-";
   return `${pad2(localDate.getUTCDate())}/${pad2(localDate.getUTCMonth() + 1)}/${localDate.getUTCFullYear()} ${pad2(localDate.getUTCHours())}:${pad2(localDate.getUTCMinutes())}`;
 }
 
-function formatVietnamLocalDayMonth(value) {
-  const localDate = toVietnamLocalDate(value);
+function formatLocalDayMonthParts(localDate) {
   if (!localDate) return "";
   return `${pad2(localDate.getUTCDate())}/${pad2(localDate.getUTCMonth() + 1)}`;
+}
+
+function formatVietnamLocalDateTime(value) {
+  const localDate = toVietnamLocalDate(value);
+  return formatLocalDateTimeParts(localDate);
+}
+
+function formatVietnamLocalDayMonth(value) {
+  const localDate = toVietnamLocalDate(value);
+  return formatLocalDayMonthParts(localDate);
 }
 
 function formatVietnamLocalHourMinute(value) {
@@ -297,13 +298,6 @@ export function formatTimestamp(value) {
   return VIETNAM_TIMESTAMP_FORMATTER.format(dt);
 }
 
-export function formatHourBucket(value) {
-  if (!value) return "";
-  const dt = new Date(value);
-  if (Number.isNaN(dt.getTime())) return "";
-  return VIETNAM_HOUR_FORMATTER.format(dt);
-}
-
 export function determineTimeSeriesGranularity({ fromTs, toTs, pointCount = 0, chartConfig } = {}) {
   const normalizedChartConfig = normalizeAnalyticsChartConfig(chartConfig);
   const fromMs = fromTs ? new Date(fromTs).getTime() : Number.NaN;
@@ -404,7 +398,7 @@ export function formatTimeSeriesAxisLabel(point, granularity) {
     const endDisplay = endLocal ? addUtcMinutes(endLocal, -1) : null;
     return {
       primary: formatVietnamLocalDayMonth(point.bucket),
-      secondary: endDisplay ? formatVietnamLocalDayMonth(endDisplay) : "",
+      secondary: formatLocalDayMonthParts(endDisplay),
     };
   }
 
@@ -418,7 +412,7 @@ export function formatTimeSeriesTooltip(point, granularity) {
   const startLabel = formatVietnamLocalDateTime(point?.bucket);
   const endLocal = point?.bucket_end ? toVietnamLocalDate(point.bucket_end) : null;
   const endDisplay = endLocal ? addUtcMinutes(endLocal, -1) : null;
-  const endLabel = endDisplay ? formatVietnamLocalDateTime(endDisplay) : startLabel;
+  const endLabel = endDisplay ? formatLocalDateTimeParts(endDisplay) : startLabel;
 
   if (granularity === "minute") {
     return {
