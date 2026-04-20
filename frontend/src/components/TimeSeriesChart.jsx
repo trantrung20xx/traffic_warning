@@ -11,6 +11,12 @@ function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
 
+function formatYAxisValue(value) {
+  return new Intl.NumberFormat("vi-VN", {
+    maximumFractionDigits: value >= 10 ? 0 : 1,
+  }).format(value);
+}
+
 function buildTickIndexSet(points, granularity, chartConfig) {
   const count = points.length;
   if (count === 0) return new Set();
@@ -74,10 +80,11 @@ export default function TimeSeriesChart({ series, granularity, chartConfig }) {
   const normalizedChartConfig = useMemo(() => normalizeAnalyticsChartConfig(chartConfig), [chartConfig]);
   const width = 900;
   const height = 280;
-  const paddingLeft = 34;
+  const paddingLeft = 58;
   const paddingRight = 24;
   const paddingTop = 28;
   const paddingBottom = 52;
+  const yAxisRatios = [0, 0.25, 0.5, 0.75, 1];
   const tickIndexSet = useMemo(
     () => buildTickIndexSet(points, granularity, normalizedChartConfig),
     [granularity, normalizedChartConfig, points],
@@ -86,6 +93,11 @@ export default function TimeSeriesChart({ series, granularity, chartConfig }) {
   const hoveredPoint = hoveredIndex !== null ? points[hoveredIndex] : null;
   const plotWidth = width - paddingLeft - paddingRight;
   const plotHeight = height - paddingTop - paddingBottom;
+  const yAxisTicks = yAxisRatios.map((ratio) => ({
+    ratio,
+    y: paddingTop + ratio * plotHeight,
+    value: maxValue * (1 - ratio),
+  }));
 
   const getX = (index) => {
     if (points.length <= 1) {
@@ -145,10 +157,26 @@ export default function TimeSeriesChart({ series, granularity, chartConfig }) {
             role="img"
             aria-label={`Biểu đồ vi phạm theo ${getTimeSeriesGranularityLabel(granularity)}`}
           >
-            {[0, 0.25, 0.5, 0.75, 1].map((ratio) => {
-              const y = paddingTop + ratio * (height - paddingTop - paddingBottom);
-              return <line key={ratio} x1={paddingLeft} x2={width - paddingRight} y1={y} y2={y} className="grid-line" />;
-            })}
+            {yAxisTicks.map((tick) => (
+              <g key={tick.ratio}>
+                <line
+                  x1={paddingLeft}
+                  x2={width - paddingRight}
+                  y1={tick.y}
+                  y2={tick.y}
+                  className="grid-line"
+                />
+                <text
+                  x={paddingLeft - 10}
+                  y={tick.y}
+                  textAnchor="end"
+                  dominantBaseline="middle"
+                  className="value-label"
+                >
+                  {formatYAxisValue(tick.value)}
+                </text>
+              </g>
+            ))}
 
             {granularity === "minute" || granularity === "hour"
               ? points.map((point, index) => {
@@ -170,6 +198,13 @@ export default function TimeSeriesChart({ series, granularity, chartConfig }) {
                 })
               : null}
 
+            <line
+              x1={paddingLeft}
+              x2={paddingLeft}
+              y1={paddingTop}
+              y2={height - paddingBottom}
+              className="grid-line grid-line-axis"
+            />
             <line
               x1={paddingLeft}
               x2={width - paddingRight}
