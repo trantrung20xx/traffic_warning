@@ -22,8 +22,8 @@ Hệ thống giám sát và cảnh báo vi phạm giao thông theo thời gian t
 - Lưu ảnh bằng chứng theo camera/ngày.
 - Xem preview MJPEG trực tiếp trên frontend.
 - Upload/xóa ảnh nền để căn polygon trên màn hình quản lý.
-- Thống kê dashboard theo camera, khu vực, loại xe, loại vi phạm và chuỗi thời gian theo giờ.
-- Export lịch sử vi phạm ra `CSV` hoặc `XLSX`.
+- Thống kê dashboard theo camera, khu vực, loại xe, loại vi phạm và chuỗi thời gian theo `phút/giờ/ngày/tuần/tháng` tùy khoảng lọc.
+- Export lịch sử vi phạm ra `CSV` hoặc `XLSX`, kèm link ảnh bằng chứng trong file export.
 
 ## Luồng xử lý
 
@@ -136,7 +136,11 @@ Mỗi camera gồm:
 - `rtsp_url`
 - `camera_type`: `roadside`, `overhead`, `intersection`
 - `view_direction`
-- `location`
+- `location`:
+  - `road_name`
+  - `intersection_name`
+  - `gps_lat`
+  - `gps_lng`
 - `monitored_lanes`
 - `frame_width`
 - `frame_height`
@@ -155,6 +159,8 @@ Dữ liệu hiện tại được lưu theo tọa độ chuẩn hóa `[0, 1]`:
 
 Các tham số runtime đang được dùng:
 
+- đường dẫn dữ liệu/runtime:
+  - `db_path`
 - detector/tracker:
   - `detector_weights_path`
   - `detector_device`
@@ -171,6 +177,9 @@ Các tham số runtime đang được dùng:
   - `temporal_lane_observation_window_ms`
   - `temporal_lane_min_majority_hits`
   - `temporal_lane_switch_min_duration_ms`
+- xử lý frame / reconnect:
+  - `resize_frame`
+  - `rtsp_reconnect_delay_s`
 - realtime/vi phạm:
   - `track_push_interval_ms`
   - `wrong_lane_min_duration_ms`
@@ -185,6 +194,16 @@ Các tham số runtime đang được dùng:
   - `evidence_crop_expand_y_bottom_ratio`
   - `evidence_crop_min_size_px`
   - `evidence_jpeg_quality`
+- analytics chart:
+  - `minute_granularity_max_range_hours`
+  - `hour_granularity_max_range_days`
+  - `day_granularity_max_range_days`
+  - `week_granularity_max_range_days`
+  - `minute_axis_label_interval_minutes`
+  - `minute_axis_max_ticks`
+  - `hour_axis_max_ticks`
+  - `overview_axis_max_ticks`
+  - `point_markers_max_points`
 
 ## API và realtime
 
@@ -213,6 +232,14 @@ Các tham số runtime đang được dùng:
 - `WS /ws/violations`
 - `WS /ws/violations?camera_id=...`
 
+### Ghi chú API
+
+- `GET /api/cameras/{camera_id}` hiện trả về cả `camera`, `lane_config`, `runtime_applied`, `has_background_image`.
+- `GET /api/cameras/{camera_id}/lanes` trả polygon theo hệ pixel để frontend overlay trực tiếp; file cấu hình gốc vẫn lưu chuẩn hóa `[0, 1]`.
+- `POST /api/camera/{camera_id}/background-image` hiện hỗ trợ `image/jpeg`, `image/png`, đuôi `.jpg`, `.jpeg`, `.png`.
+- `GET /api/violations/history` hỗ trợ thêm query `limit`.
+- `GET /api/analytics/dashboard` trả thêm `time_series_granularity`, `time_series`, `hourly_series` và `chart_config`.
+
 ## Các màn hình frontend
 
 - `Giám sát`
@@ -223,7 +250,7 @@ Các tham số runtime đang được dùng:
 - `Thống kê`
   - lọc theo camera và khoảng thời gian
   - biểu đồ theo camera, loại xe, loại vi phạm, khu vực
-  - biểu đồ chuỗi thời gian theo giờ
+  - biểu đồ chuỗi thời gian tự đổi granularity theo khoảng lọc: `phút/giờ/ngày/tuần/tháng`
   - lịch sử vi phạm và export CSV/Excel
 - `Quản lý camera`
   - thêm/sửa/xóa camera
