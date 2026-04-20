@@ -5,7 +5,9 @@ import TimeSeriesChart from "../components/TimeSeriesChart";
 import ViolationDetailModal from "../components/ViolationDetailModal";
 import { connectViolations, exportViolationHistory, fetchDashboard, fetchViolationHistory } from "../api";
 import {
+  determineTimeSeriesGranularity,
   formatTimestamp,
+  getTimeSeriesGranularityLabel,
   getVehicleTypeLabel,
   getViolationLabel,
   nowLocalInput,
@@ -130,6 +132,11 @@ export default function AnalyticsView({ cameras, selectedCameraId, onSelectCamer
   }, [cameraFilter, fromTs, toTs, autoFollowNow]);
 
   const overview = dashboard?.overview || {};
+  const timeSeriesGranularity = determineTimeSeriesGranularity({
+    fromTs: dashboard?.from_timestamp || fromTs,
+    toTs: dashboard?.to_timestamp || (autoFollowNow ? new Date().toISOString() : toTs),
+    pointCount: dashboard?.hourly_series?.length || 0,
+  });
   const vehicleData = Object.entries(overview.vehicle_type_totals || {}).map(([label, value]) => ({
     label: getVehicleTypeLabel(label),
     value,
@@ -246,10 +253,10 @@ export default function AnalyticsView({ cameras, selectedCameraId, onSelectCamer
           <div className="panel-header compact">
             <div>
               <div className="panel-kicker">Theo khung thời gian</div>
-              <h3>Biểu đồ vi phạm theo giờ</h3>
+              <h3>Biểu đồ vi phạm theo {getTimeSeriesGranularityLabel(timeSeriesGranularity)}</h3>
             </div>
           </div>
-          <TimeSeriesChart series={dashboard?.hourly_series || []} />
+          <TimeSeriesChart series={dashboard?.hourly_series || []} granularity={timeSeriesGranularity} />
         </section>
 
         <section className="panel">

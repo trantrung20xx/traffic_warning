@@ -63,6 +63,10 @@ function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
 
+function pad2(value) {
+  return String(value).padStart(2, "0");
+}
+
 function formatDateTimePartsInVietnam(date) {
   const parts = Object.fromEntries(
     VIETNAM_DATE_TIME_FORMATTER
@@ -98,6 +102,120 @@ function parseVietnamLocalInput(value) {
     0,
   );
   return new Date(utcTime);
+}
+
+function toVietnamLocalDate(value) {
+  const dt = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(dt.getTime())) return null;
+  const parts = formatDateTimePartsInVietnam(dt);
+  return new Date(
+    Date.UTC(
+      Number(parts.year),
+      Number(parts.month) - 1,
+      Number(parts.day),
+      Number(parts.hour),
+      Number(parts.minute),
+      Number(parts.second),
+      0,
+    ),
+  );
+}
+
+function fromVietnamLocalDate(localDate) {
+  return `${localDate.getUTCFullYear()}-${pad2(localDate.getUTCMonth() + 1)}-${pad2(localDate.getUTCDate())}T${pad2(localDate.getUTCHours())}:${pad2(localDate.getUTCMinutes())}:${pad2(localDate.getUTCSeconds())}+07:00`;
+}
+
+function addUtcHours(localDate, hours) {
+  const next = new Date(localDate.getTime());
+  next.setUTCHours(next.getUTCHours() + hours);
+  return next;
+}
+
+function addUtcDays(localDate, days) {
+  const next = new Date(localDate.getTime());
+  next.setUTCDate(next.getUTCDate() + days);
+  return next;
+}
+
+function addUtcMinutes(localDate, minutes) {
+  const next = new Date(localDate.getTime());
+  next.setUTCMinutes(next.getUTCMinutes() + minutes);
+  return next;
+}
+
+function addUtcMonths(localDate, months) {
+  const next = new Date(localDate.getTime());
+  next.setUTCMonth(next.getUTCMonth() + months);
+  return next;
+}
+
+function formatVietnamLocalDateTime(value) {
+  const localDate = toVietnamLocalDate(value);
+  if (!localDate) return "-";
+  return `${pad2(localDate.getUTCDate())}/${pad2(localDate.getUTCMonth() + 1)}/${localDate.getUTCFullYear()} ${pad2(localDate.getUTCHours())}:${pad2(localDate.getUTCMinutes())}`;
+}
+
+function formatVietnamLocalDayMonth(value) {
+  const localDate = toVietnamLocalDate(value);
+  if (!localDate) return "";
+  return `${pad2(localDate.getUTCDate())}/${pad2(localDate.getUTCMonth() + 1)}`;
+}
+
+function formatVietnamLocalHourMinute(value) {
+  const localDate = toVietnamLocalDate(value);
+  if (!localDate) return "";
+  return `${pad2(localDate.getUTCHours())}:${pad2(localDate.getUTCMinutes())}`;
+}
+
+function formatVietnamLocalMonthYear(value) {
+  const localDate = toVietnamLocalDate(value);
+  if (!localDate) return "";
+  return `${pad2(localDate.getUTCMonth() + 1)}/${localDate.getUTCFullYear()}`;
+}
+
+function getTimeBucketRange(value, granularity) {
+  const localDate = toVietnamLocalDate(value);
+  if (!localDate) return null;
+
+  if (granularity === "hour") {
+    localDate.setUTCMinutes(0, 0, 0);
+    return { start: localDate, end: addUtcHours(localDate, 1) };
+  }
+
+  if (granularity === "day") {
+    localDate.setUTCHours(0, 0, 0, 0);
+    return { start: localDate, end: addUtcDays(localDate, 1) };
+  }
+
+  if (granularity === "week") {
+    localDate.setUTCHours(0, 0, 0, 0);
+    const weekday = localDate.getUTCDay() === 0 ? 7 : localDate.getUTCDay();
+    localDate.setUTCDate(localDate.getUTCDate() - weekday + 1);
+    return { start: localDate, end: addUtcDays(localDate, 7) };
+  }
+
+  localDate.setUTCHours(0, 0, 0, 0);
+  localDate.setUTCDate(1);
+  return { start: localDate, end: addUtcMonths(localDate, 1) };
+}
+
+function mergeBreakdown(target, source) {
+  Object.entries(source || {}).forEach(([key, value]) => {
+    target[key] = (target[key] || 0) + Number(value || 0);
+  });
+}
+
+function normalizeTimeSeriesPoint(point, granularity) {
+  const range = getTimeBucketRange(point.bucket, granularity);
+  if (!range) return null;
+  return {
+    bucket: fromVietnamLocalDate(range.start),
+    bucket_end: fromVietnamLocalDate(range.end),
+    total: Number(point.total || 0),
+    camera_breakdown: { ...(point.camera_breakdown || {}) },
+    vehicle_breakdown: { ...(point.vehicle_breakdown || {}) },
+    violation_breakdown: { ...(point.violation_breakdown || {}) },
+  };
 }
 
 export function normalizePoint([x, y], frameWidth, frameHeight) {
@@ -161,6 +279,124 @@ export function formatHourBucket(value) {
   const dt = new Date(value);
   if (Number.isNaN(dt.getTime())) return "";
   return VIETNAM_HOUR_FORMATTER.format(dt);
+}
+
+export function determineTimeSeriesGranularity({ fromTs, toTs, pointCount = 0 } = {}) {
+  const fromMs = fromTs ? new Date(fromTs).getTime() : Number.NaN;
+  const toMs = toTs ? new Date(toTs).getTime() : Number.NaN;
+
+  if (!Number.isNaN(fromMs) && !Number.isNaN(toMs) && toMs > fromMs) {
+    const durationMs = toMs - fromMs;
+    const dayMs = 24 * 60 * 60 * 1000;
+
+    if (durationMs <= 3 * dayMs) return "hour";
+    if (durationMs <= 60 * dayMs) return "day";
+    if (durationMs <= 180 * dayMs) return "week";
+    return "month";
+  }
+
+  if (pointCount <= 72) return "hour";
+  if (pointCount <= 24 * 60) return "day";
+  if (pointCount <= 24 * 180) return "week";
+  return "month";
+}
+
+export function getTimeSeriesGranularityLabel(granularity) {
+  const labels = {
+    hour: "giờ",
+    day: "ngày",
+    week: "tuần",
+    month: "tháng",
+  };
+  return labels[granularity] || "thời gian";
+}
+
+export function aggregateTimeSeries(points, granularity) {
+  const source = Array.isArray(points) ? points : [];
+  if (granularity === "hour") {
+    return source
+      .map((point) => normalizeTimeSeriesPoint(point, "hour"))
+      .filter(Boolean)
+      .sort((left, right) => new Date(left.bucket).getTime() - new Date(right.bucket).getTime());
+  }
+
+  const buckets = new Map();
+  source.forEach((point) => {
+    const range = getTimeBucketRange(point.bucket, granularity);
+    if (!range) return;
+    const key = fromVietnamLocalDate(range.start);
+    const entry =
+      buckets.get(key) ||
+      {
+        bucket: key,
+        bucket_end: fromVietnamLocalDate(range.end),
+        total: 0,
+        camera_breakdown: {},
+        vehicle_breakdown: {},
+        violation_breakdown: {},
+      };
+
+    entry.total += Number(point.total || 0);
+    mergeBreakdown(entry.camera_breakdown, point.camera_breakdown || {});
+    mergeBreakdown(entry.vehicle_breakdown, point.vehicle_breakdown || {});
+    mergeBreakdown(entry.violation_breakdown, point.violation_breakdown || {});
+    buckets.set(key, entry);
+  });
+
+  return Array.from(buckets.values()).sort(
+    (left, right) => new Date(left.bucket).getTime() - new Date(right.bucket).getTime(),
+  );
+}
+
+export function formatTimeSeriesAxisLabel(point, granularity) {
+  if (!point?.bucket) return { primary: "", secondary: "" };
+
+  if (granularity === "hour") {
+    return {
+      primary: formatVietnamLocalHourMinute(point.bucket),
+      secondary: formatVietnamLocalDayMonth(point.bucket),
+    };
+  }
+
+  if (granularity === "day") {
+    return {
+      primary: formatVietnamLocalDayMonth(point.bucket),
+      secondary: "",
+    };
+  }
+
+  if (granularity === "week") {
+    const endLocal = point.bucket_end ? toVietnamLocalDate(point.bucket_end) : null;
+    const endDisplay = endLocal ? addUtcMinutes(endLocal, -1) : null;
+    return {
+      primary: formatVietnamLocalDayMonth(point.bucket),
+      secondary: endDisplay ? formatVietnamLocalDayMonth(endDisplay) : "",
+    };
+  }
+
+  return {
+    primary: formatVietnamLocalMonthYear(point.bucket),
+    secondary: "",
+  };
+}
+
+export function formatTimeSeriesTooltip(point, granularity) {
+  const startLabel = formatVietnamLocalDateTime(point?.bucket);
+  const endLocal = point?.bucket_end ? toVietnamLocalDate(point.bucket_end) : null;
+  const endDisplay = endLocal ? addUtcMinutes(endLocal, -1) : null;
+  const endLabel = endDisplay ? formatVietnamLocalDateTime(endDisplay) : startLabel;
+
+  if (granularity === "hour") {
+    return {
+      title: startLabel,
+      total: `Tổng số vi phạm: ${point?.total ?? 0}`,
+    };
+  }
+
+  return {
+    title: `Từ ${startLabel} đến ${endLabel}`,
+    total: `Tổng số vi phạm: ${point?.total ?? 0}`,
+  };
 }
 
 export function getManeuverLabel(value) {

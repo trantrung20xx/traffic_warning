@@ -510,6 +510,18 @@ select {
   background: rgba(255, 255, 255, 0.03);
 }
 
+.timeseries-card {
+  position: relative;
+}
+
+.timeseries-meta {
+  margin-bottom: 12px;
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
 .chart-title {
   font-weight: 700;
   margin-bottom: 14px;
@@ -549,14 +561,60 @@ select {
   stroke: rgba(255, 255, 255, 0.08);
 }
 
+.grid-line-boundary {
+  stroke: rgba(28, 166, 255, 0.28);
+  stroke-dasharray: 4 6;
+}
+
+.grid-line-axis {
+  stroke: rgba(255, 255, 255, 0.14);
+}
+
 .point-dot {
   fill: var(--accent);
+}
+
+.point-hit-area {
+  fill: transparent;
+  cursor: pointer;
 }
 
 .axis-label,
 .value-label {
   fill: var(--muted);
   font-size: 12px;
+}
+
+.axis-label-secondary {
+  fill: rgba(237, 247, 251, 0.68);
+}
+
+.timeseries-tooltip {
+  position: absolute;
+  z-index: 2;
+  min-width: 200px;
+  max-width: 260px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(160, 210, 229, 0.2);
+  background: rgba(7, 19, 31, 0.94);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.28);
+  transform: translate(-50%, calc(-100% - 10px));
+  pointer-events: none;
+}
+
+.timeseries-tooltip-title {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.timeseries-tooltip-total {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .history-table-wrap {
