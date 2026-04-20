@@ -264,6 +264,41 @@ Chọn model bằng `detector_weights_path` trong `config/settings.json`.
 - `cuda` hoặc `cuda:0`: ép dùng GPU
 - `cpu`: ép dùng CPU
 
+### Link tải model `.pt`
+
+Nguồn chính thức: Ultralytics Assets trên GitHub Releases.
+
+- `yolov8n.pt`: `https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8n.pt`
+- `yolov8s.pt`: `https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8s.pt`
+- `yolov8m.pt`: `https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8m.pt`
+- `yolov8x.pt`: `https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8x.pt`
+
+### Tải model bằng PowerShell
+
+Tải `yolov8n.pt`:
+
+```powershell
+Invoke-WebRequest -Uri "https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8n.pt" -OutFile ".\backend\yolov8n.pt"
+```
+
+Tải `yolov8s.pt`:
+
+```powershell
+Invoke-WebRequest -Uri "https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8s.pt" -OutFile ".\backend\yolov8s.pt"
+```
+
+Tải `yolov8m.pt`:
+
+```powershell
+Invoke-WebRequest -Uri "https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8m.pt" -OutFile ".\backend\yolov8m.pt"
+```
+
+Tải `yolov8x.pt`:
+
+```powershell
+Invoke-WebRequest -Uri "https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8x.pt" -OutFile ".\backend\yolov8x.pt"
+```
+
 ## Tài liệu con
 
 - [backend/README.md](backend/README.md)

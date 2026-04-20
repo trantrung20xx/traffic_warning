@@ -70,6 +70,36 @@ uvicorn app.server:app --host 0.0.0.0 --port 8000
 
 Server mặc định chạy tại `http://localhost:8000`.
 
+## Model YOLO `.pt`
+
+Backend đọc đường dẫn model từ `../config/settings.json` qua khóa `detector_weights_path`.
+
+Ví dụ:
+
+```json
+{
+  "detector_weights_path": "backend/yolov8m.pt",
+  "detector_device": "auto"
+}
+```
+
+### Link tải model chính thức
+
+Nguồn: Ultralytics Assets GitHub Releases.
+
+- `yolov8n.pt`: `https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8n.pt`
+- `yolov8s.pt`: `https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8s.pt`
+- `yolov8m.pt`: `https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8m.pt`
+- `yolov8x.pt`: `https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8x.pt`
+
+### Tải nhanh bằng PowerShell
+
+```powershell
+Invoke-WebRequest -Uri "https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8m.pt" -OutFile ".\yolov8m.pt"
+```
+
+Có thể thay `yolov8m.pt` bằng `yolov8n.pt`, `yolov8s.pt` hoặc `yolov8x.pt` tùy nhu cầu.
+
 ## Cấu hình backend
 
 Backend đọc cấu hình từ thư mục `../config`.
