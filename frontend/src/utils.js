@@ -264,8 +264,8 @@ export function buildPayload(draft) {
   const frameHeight = Number(draft.camera.frame_height) || 720;
   const lanes = draft.lane_config.lanes.map((lane) => ({
     lane_id: Number(lane.lane_id),
-    // Polygons stay normalized in state and payload so the manual config remains
-    // resolution-independent. Rendering converts them back to canvas pixels.
+    // Giữ polygon ở dạng chuẩn hóa ngay trong state và payload để cấu hình không phụ thuộc độ phân giải.
+    // Khi vẽ lên canvas mới đổi ngược về pixel.
     polygon: (lane.polygon || []).map(([x, y]) => [Number(x), Number(y)]),
     allowed_maneuvers: lane.allowed_maneuvers || [],
     allowed_lane_changes: (lane.allowed_lane_changes || []).map((value) => Number(value)),
@@ -341,6 +341,7 @@ export function polygonSelfIntersects(points) {
       const b1 = points[j];
       const b2 = points[(j + 1) % points.length];
 
+      // Bỏ qua các cạnh kề nhau vì chúng luôn chạm nhau ở đỉnh chung, không phải tự cắt.
       const sharesVertex =
         i === j ||
         (i + 1) % points.length === j ||

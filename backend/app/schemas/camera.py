@@ -8,7 +8,7 @@ from pydantic import BaseModel
 class CameraLocation(BaseModel):
     road_name: str
     intersection_name: Optional[str] = None
-    # Optional GPS fields for simulation / reporting
+    # Tọa độ GPS là tùy chọn, chủ yếu phục vụ mô phỏng và báo cáo.
     gps_lat: Optional[float] = None
     gps_lng: Optional[float] = None
 
@@ -23,11 +23,11 @@ class CameraConfig(BaseModel):
     camera_type: Literal["roadside", "overhead", "intersection"]
     view_direction: Optional[str] = None
     location: CameraLocation
-    # lanes monitored by THIS camera (must be unique per camera)
+    # Danh sách làn do camera này giám sát; không được trùng giữa các camera.
     monitored_lanes: list[int]
 
-    # Fixed resolution for this camera. Polygon configs are stored normalized and
-    # denormalized back into this frame space at runtime.
+    # Độ phân giải chuẩn của camera. Polygon được lưu dạng chuẩn hóa và khi chạy sẽ
+    # đổi lại theo đúng hệ pixel của kích thước này.
     frame_width: int
     frame_height: int
 

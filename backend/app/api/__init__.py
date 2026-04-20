@@ -1,2 +1,2 @@
-"""API routers (REST + WebSocket)."""
+"""Khai báo router API REST và WebSocket."""
 

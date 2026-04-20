@@ -1,2 +1,2 @@
-"""RTSP reading utilities."""
+"""Tiện ích đọc luồng RTSP."""
 

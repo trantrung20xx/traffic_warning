@@ -1,2 +1,2 @@
-"""Pydantic schemas for API and WebSocket messages."""
+"""Schema Pydantic cho API và bản tin WebSocket."""
 

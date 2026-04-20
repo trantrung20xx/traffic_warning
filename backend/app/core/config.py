@@ -13,25 +13,23 @@ ALLOWED_VEHICLE_TYPES = {"motorcycle", "car", "truck", "bus"}
 
 class LanePolygon(BaseModel):
     lane_id: int
-    # Polygon points are stored normalized in [0, 1].
-    # This keeps manual polygon configs deterministic across canvas resizes while
-    # runtime logic can still denormalize back to camera-frame pixels.
+    # Lưu polygon theo tọa độ chuẩn hóa [0, 1] để cấu hình thủ công không bị lệch
+    # khi thay đổi kích thước canvas; lúc chạy sẽ đổi lại về pixel của khung hình camera.
     polygon: list[list[float]]  # [[x,y], ...]
 
-    # Geometry-based maneuver classification:
-    # Define where the vehicle "arrives" in order to infer turn direction.
-    # Keys are maneuver names: e.g. "straight", "left", "right", "u_turn".
+    # Vùng hình học dùng để suy luận hướng di chuyển sau cùng của xe.
+    # Khóa là tên hướng như "straight", "left", "right", "u_turn".
     turn_regions: Optional[dict[str, list[list[float]]]] = None
 
-    # If a vehicle's primary lane is this lane, only these maneuvers are allowed.
+    # Nếu làn gốc của xe là làn này thì chỉ được phép thực hiện các hướng trong danh sách.
     allowed_maneuvers: Optional[list[str]] = None
 
-    # Lane-change policy for "Đi sai làn":
-    # If a vehicle enters a lane not in allowed_lane_changes, we consider it illegal.
-    # By default skeleton allows only staying in its primary lane.
+    # Quy tắc đổi làn cho lỗi "Đi sai làn".
+    # Nếu xe đi sang làn không nằm trong danh sách này thì xem là vi phạm.
+    # Mặc định chỉ cho phép xe giữ nguyên làn gốc của mình.
     allowed_lane_changes: Optional[list[int]] = None
 
-    # Allowed vehicle classes for this lane, e.g. motorcycle/car/truck/bus.
+    # Các loại phương tiện được phép đi trong làn này.
     allowed_vehicle_types: Optional[list[str]] = None
 
     @field_validator("polygon")
@@ -113,7 +111,7 @@ class AppConfig(BaseModel):
     evidence_images_dir: Path
     db_path: Path
 
-    # Detector / performance settings
+    # Cấu hình detector, tracker và các tham số ảnh hưởng hiệu năng xử lý.
     detector_weights_path: str = "backend/yolov8n.pt"
     detector_device: str = "auto"
     detector_conf_threshold: float = 0.28
@@ -129,7 +127,7 @@ class AppConfig(BaseModel):
     temporal_lane_switch_min_duration_ms: int = 700
     resize_frame: bool = True
 
-    # Realtime streaming / logic thresholds
+    # Ngưỡng cho luồng realtime, phát hiện vi phạm và ảnh bằng chứng.
     track_push_interval_ms: int = 200
     wrong_lane_min_duration_ms: int = 1200
     turn_region_min_hits: int = 3
@@ -157,6 +155,7 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 def normalize_point(point: list[float], frame_width: int, frame_height: int) -> list[float]:
+    """Đưa một điểm pixel về hệ tọa độ chuẩn hóa [0, 1]."""
     x, y = point
     if 0.0 <= x <= 1.0 and 0.0 <= y <= 1.0:
         return [float(x), float(y)]
@@ -164,6 +163,7 @@ def normalize_point(point: list[float], frame_width: int, frame_height: int) -> 
 
 
 def denormalize_point(point: list[float], frame_width: int, frame_height: int) -> list[float]:
+    """Đổi một điểm chuẩn hóa về pixel theo kích thước frame đang cấu hình."""
     x, y = point
     return [float(x) * frame_width, float(y) * frame_height]
 
@@ -177,6 +177,7 @@ def denormalize_polygon(points: list[list[float]], frame_width: int, frame_heigh
 
 
 def denormalize_lane_config(lane_config: CameraLaneConfig) -> RuntimeCameraLaneConfig:
+    """Đổi toàn bộ polygon của camera từ tọa độ chuẩn hóa sang pixel lúc runtime."""
     frame_width = lane_config.frame_width
     frame_height = lane_config.frame_height
     return RuntimeCameraLaneConfig.model_validate(
@@ -203,6 +204,7 @@ def denormalize_lane_config(lane_config: CameraLaneConfig) -> RuntimeCameraLaneC
 
 
 def _normalize_lane_config_payload(raw: dict[str, Any]) -> dict[str, Any]:
+    """Chuẩn hóa dữ liệu làn từ file cấu hình để thống nhất lưu theo [0, 1]."""
     frame_width = int(raw.get("frame_width") or 1)
     frame_height = int(raw.get("frame_height") or 1)
     return {
@@ -222,6 +224,7 @@ def _normalize_lane_config_payload(raw: dict[str, Any]) -> dict[str, Any]:
 
 
 def load_app_config(repo_root: Path) -> AppConfig:
+    """Tải cấu hình ứng dụng từ `settings.json` và áp dụng giá trị mặc định khi thiếu."""
     config_dir = repo_root / "config"
     settings_path = config_dir / "settings.json"
     cameras_path = config_dir / "cameras.json"
@@ -263,7 +266,7 @@ def load_app_config(repo_root: Path) -> AppConfig:
             wrong_lane_min_duration_ms=int(
                 settings.get(
                     "wrong_lane_min_duration_ms",
-                    # backward compatible key (older skeleton)
+                    # Giữ tương thích với khóa cũ trong các bộ cấu hình trước đây.
                     settings.get("wrong_lane_min_consecutive_frames", 1200),
                 )
             ),
@@ -329,6 +332,7 @@ def delete_lane_config_for_camera(repo_root: Path, camera_id: str) -> None:
 
 
 def validate_no_shared_lanes_across_cameras(repo_root: Path) -> None:
+    """Kiểm tra camera và lane config không bị trùng hoặc lệch danh sách làn."""
     cameras = load_cameras(repo_root)
     seen_camera_ids: set[str] = set()
     for cam in cameras:

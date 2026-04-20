@@ -18,7 +18,7 @@ class Track:
 
 class YoloByteTrackVehicleTracker:
     """
-    Tracking wrapper that uses ByteTrack (via ultralytics track API).
+    Lớp theo dõi phương tiện dùng ByteTrack thông qua API `track` của Ultralytics.
     """
 
     def __init__(
@@ -31,6 +31,7 @@ class YoloByteTrackVehicleTracker:
         self.tracker_config = tracker_config
 
     def track(self, frame_bgr: np.ndarray) -> list[Track]:
+        """Chạy detector + tracker của Ultralytics và trả về danh sách track hiện tại."""
         results = self.detector.model.track(
             frame_bgr,
             device=self.detector.device,

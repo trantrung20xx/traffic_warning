@@ -1,2 +1,2 @@
-"""ByteTrack wrapper."""
+"""Lớp bao cho ByteTrack."""
 

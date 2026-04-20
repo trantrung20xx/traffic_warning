@@ -133,8 +133,8 @@ def create_api_router(manager: CameraManager) -> APIRouter:
     @router.get("/api/cameras/{camera_id}/preview")
     async def camera_preview_mjpeg(camera_id: str):
         """
-        MJPEG stream (multipart/x-mixed-replace) for browser <img src="..."> preview.
-        AI inference still runs only in the processing loop; this only serves encoded JPEG snapshots.
+        Phát MJPEG cho thẻ `<img src="...">` trên trình duyệt.
+        Suy luận AI vẫn chỉ chạy trong vòng lặp xử lý chính; endpoint này chỉ phát ảnh JPEG đã mã hóa sẵn.
         """
 
         async def frames():

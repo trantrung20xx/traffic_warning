@@ -12,16 +12,15 @@ from app.api.ws import create_ws_router
 from app.managers.camera_manager import CameraManager
 
 if sys.platform.startswith("win") and hasattr(asyncio, "WindowsSelectorEventLoopPolicy"):
-    # ProactorEventLoop on Windows can emit noisy WinError 10054 stack traces when
-    # browsers/tabs drop websocket connections abruptly. Selector policy is more
-    # stable for this FastAPI/WebSocket workload.
+    # Trên Windows, ProactorEventLoop dễ in stack trace WinError 10054 khi trình duyệt
+    # đóng tab hoặc ngắt websocket đột ngột. Selector policy ổn định hơn cho tải FastAPI/WebSocket này.
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Traffic Warning Backend", version="0.1.0")
 
-    # For local UI dev
+    # Mở CORS rộng để frontend chạy local gọi API thuận tiện trong lúc phát triển.
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],

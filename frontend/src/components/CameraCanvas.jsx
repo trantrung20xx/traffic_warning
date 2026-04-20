@@ -305,8 +305,8 @@ export default function CameraCanvas({
     }
 
     if (editable) {
-      // This matches real traffic-camera setup tools: adjust fixed road polygons by vertices or whole-region drag.
-      // Scale/rotate are intentionally omitted because the camera image is fixed and rules depend on exact pixels.
+      // Cách chỉnh này giống công cụ cấu hình camera giao thông thực tế: kéo từng đỉnh
+      // hoặc kéo cả vùng. Không hỗ trợ scale/rotate vì camera cố định và luật phụ thuộc pixel chính xác.
       ctx.fillStyle = "rgba(255,255,255,0.78)";
       ctx.font = "12px sans-serif";
       ctx.fillText("Keo diem de chinh, keo trong vung de di chuyen, click canh de chen diem. Khong scale/rotate vi camera co dinh.", 14, 22);

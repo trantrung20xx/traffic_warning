@@ -33,8 +33,9 @@ from app.vision.detector import YoloV8VehicleDetector
 
 class CameraContext:
     """
-    Per-camera processing pipeline:
-    RTSP -> YOLOv8 (vehicles) -> ByteTrack (vehicle_id) -> lane polygon logic -> violation rules -> DB/WS
+    Pipeline xử lý cho từng camera:
+    RTSP -> YOLOv8 phát hiện xe -> ByteTrack theo dõi -> gán làn bằng polygon ->
+    áp luật vi phạm -> lưu DB và đẩy realtime qua WebSocket
     """
 
     def __init__(
@@ -82,8 +83,8 @@ class CameraContext:
         self.on_violation = on_violation
         self.on_log = on_log or (lambda msg: None)
 
-        # RTSP reader: resize into the configured frame space that normalized
-        # polygons are denormalized into before lane/violation logic runs.
+        # Reader luôn resize frame về đúng kích thước đã cấu hình để polygon sau khi
+        # bỏ chuẩn hóa khớp tuyệt đối với hệ tọa độ đang dùng trong logic.
         self.rtsp_reader = RtspFrameReader(
             camera_config.rtsp_url,
             reconnect_delay_s=rtsp_reconnect_delay_s,
@@ -91,7 +92,7 @@ class CameraContext:
             frame_height=camera_config.frame_height,
         )
 
-        # AI components (backend-only)
+        # Các thành phần AI và tracking chạy hoàn toàn ở backend.
         self.detector = YoloV8VehicleDetector(
             weights_path=detector_weights_path,
             device=detector_device,
@@ -104,7 +105,7 @@ class CameraContext:
             f"resolved_device={self.detector.device}"
         )
 
-        # Lane / violation rules (hand-crafted polygons)
+        # Logic gán làn và phát hiện vi phạm dựa trên polygon cấu hình thủ công.
         self.lane_logic = LaneLogic(lane_config.lanes)
         self.stable_track_id_assigner = StableTrackIdAssigner(
             max_idle_ms=stable_track_max_idle_ms,
@@ -130,7 +131,7 @@ class CameraContext:
 
         self._db_session_factory = db_session_factory
 
-        # Throttle push to websocket
+        # Giới hạn tần suất đẩy track lên WebSocket để giảm tải cho frontend.
         self._last_track_push_ts_ms: int = 0
         self._track_push_interval_ms: int = int(track_push_interval_ms)
         self._state_prune_max_age_s: float = float(state_prune_max_age_s)
@@ -138,7 +139,7 @@ class CameraContext:
         self._processing_fps: Optional[float] = None
         self._processing_fps_window_s: float = float(processing_fps_window_s)
 
-        # Latest frame for browser preview (MJPEG). Updated from processing loop, read from HTTP handlers.
+        # Lưu frame JPEG gần nhất để endpoint preview có thể phát MJPEG cho trình duyệt.
         self._preview_lock = threading.Lock()
         self._latest_preview_jpeg: Optional[bytes] = None
         self._last_preview_encode_ms: int = 0
@@ -157,7 +158,7 @@ class CameraContext:
 
     def get_lane_polygons_for_ui(self) -> dict[str, Any]:
         """
-        Used by frontend to draw lane polygons on Canvas in pixel space.
+        Trả dữ liệu polygon ở hệ pixel để frontend vẽ trực tiếp lên canvas.
         """
         lanes = []
         for lp in self.lane_config.lanes:
@@ -183,7 +184,7 @@ class CameraContext:
             return self._latest_preview_jpeg
 
     def _maybe_update_preview(self, frame_bgr) -> None:
-        """Encode a JPEG occasionally so the web UI can show live video (not just overlays)."""
+        """Mã hóa JPEG theo nhịp giới hạn để giao diện web xem được ảnh camera trực tiếp."""
         now = int(time.time() * 1000)
         if now - self._last_preview_encode_ms < self._preview_min_interval_ms:
             return
@@ -200,6 +201,7 @@ class CameraContext:
             self._latest_preview_jpeg = data
 
     async def run_forever(self, *, stop_event: asyncio.Event) -> None:
+        """Vòng lặp xử lý liên tục cho một camera cho đến khi nhận tín hiệu dừng."""
         try:
             while not stop_event.is_set():
                 frame = await asyncio.to_thread(self.rtsp_reader.read)
@@ -291,6 +293,7 @@ class CameraContext:
             await asyncio.to_thread(self.rtsp_reader.close)
 
     def _mark_processed_frame(self) -> None:
+        """Tính FPS xử lý bằng cửa sổ thời gian trượt thay vì dựa trên một frame đơn lẻ."""
         now_s = time.perf_counter()
         self._processed_frame_times_s.append(now_s)
         cutoff_s = now_s - self._processing_fps_window_s
@@ -321,7 +324,7 @@ class CameraContext:
             gps_lng=camera_loc.gps_lng,
         )
 
-        # Each candidate is (vehicle_id, vehicle_type, {"lane_id":..., "violation":...}, bbox_xyxy)
+        # Mỗi phần tử gồm: vehicle_id, vehicle_type, thông tin lỗi và bbox tại lúc vi phạm.
         for vehicle_id, vehicle_type, cand, bbox_xyxy in violation_candidates:
             image_path = await asyncio.to_thread(
                 self._create_violation_evidence,
@@ -345,14 +348,15 @@ class CameraContext:
                 ts=ts_dt,
             )
 
-            # Save to DB (sync call in thread)
+            # Ghi DB là thao tác đồng bộ nên chuyển sang thread để không chặn event loop.
             await asyncio.to_thread(self._save_event_to_db, event)
 
-            # Update realtime stats and push over websocket
+            # Cập nhật thống kê realtime rồi phát sự kiện cho client đang nghe.
             self.stats.update_realtime(event)
             self.on_violation(event)
 
     def _crop_violation_evidence(self, frame_bgr, bbox_xyxy: list[float]):
+        """Cắt vùng ảnh quanh xe vi phạm, có nới biên để giữ thêm ngữ cảnh mặt đường."""
         frame_height, frame_width = frame_bgr.shape[:2]
         if frame_height <= 0 or frame_width <= 0:
             return frame_bgr
@@ -387,6 +391,7 @@ class CameraContext:
         lane_id: int,
         violation: str,
     ) -> Optional[str]:
+        """Tạo và lưu ảnh bằng chứng cho một vi phạm; lỗi lưu ảnh chỉ ghi log rồi bỏ qua."""
         try:
             evidence_bgr = self._crop_violation_evidence(frame_bgr, bbox_xyxy)
             return save_evidence_image(
@@ -404,5 +409,6 @@ class CameraContext:
             return None
 
     def _save_event_to_db(self, event: ViolationEvent) -> None:
+        """Lưu một sự kiện vi phạm xuống cơ sở dữ liệu."""
         with self._db_session_factory() as session:
             event.id = insert_violation(session, event)

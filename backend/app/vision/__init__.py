@@ -1,2 +1,2 @@
-"""YOLOv8 detector wrapper."""
+"""Lớp bao cho bộ phát hiện YOLOv8."""
 

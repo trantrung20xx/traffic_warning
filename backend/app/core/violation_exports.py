@@ -50,6 +50,7 @@ XLSX_EXPORT_COLUMNS: list[tuple[str, str]] = [
 
 
 def _parse_iso_datetime(value: Optional[str]) -> Optional[datetime]:
+    """Phân tích chuỗi thời gian ISO và chuẩn hóa về UTC nếu có giá trị."""
     if not value:
         return None
     return ensure_utc_datetime(datetime.fromisoformat(value))
@@ -91,6 +92,7 @@ def _build_location_label(location: Optional[dict]) -> str:
 
 
 def _build_evidence_link(row: dict, *, base_url: str) -> str:
+    """Tạo URL tuyệt đối đến ảnh bằng chứng để file export mở được trực tiếp."""
     value = row.get("image_url") or row.get("image_path")
     if not value:
         return "-"
@@ -105,6 +107,7 @@ def _build_evidence_link(row: dict, *, base_url: str) -> str:
 
 
 def build_violation_export_rows(rows: list[dict], *, base_url: str) -> list[dict]:
+    """Chuẩn hóa dữ liệu lịch sử vi phạm thành các cột phục vụ xuất báo cáo."""
     export_rows = []
     for index, row in enumerate(rows, start=1):
         export_rows.append(
@@ -124,12 +127,14 @@ def build_violation_export_rows(rows: list[dict], *, base_url: str) -> list[dict
 
 
 def build_violation_export_filename(*, extension: str, from_ts: Optional[str], to_ts: Optional[str]) -> str:
+    """Sinh tên file export theo khoảng thời gian người dùng đã lọc."""
     start = _format_filename_date(from_ts, "start")
     end = _format_filename_date(to_ts, "end")
     return f"violation_history_{start}_{end}.{extension}"
 
 
 def build_violation_history_csv(rows: list[dict]) -> bytes:
+    """Đóng gói lịch sử vi phạm thành nội dung CSV có BOM để Excel đọc tiếng Việt đúng."""
     buffer = StringIO(newline="")
     writer = csv.writer(buffer)
     writer.writerow([label for _, label in CSV_EXPORT_COLUMNS])
@@ -139,6 +144,7 @@ def build_violation_history_csv(rows: list[dict]) -> bytes:
 
 
 def build_violation_history_xlsx(rows: list[dict]) -> bytes:
+    """Đóng gói lịch sử vi phạm thành tệp Excel với tiêu đề và độ rộng cột dễ đọc."""
     try:
         from openpyxl import Workbook
         from openpyxl.styles import Font

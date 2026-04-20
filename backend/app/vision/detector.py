@@ -18,7 +18,7 @@ class Detection:
 
 class YoloV8VehicleDetector:
     """
-    YOLOv8 vehicle detector/classifier.
+    Bộ phát hiện và phân loại phương tiện dùng YOLOv8.
     """
 
     ALLOWED_CLASSES = {"motorcycle", "car", "truck", "bus"}
@@ -36,14 +36,14 @@ class YoloV8VehicleDetector:
         self.requested_device = (device or "auto").strip()
         self.device = self._resolve_inference_device(self.requested_device)
 
-        # Map COCO class indices -> names and filter to required vehicle types.
+        # Ánh xạ id lớp COCO sang tên lớp rồi lọc chỉ giữ các loại xe cần dùng.
         self.class_names: dict[int, str] = dict(self.model.names)
         self.vehicle_class_ids: list[int] = [
             cls_id
             for cls_id, name in self.class_names.items()
             if name in self.ALLOWED_CLASSES
         ]
-        # If weights aren't COCO-compatible, the user will need to adjust.
+        # Nếu bộ weight không theo nhãn COCO thì cần chỉnh lại phần ánh xạ lớp ở đây.
 
     def _resolve_inference_device(self, requested_device: str) -> str:
         normalized = requested_device.lower()
@@ -106,6 +106,7 @@ class YoloV8VehicleDetector:
         return [str(path) for path in candidates]
 
     def detect(self, frame_bgr: np.ndarray) -> list[Detection]:
+        """Chạy YOLO trên một frame và chỉ trả về các detection là phương tiện giao thông."""
         results = self.model.predict(
             frame_bgr,
             device=self.device,

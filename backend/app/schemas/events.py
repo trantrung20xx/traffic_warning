@@ -12,7 +12,7 @@ class PolygonPoint(BaseModel):
 
 
 class BBox(BaseModel):
-    # Pixel coordinates in the camera frame coordinate system
+    # Tọa độ pixel trong hệ trục của khung hình camera.
     x1: float
     y1: float
     x2: float
@@ -43,7 +43,7 @@ class ViolationLocation(BaseModel):
 
 
 class ViolationEvent(BaseModel):
-    # Must match the JSON schema you provided (field names)
+    # Tên trường cần giữ đúng với JSON schema dùng để trao đổi dữ liệu.
     id: Optional[int] = None
     camera_id: str
     location: ViolationLocation
@@ -72,7 +72,7 @@ class ViolationEvent(BaseModel):
     ) -> "ViolationEvent":
         if ts is None:
             ts = datetime.now(timezone.utc)
-        # Ensure same field types as required by your schema
+        # Giữ đúng kiểu dữ liệu mà schema yêu cầu để frontend và DB xử lý thống nhất.
         return ViolationEvent(
             camera_id=camera_id,
             location=location,

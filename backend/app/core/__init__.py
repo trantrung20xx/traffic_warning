@@ -1,2 +1,2 @@
-"""Configuration loading and app core utilities."""
+"""Tải cấu hình và các tiện ích lõi của ứng dụng."""
 

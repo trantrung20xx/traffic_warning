@@ -12,11 +12,11 @@ class VehicleTypeState:
 
 class TemporalVehicleTypeAssigner:
     """
-    Stabilize vehicle class predictions across a short tracking window.
+    Làm mượt nhãn loại phương tiện trong một cửa sổ track ngắn.
 
-    A single frame can easily confuse car/truck/bus under occlusion or motion blur.
-    We therefore aggregate recent predictions for the same tracked vehicle_id and
-    resolve the label using confidence-weighted voting with a slight recency bias.
+    Một frame đơn lẻ rất dễ nhầm ô tô, xe tải, xe buýt khi bị che khuất hoặc nhòe chuyển động.
+    Vì vậy cần gom các dự đoán gần đây của cùng `vehicle_id` rồi bỏ phiếu theo độ tin cậy,
+    đồng thời ưu tiên nhẹ cho các quan sát mới hơn.
     """
 
     def __init__(self, *, history_window_ms: int = 4000, history_size: int = 12):
@@ -25,6 +25,7 @@ class TemporalVehicleTypeAssigner:
         self._vehicle_states: dict[int, VehicleTypeState] = {}
 
     def resolve_type(self, *, vehicle_id: int, predicted_type: str, confidence: float, ts: datetime) -> str:
+        """Trả về loại phương tiện ổn định hơn cho xe đang theo dõi."""
         state = self._vehicle_states.get(vehicle_id)
         if state is None:
             state = VehicleTypeState()
@@ -41,12 +42,14 @@ class TemporalVehicleTypeAssigner:
         scores: dict[str, float] = {}
         total = len(state.recent_observations)
         for index, (_, observed_type, observed_confidence) in enumerate(state.recent_observations):
+            # Quan sát mới được cộng điểm nhỉnh hơn để nhãn đổi nhanh khi tracker đã ổn định.
             recency_weight = 1.0 + (index / max(total - 1, 1)) * 0.15
             scores[observed_type] = scores.get(observed_type, 0.0) + observed_confidence * recency_weight
 
         return max(scores.items(), key=lambda item: item[1])[0] if scores else predicted_type
 
     def prune(self, *, current_ts: datetime, max_age_s: float = 10.0) -> None:
+        """Dọn lịch sử nhãn của các xe đã biến mất khỏi khung hình."""
         cutoff = current_ts - timedelta(seconds=float(max_age_s))
         stale_vehicle_ids = []
         for vehicle_id, state in self._vehicle_states.items():

@@ -25,8 +25,8 @@ class LaneHistoryState:
 
 class LaneLogic:
     """
-    Assign lane_id using hand-crafted polygons.
-    No AI lane detection is used.
+    Gán `lane_id` bằng polygon vẽ tay.
+    Phần này không dùng AI nhận diện làn đường.
     """
 
     def __init__(self, lane_polygons: list[LanePolygon]):
@@ -36,6 +36,7 @@ class LaneLogic:
         self._lane_order = [lp.lane_id for lp in lane_polygons]
 
     def assign_lane_id_from_bbox_xyxy(self, bbox_xyxy: list[float] | tuple[float, ...]) -> Optional[int]:
+        """Xác định làn theo điểm giữa cạnh đáy của bounding box phương tiện."""
         px, py = bbox_bottom_center(bbox_xyxy)
 
         matches: list[int] = []
@@ -47,16 +48,16 @@ class LaneLogic:
         if len(matches) == 1:
             return matches[0]
         if len(matches) > 1:
-            # Misconfigured overlapping polygons. Skeleton: choose the first.
+            # Nếu polygon các làn chồng lấn do cấu hình sai thì tạm lấy làn xuất hiện trước.
             return matches[0]
         return None
 
 
 class TemporalLaneAssigner:
     """
-    Stabilize per-frame polygon hits before the rest of the pipeline consumes lane_id.
-    Traffic cameras are fixed, so a short majority window plus hysteresis gives behavior
-    closer to real ITS rule engines than reacting to a single noisy frame.
+    Làm mượt kết quả gán làn theo từng frame trước khi đưa vào pipeline chính.
+    Camera giao thông là camera cố định nên dùng cửa sổ đa số kèm hysteresis sẽ ổn định hơn
+    so với phản ứng ngay theo một frame nhiễu.
     """
 
     def __init__(
@@ -72,6 +73,7 @@ class TemporalLaneAssigner:
         self._vehicle_states: dict[int, LaneHistoryState] = {}
 
     def resolve_lane(self, *, vehicle_id: int, raw_lane_id: Optional[int], ts: datetime) -> Optional[int]:
+        """Trả về làn ổn định cho một xe tại thời điểm hiện tại."""
         st = self._vehicle_states.get(vehicle_id)
         if st is None:
             st = LaneHistoryState()
@@ -131,6 +133,7 @@ class TemporalLaneAssigner:
             del self._vehicle_states[vehicle_id]
 
     def _prune_history(self, state: LaneHistoryState, current_ts: datetime) -> None:
+        """Loại các quan sát cũ đã nằm ngoài cửa sổ bỏ phiếu."""
         cutoff_ts = current_ts.timestamp() - (self._observation_window_ms / 1000.0)
         while state.recent_observations and state.recent_observations[0][0].timestamp() < cutoff_ts:
             state.recent_observations.popleft()

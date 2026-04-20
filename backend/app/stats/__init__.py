@@ -1,2 +1,2 @@
-"""Statistics engine."""
+"""Bộ xử lý thống kê."""
 

@@ -14,6 +14,7 @@ def create_ws_router(manager: CameraManager) -> APIRouter:
     router = APIRouter()
 
     async def _wait_for_queue_or_disconnect(ws: WebSocket, q: asyncio.Queue):
+        """Chờ bản tin mới hoặc phát hiện client đã ngắt kết nối, tùy cái nào đến trước."""
         queue_task = asyncio.create_task(q.get())
         receive_task = asyncio.create_task(ws.receive())
         done, pending = await asyncio.wait(

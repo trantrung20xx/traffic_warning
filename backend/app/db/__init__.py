@@ -1,2 +1,2 @@
-"""SQLite DB layer."""
+"""Tầng truy cập cơ sở dữ liệu SQLite."""
 

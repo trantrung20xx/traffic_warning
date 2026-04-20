@@ -8,6 +8,7 @@ from app.tracking.tracker import Track
 
 
 def _bbox_iou(box_a: list[float], box_b: list[float]) -> float:
+    """Tính IoU giữa hai bounding box để đo mức độ chồng lấn hình học."""
     ax1, ay1, ax2, ay2 = box_a
     bx1, by1, bx2, by2 = box_b
 
@@ -36,6 +37,7 @@ def _bbox_center(box: list[float]) -> tuple[float, float]:
 
 
 def _normalized_center_distance(box_a: list[float], box_b: list[float]) -> float:
+    """Tính khoảng cách tâm đã chuẩn hóa theo kích thước box để so sánh xe lớn nhỏ công bằng hơn."""
     ax, ay = _bbox_center(box_a)
     bx, by = _bbox_center(box_b)
     aw = max(1.0, box_a[2] - box_a[0])
@@ -58,13 +60,13 @@ class StableTrackState:
 
 class StableTrackIdAssigner:
     """
-    Preserve a stable vehicle_id even when the underlying tracker briefly switches raw ids.
+    Giữ `vehicle_id` ổn định ngay cả khi tracker bên dưới đổi raw id trong chốc lát.
 
-    Strategy:
-    - Reuse known raw->stable mappings when still geometrically plausible.
-    - If raw ids switch, rematch new detections to recent stable tracks using IoU and
-      center-distance continuity before issuing a new stable id.
-    - Expire stale state aggressively so old ids are not resurrected across separate vehicles.
+    Chiến lược:
+    - Ưu tiên giữ nguyên ánh xạ raw id -> stable id nếu hình học vẫn hợp lý.
+    - Nếu raw id bị đổi, thử nối lại với track ổn định gần nhất bằng IoU và độ liên tục vị trí
+      trước khi cấp một stable id mới.
+    - Xóa trạng thái cũ sớm để tránh tái sử dụng nhầm id cho xe khác.
     """
 
     def __init__(
@@ -82,13 +84,14 @@ class StableTrackIdAssigner:
         self._raw_to_stable: dict[int, int] = {}
 
     def assign(self, *, raw_tracks: Iterable[Track], ts: datetime) -> list[Track]:
+        """Gán stable id cho danh sách track hiện tại."""
         self.prune(current_ts=ts)
 
         remaining_tracks = list(raw_tracks)
         resolved_tracks: list[Track] = []
         used_stable_ids: set[int] = set()
 
-        # First pass: keep existing raw->stable mappings if the geometry is still plausible.
+        # Lượt 1: giữ nguyên ánh xạ cũ nếu vị trí/hình dạng vẫn còn khớp.
         next_remaining_tracks: list[Track] = []
         for track in remaining_tracks:
             stable_vehicle_id = self._raw_to_stable.get(track.vehicle_id)
@@ -108,7 +111,7 @@ class StableTrackIdAssigner:
 
         remaining_tracks = next_remaining_tracks
 
-        # Second pass: recover from raw-id switches by matching to recent stable tracks.
+        # Lượt 2: khi raw id bị đổi, thử nối lại với stable track gần nhất còn mới.
         candidate_matches: list[tuple[float, Track, int]] = []
         for track in remaining_tracks:
             for stable_vehicle_id, state in self._stable_states.items():
@@ -134,7 +137,7 @@ class StableTrackIdAssigner:
             used_stable_ids.add(stable_vehicle_id)
             matched_raw_ids.add(track.vehicle_id)
 
-        # Third pass: issue a fresh stable id only when we genuinely could not bind to a prior track.
+        # Lượt 3: chỉ cấp stable id mới khi thật sự không ghép được với track trước đó.
         for track in remaining_tracks:
             if track.vehicle_id in matched_raw_ids:
                 continue
@@ -146,6 +149,7 @@ class StableTrackIdAssigner:
         return resolved_tracks
 
     def _update_state(self, *, track: Track, stable_vehicle_id: int, ts: datetime) -> Track:
+        """Cập nhật trạng thái của stable track và trả về bản track đã đổi sang stable id."""
         self._stable_states[stable_vehicle_id] = StableTrackState(
             stable_vehicle_id=stable_vehicle_id,
             bbox_xyxy=list(track.bbox_xyxy),
@@ -163,6 +167,7 @@ class StableTrackIdAssigner:
         )
 
     def prune(self, *, current_ts: datetime, max_age_s: float | None = None) -> None:
+        """Xóa stable track và raw mapping đã quá hạn để bộ nhớ không tăng mãi."""
         max_age = timedelta(seconds=float(max_age_s)) if max_age_s is not None else self._max_idle
         stale_ids = [
             stable_vehicle_id

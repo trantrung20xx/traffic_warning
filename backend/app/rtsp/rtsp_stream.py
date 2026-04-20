@@ -10,8 +10,8 @@ import cv2
 
 def normalize_video_source(source: str) -> str:
     """
-    OpenCV VideoCapture accepts RTSP/HTTP URLs as-is.
-    For local files on Windows, resolving to an absolute path avoids subtle path issues.
+    `cv2.VideoCapture` đọc trực tiếp được RTSP/HTTP URL.
+    Với file cục bộ trên Windows, đổi sang đường dẫn tuyệt đối để tránh lỗi đường dẫn khó đoán.
     """
     s = (source or "").strip()
     if not s:
@@ -38,8 +38,8 @@ class Frame:
 
 class RtspFrameReader:
     """
-    Minimal RTSP reader using OpenCV VideoCapture.
-    Real deployment may require FFmpeg for robustness; skeleton keeps it simple.
+    Bộ đọc RTSP tối giản dùng `cv2.VideoCapture`.
+    Môi trường triển khai thực tế có thể cần FFmpeg để ổn định hơn, nhưng ở đây giữ giải pháp gọn nhẹ.
     """
 
     def __init__(
@@ -66,6 +66,7 @@ class RtspFrameReader:
         self._cap = cv2.VideoCapture(self.rtsp_url)
 
     def read(self) -> Optional[Frame]:
+        """Đọc một frame; nếu mất luồng sẽ thử mở lại sau khoảng chờ cấu hình."""
         if self._cap is None:
             self._open()
         assert self._cap is not None

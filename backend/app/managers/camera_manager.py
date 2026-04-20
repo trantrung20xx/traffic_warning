@@ -30,6 +30,8 @@ from app.schemas.events import TrackMessage, ViolationEvent
 
 
 class CameraManager:
+    """Quản lý danh sách camera, context runtime và các kênh realtime toàn hệ thống."""
+
     def __init__(self, repo_root: Path):
         self.repo_root = repo_root
         self.cfg = load_app_config(repo_root)
@@ -44,7 +46,7 @@ class CameraManager:
         self._tasks: dict[str, asyncio.Task] = {}
         self._running = False
 
-        # WebSocket listeners
+        # Danh sách queue và websocket đang đăng ký nhận dữ liệu realtime.
         self._track_listeners: set[asyncio.Queue[TrackMessage | None]] = set()
         self._violation_listeners: set[asyncio.Queue[ViolationEvent | None]] = set()
         self._track_websockets: set[WebSocket] = set()
@@ -160,7 +162,7 @@ class CameraManager:
             )
 
     def _on_track(self, msg: TrackMessage) -> None:
-        # Called inside the event loop (CameraContext.run_forever).
+        # Hàm này chạy trong event loop của CameraContext nên chỉ dùng thao tác không chặn.
         dead: list[asyncio.Queue] = []
         for q in list(self._track_listeners):
             try:
@@ -341,8 +343,8 @@ class CameraManager:
         was_running = self._running
         self._stop_context(camera_id)
         if was_running:
-            # Saving a camera config must swap runtime geometry immediately so monitoring
-            # and violation logic start using the new polygons without a server restart.
+            # Khi lưu lại cấu hình camera phải thay polygon runtime ngay để màn hình giám sát
+            # và logic vi phạm dùng cấu hình mới mà không cần khởi động lại server.
             self._start_context(camera_id)
 
     def _require_camera_exists(self, camera_id: str) -> None:

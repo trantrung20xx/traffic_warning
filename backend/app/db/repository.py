@@ -13,7 +13,7 @@ from app.schemas.events import ViolationEvent
 
 
 def insert_violation(session, event: ViolationEvent) -> int:
-    # Parse timestamp string back to datetime for DB storage
+    # Đổi chuỗi timestamp của event về `datetime` để lưu đúng kiểu trong DB.
     ts = ensure_utc_datetime(datetime.fromisoformat(event.timestamp))
 
     row = Violation(
@@ -146,6 +146,7 @@ def query_dashboard_analytics(
     to_ts: Optional[str] = None,
     camera_id: Optional[str] = None,
 ):
+    """Tổng hợp dữ liệu dashboard theo camera, tuyến đường và mốc giờ."""
     rows = session.execute(
         _base_violation_query(session, from_ts=from_ts, to_ts=to_ts, camera_id=camera_id).order_by(Violation.timestamp_utc)
     ).scalars().all()

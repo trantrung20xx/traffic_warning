@@ -14,24 +14,24 @@ class VehicleState:
     vehicle_type: str
 
     primary_lane_id: Optional[int] = None
-    # Wrong-lane detection uses realtime timestamp (independent of FPS)
+    # Tính sai làn theo thời gian thực thay vì số frame để không phụ thuộc FPS.
     illegal_lane_started_ts: Optional[datetime] = None
 
-    # Maneuver inference state
+    # Trạng thái suy luận hướng đi cuối cùng của xe theo turn region.
     first_maneuver: Optional[str] = None
     maneuver_hit_counts: dict[str, int] = field(default_factory=dict)
 
-    # Keep emitted violations to avoid duplicates
+    # Ghi nhớ lỗi đã phát ra để không bắn lặp nhiều lần cho cùng một xe.
     emitted: set[str] = field(default_factory=set)
     last_seen_ts: Optional[datetime] = None
 
 
 class ViolationLogic:
     """
-    Rule engine (NOT end-to-end AI).
-    Violation decision is based on:
-    - camera-specific lane polygons + turn regions
-    - vehicle's track_id history (vehicle_id)
+    Bộ luật phát hiện vi phạm, không phải AI end-to-end.
+    Quyết định vi phạm dựa trên:
+    - polygon làn và turn region cấu hình riêng cho từng camera
+    - lịch sử track của từng xe qua `vehicle_id`
     """
 
     def __init__(
@@ -58,7 +58,7 @@ class ViolationLogic:
         ts: datetime,
     ) -> list[dict]:
         """
-        Returns a list of violation candidates:
+        Trả về danh sách vi phạm ứng viên:
         [
           {
             "lane_id": int,
@@ -76,7 +76,7 @@ class ViolationLogic:
         px, py = bbox_bottom_center(bbox_xyxy)
         primary_lane_id = st.primary_lane_id
 
-        # Assign primary lane as soon as we have a confident lane_id
+        # Ghi nhận làn gốc ngay khi đã có lane_id đủ tin cậy để làm mốc so sánh về sau.
         if primary_lane_id is None and lane_id is not None:
             st.primary_lane_id = lane_id
             primary_lane_id = lane_id
@@ -91,7 +91,7 @@ class ViolationLogic:
         violations: list[dict] = []
 
         # ----------------------
-        # Vehicle type restriction
+        # Kiểm tra loại phương tiện có được phép đi trong làn gốc hay không.
         # ----------------------
         allowed_vehicle_types = lp.allowed_vehicle_types
         if allowed_vehicle_types:
@@ -100,7 +100,7 @@ class ViolationLogic:
                 violations.append({"lane_id": primary_lane_id, "violation": "vehicle_type_not_allowed"})
 
         # ----------------------
-        # Wrong lane
+        # Kiểm tra đi sai làn: xe phải nằm sai làn đủ lâu mới phát cảnh báo.
         # ----------------------
         allowed_lane_changes = lp.allowed_lane_changes
         if allowed_lane_changes is None:
@@ -118,7 +118,7 @@ class ViolationLogic:
                     violations.append({"lane_id": primary_lane_id, "violation": "wrong_lane"})
 
         # ----------------------
-        # Wrong turn (via turn regions)
+        # Kiểm tra hướng đi sai bằng cách xem xe đi vào turn region nào đầu tiên.
         # ----------------------
         if lp.turn_regions:
             for maneuver, poly in lp.turn_regions.items():
@@ -145,7 +145,7 @@ class ViolationLogic:
 
     def prune(self, *, current_ts: datetime, max_age_s: float) -> None:
         """
-        Prevent unbounded growth of per-vehicle state in long-running simulations.
+        Xóa trạng thái của các xe quá cũ để bộ nhớ không tăng mãi trong lúc chạy lâu.
         """
         cutoff_ms = (current_ts.timestamp() - float(max_age_s))
         to_delete: list[int] = []

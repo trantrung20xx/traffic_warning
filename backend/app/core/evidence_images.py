@@ -11,6 +11,7 @@ from app.core.timezone import to_vietnam_datetime
 
 
 def _sanitize_fragment(value: str) -> str:
+    """Làm sạch chuỗi để dùng an toàn trong tên file và thư mục."""
     cleaned = []
     for char in str(value or ""):
         if char.isalnum() or char in {"_", "-"}:
@@ -36,6 +37,7 @@ def build_evidence_filename(
 
 
 def build_evidence_date_folder(timestamp_utc_ms: int) -> str:
+    """Tạo thư mục ngày theo múi giờ Việt Nam để gom ảnh vi phạm theo ngày địa phương."""
     timestamp = datetime.fromtimestamp(timestamp_utc_ms / 1000.0, tz=timezone.utc)
     vietnam_dt = to_vietnam_datetime(timestamp)
     return f"{vietnam_dt.day:02d}-{vietnam_dt.month:02d}-{vietnam_dt.year:04d}"
@@ -53,6 +55,7 @@ def build_evidence_image_url(relative_path: str | None) -> str | None:
 
 
 def resolve_evidence_image_path(repo_root: Path, relative_path: str | None) -> Path | None:
+    """Giải đường dẫn tương đối thành file thật và chặn truy cập vượt ra ngoài thư mục cho phép."""
     if not relative_path:
         return None
     cfg = load_app_config(repo_root)
@@ -76,6 +79,7 @@ def save_evidence_image(
     image_bgr,
     jpeg_quality: int = 92,
 ) -> str:
+    """Mã hóa và lưu ảnh bằng chứng, sau đó trả về đường dẫn tương đối để lưu DB."""
     cfg = load_app_config(repo_root)
     filename = build_evidence_filename(
         camera_id=camera_id,
@@ -96,6 +100,7 @@ def save_evidence_image(
 
 
 def delete_evidence_images_for_camera(repo_root: Path, camera_id: str) -> None:
+    """Xóa toàn bộ ảnh bằng chứng đã lưu cho một camera."""
     cfg = load_app_config(repo_root)
     camera_dir = cfg.evidence_images_dir / _sanitize_fragment(camera_id)
     if not camera_dir.exists():

@@ -18,8 +18,8 @@ class ViolationAggKey:
 
 class StatisticsEngine:
     """
-    Statistics is purely rule-based (no AI).
-    It can update in-memory on realtime events and also support DB queries.
+    Bộ thống kê thuần theo luật, không dùng AI.
+    Có thể cộng dồn realtime trong bộ nhớ và song song hỗ trợ truy vấn từ DB.
     """
 
     def __init__(self):
@@ -48,7 +48,7 @@ class StatisticsEngine:
                     "count": count,
                 }
             )
-        # Stable order for UI
+        # Sắp xếp cố định để UI hiển thị ổn định giữa các lần render.
         rows.sort(key=lambda r: (r.get("camera_id") or "", r.get("violation") or "", r.get("vehicle_type") or ""))
         return rows
 
