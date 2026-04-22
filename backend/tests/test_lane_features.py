@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.core.config import CameraLaneConfig
+from app.core.config import CameraLaneConfig, denormalize_lane_config
 from app.logic.violation_logic import ViolationLogic
 
 
@@ -90,6 +90,294 @@ class LaneFeatureTests(unittest.TestCase):
         )
 
         self.assertEqual(result, [{"lane_id": 1, "violation": "vehicle_type_not_allowed"}])
+
+    def test_wrong_lane_uses_stable_lane_transition_instead_of_primary_lane(self) -> None:
+        lane_config = CameraLaneConfig.model_validate(
+            {
+                "camera_id": "cam_test",
+                "frame_width": 100,
+                "frame_height": 100,
+                "lanes": [
+                    {
+                        "lane_id": 1,
+                        "polygon": [[0.0, 0.0], [0.49, 0.0], [0.49, 1.0], [0.0, 1.0]],
+                        "allowed_lane_changes": [1],
+                        "allowed_maneuvers": ["straight"],
+                        "allowed_vehicle_types": ["car"],
+                    },
+                    {
+                        "lane_id": 2,
+                        "polygon": [[0.51, 0.0], [1.0, 0.0], [1.0, 1.0], [0.51, 1.0]],
+                        "allowed_lane_changes": [2],
+                        "allowed_maneuvers": ["right"],
+                        "allowed_vehicle_types": ["car"],
+                    },
+                ],
+            }
+        )
+        runtime_lane_config = denormalize_lane_config(lane_config)
+        logic = ViolationLogic(
+            runtime_lane_config.lanes,
+            wrong_lane_min_duration_ms=1200,
+            turn_region_min_hits=3,
+            turn_candidate_window_ms=500,
+        )
+        ts = datetime(2026, 4, 9, 8, 0, 0, tzinfo=timezone.utc)
+
+        self.assertEqual(
+            logic.update_and_maybe_generate_violation(
+                vehicle_id=301,
+                vehicle_type="car",
+                lane_id=1,
+                bbox_xyxy=[10, 10, 20, 20],
+                ts=ts,
+            ),
+            [],
+        )
+        self.assertEqual(
+            logic.update_and_maybe_generate_violation(
+                vehicle_id=301,
+                vehicle_type="car",
+                lane_id=2,
+                bbox_xyxy=[60, 10, 70, 20],
+                ts=ts + timedelta(milliseconds=200),
+            ),
+            [],
+        )
+        result = logic.update_and_maybe_generate_violation(
+            vehicle_id=301,
+            vehicle_type="car",
+            lane_id=2,
+            bbox_xyxy=[60, 10, 70, 20],
+            ts=ts + timedelta(milliseconds=1500),
+        )
+
+        self.assertEqual(result, [{"lane_id": 2, "violation": "wrong_lane"}])
+
+    def test_illegal_turn_fires_for_disallowed_maneuver_from_current_lane(self) -> None:
+        lane_config = CameraLaneConfig.model_validate(
+            {
+                "camera_id": "cam_test",
+                "frame_width": 100,
+                "frame_height": 100,
+                "lanes": [
+                    {
+                        "lane_id": 1,
+                        "polygon": [[0.0, 0.0], [0.49, 0.0], [0.49, 1.0], [0.0, 1.0]],
+                        "turn_regions": {
+                            "right": [[0.2, 0.6], [0.45, 0.6], [0.45, 0.95], [0.2, 0.95]],
+                        },
+                        "allowed_maneuvers": ["straight"],
+                        "allowed_lane_changes": [1, 2],
+                        "allowed_vehicle_types": ["car"],
+                    },
+                    {
+                        "lane_id": 2,
+                        "polygon": [[0.51, 0.0], [1.0, 0.0], [1.0, 1.0], [0.51, 1.0]],
+                        "turn_regions": {
+                            "right": [[0.55, 0.6], [0.9, 0.6], [0.9, 0.95], [0.55, 0.95]],
+                        },
+                        "allowed_maneuvers": ["right"],
+                        "allowed_lane_changes": [2],
+                        "allowed_vehicle_types": ["car"],
+                    },
+                ],
+            }
+        )
+        runtime_lane_config = denormalize_lane_config(lane_config)
+        logic = ViolationLogic(
+            runtime_lane_config.lanes,
+            wrong_lane_min_duration_ms=1200,
+            turn_region_min_hits=3,
+            turn_candidate_window_ms=500,
+        )
+        ts = datetime(2026, 4, 9, 8, 0, 0, tzinfo=timezone.utc)
+
+        self.assertEqual(
+            logic.update_and_maybe_generate_violation(
+                vehicle_id=401,
+                vehicle_type="car",
+                lane_id=1,
+                bbox_xyxy=[20, 50, 30, 70],
+                ts=ts,
+            ),
+            [],
+        )
+        self.assertEqual(
+            logic.update_and_maybe_generate_violation(
+                vehicle_id=401,
+                vehicle_type="car",
+                lane_id=1,
+                bbox_xyxy=[25, 60, 35, 80],
+                ts=ts + timedelta(milliseconds=100),
+            ),
+            [],
+        )
+        self.assertEqual(
+            logic.update_and_maybe_generate_violation(
+                vehicle_id=401,
+                vehicle_type="car",
+                lane_id=1,
+                bbox_xyxy=[28, 62, 38, 82],
+                ts=ts + timedelta(milliseconds=200),
+            ),
+            [{"lane_id": 1, "violation": "turn_right_not_allowed"}],
+        )
+
+    def test_turn_from_allowed_lane_is_valid(self) -> None:
+        lane_config = CameraLaneConfig.model_validate(
+            {
+                "camera_id": "cam_test",
+                "frame_width": 100,
+                "frame_height": 100,
+                "lanes": [
+                    {
+                        "lane_id": 1,
+                        "polygon": [[0.0, 0.0], [0.49, 0.0], [0.49, 1.0], [0.0, 1.0]],
+                        "turn_regions": {
+                            "right": [[0.2, 0.6], [0.45, 0.6], [0.45, 0.95], [0.2, 0.95]],
+                        },
+                        "allowed_maneuvers": ["straight"],
+                        "allowed_lane_changes": [1, 2],
+                        "allowed_vehicle_types": ["car"],
+                    },
+                    {
+                        "lane_id": 2,
+                        "polygon": [[0.51, 0.0], [1.0, 0.0], [1.0, 1.0], [0.51, 1.0]],
+                        "turn_regions": {
+                            "right": [[0.55, 0.6], [0.9, 0.6], [0.9, 0.95], [0.55, 0.95]],
+                        },
+                        "allowed_maneuvers": ["right"],
+                        "allowed_lane_changes": [2],
+                        "allowed_vehicle_types": ["car"],
+                    },
+                ],
+            }
+        )
+        runtime_lane_config = denormalize_lane_config(lane_config)
+        logic = ViolationLogic(
+            runtime_lane_config.lanes,
+            wrong_lane_min_duration_ms=1200,
+            turn_region_min_hits=3,
+            turn_candidate_window_ms=500,
+        )
+        ts = datetime(2026, 4, 9, 8, 0, 0, tzinfo=timezone.utc)
+
+        first = logic.update_and_maybe_generate_violation(
+            vehicle_id=402,
+            vehicle_type="car",
+            lane_id=2,
+            bbox_xyxy=[60, 50, 70, 70],
+            ts=ts,
+        )
+        second = logic.update_and_maybe_generate_violation(
+            vehicle_id=402,
+            vehicle_type="car",
+            lane_id=2,
+            bbox_xyxy=[65, 60, 75, 80],
+            ts=ts + timedelta(milliseconds=100),
+        )
+        third = logic.update_and_maybe_generate_violation(
+            vehicle_id=402,
+            vehicle_type="car",
+            lane_id=2,
+            bbox_xyxy=[68, 62, 78, 82],
+            ts=ts + timedelta(milliseconds=200),
+        )
+
+        self.assertEqual(first, [])
+        self.assertEqual(second, [])
+        self.assertEqual(third, [])
+
+    def test_lane_change_to_allowed_turn_lane_before_commit_is_valid(self) -> None:
+        lane_config = CameraLaneConfig.model_validate(
+            {
+                "camera_id": "cam_test",
+                "frame_width": 100,
+                "frame_height": 100,
+                "lanes": [
+                    {
+                        "lane_id": 1,
+                        "polygon": [[0.0, 0.0], [0.49, 0.0], [0.49, 1.0], [0.0, 1.0]],
+                        "turn_regions": {
+                            "right": [[0.2, 0.6], [0.45, 0.6], [0.45, 0.95], [0.2, 0.95]],
+                        },
+                        "allowed_maneuvers": ["straight"],
+                        "allowed_lane_changes": [1, 2],
+                        "allowed_vehicle_types": ["car"],
+                    },
+                    {
+                        "lane_id": 2,
+                        "polygon": [[0.51, 0.0], [1.0, 0.0], [1.0, 1.0], [0.51, 1.0]],
+                        "turn_regions": {
+                            "right": [[0.55, 0.6], [0.9, 0.6], [0.9, 0.95], [0.55, 0.95]],
+                        },
+                        "allowed_maneuvers": ["right"],
+                        "allowed_lane_changes": [2],
+                        "allowed_vehicle_types": ["car"],
+                    },
+                ],
+            }
+        )
+        runtime_lane_config = denormalize_lane_config(lane_config)
+        logic = ViolationLogic(
+            runtime_lane_config.lanes,
+            wrong_lane_min_duration_ms=1200,
+            turn_region_min_hits=3,
+            turn_candidate_window_ms=500,
+        )
+        ts = datetime(2026, 4, 9, 8, 0, 0, tzinfo=timezone.utc)
+
+        self.assertEqual(
+            logic.update_and_maybe_generate_violation(
+                vehicle_id=403,
+                vehicle_type="car",
+                lane_id=1,
+                bbox_xyxy=[20, 40, 30, 60],
+                ts=ts,
+            ),
+            [],
+        )
+        self.assertEqual(
+            logic.update_and_maybe_generate_violation(
+                vehicle_id=403,
+                vehicle_type="car",
+                lane_id=2,
+                bbox_xyxy=[60, 40, 70, 60],
+                ts=ts + timedelta(milliseconds=150),
+            ),
+            [],
+        )
+        self.assertEqual(
+            logic.update_and_maybe_generate_violation(
+                vehicle_id=403,
+                vehicle_type="car",
+                lane_id=2,
+                bbox_xyxy=[62, 58, 72, 78],
+                ts=ts + timedelta(milliseconds=250),
+            ),
+            [],
+        )
+        self.assertEqual(
+            logic.update_and_maybe_generate_violation(
+                vehicle_id=403,
+                vehicle_type="car",
+                lane_id=2,
+                bbox_xyxy=[65, 60, 75, 80],
+                ts=ts + timedelta(milliseconds=350),
+            ),
+            [],
+        )
+        self.assertEqual(
+            logic.update_and_maybe_generate_violation(
+                vehicle_id=403,
+                vehicle_type="car",
+                lane_id=2,
+                bbox_xyxy=[68, 62, 78, 82],
+                ts=ts + timedelta(milliseconds=450),
+            ),
+            [],
+        )
 
 if __name__ == "__main__":
     unittest.main()

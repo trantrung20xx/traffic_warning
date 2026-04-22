@@ -184,6 +184,7 @@ Các tham số runtime đang được dùng:
   - `track_push_interval_ms`
   - `wrong_lane_min_duration_ms`
   - `turn_region_min_hits`
+  - `turn_candidate_window_ms`
   - `state_prune_max_age_s`
 - preview/ảnh bằng chứng:
   - `preview_max_fps`

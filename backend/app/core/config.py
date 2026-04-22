@@ -160,6 +160,7 @@ class AppConfig(BaseModel):
     track_push_interval_ms: int = 200
     wrong_lane_min_duration_ms: int = 1200
     turn_region_min_hits: int = 3
+    turn_candidate_window_ms: int = 500
     state_prune_max_age_s: float = 60.0
     rtsp_reconnect_delay_s: float = 2.0
     preview_max_fps: float = 15.0
@@ -301,6 +302,7 @@ def load_app_config(repo_root: Path) -> AppConfig:
                 )
             ),
             turn_region_min_hits=int(settings.get("turn_region_min_hits", 3)),
+            turn_candidate_window_ms=int(settings.get("turn_candidate_window_ms", 500)),
             state_prune_max_age_s=float(settings.get("state_prune_max_age_s", 60.0)),
             rtsp_reconnect_delay_s=float(settings.get("rtsp_reconnect_delay_s", 2.0)),
             preview_max_fps=float(settings.get("preview_max_fps", 15.0)),

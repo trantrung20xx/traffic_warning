@@ -64,6 +64,7 @@ class CameraContext:
         track_push_interval_ms: int = 200,
         wrong_lane_min_duration_ms: int = 1200,
         turn_region_min_hits: int = 3,
+        turn_candidate_window_ms: int = 500,
         state_prune_max_age_s: float = 60.0,
         rtsp_reconnect_delay_s: float = 2.0,
         preview_max_fps: float = 15.0,
@@ -125,6 +126,7 @@ class CameraContext:
             lane_config.lanes,
             wrong_lane_min_duration_ms=wrong_lane_min_duration_ms,
             turn_region_min_hits=turn_region_min_hits,
+            turn_candidate_window_ms=turn_candidate_window_ms,
         )
 
         self.stats = StatisticsEngine()

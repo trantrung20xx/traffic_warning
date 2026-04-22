@@ -316,6 +316,7 @@ class CameraManager:
             track_push_interval_ms=self.cfg.track_push_interval_ms,
             wrong_lane_min_duration_ms=self.cfg.wrong_lane_min_duration_ms,
             turn_region_min_hits=self.cfg.turn_region_min_hits,
+            turn_candidate_window_ms=self.cfg.turn_candidate_window_ms,
             state_prune_max_age_s=self.cfg.state_prune_max_age_s,
             rtsp_reconnect_delay_s=self.cfg.rtsp_reconnect_delay_s,
             preview_max_fps=self.cfg.preview_max_fps,

@@ -18,6 +18,7 @@
 	"track_push_interval_ms": 200,
 	"wrong_lane_min_duration_ms": 1200,
 	"turn_region_min_hits": 3,
+	"turn_candidate_window_ms": 500,
 	"state_prune_max_age_s": 60.0,
 	"rtsp_reconnect_delay_s": 2.0,
 	"preview_max_fps": 15.0,
