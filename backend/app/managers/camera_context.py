@@ -226,7 +226,11 @@ class CameraContext:
                         confidence=tr.confidence,
                         ts=ts_dt,
                     )
-                    raw_lane_id = self.lane_logic.assign_lane_id_from_bbox_xyxy(tr.bbox_xyxy)
+                    current_stable_lane_id = self.temporal_lane_assigner.get_stable_lane(vehicle_id=tr.vehicle_id)
+                    raw_lane_id = self.lane_logic.assign_lane_id_from_bbox_xyxy(
+                        tr.bbox_xyxy,
+                        preferred_lane_id=current_stable_lane_id,
+                    )
                     lane_id = self.temporal_lane_assigner.resolve_lane(
                         vehicle_id=tr.vehicle_id,
                         raw_lane_id=raw_lane_id,

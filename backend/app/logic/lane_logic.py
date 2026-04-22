@@ -35,7 +35,12 @@ class LaneLogic:
         self._lane_polygons = {lp.lane_id: lp for lp in lane_polygons}
         self._lane_order = [lp.lane_id for lp in lane_polygons]
 
-    def assign_lane_id_from_bbox_xyxy(self, bbox_xyxy: list[float] | tuple[float, ...]) -> Optional[int]:
+    def assign_lane_id_from_bbox_xyxy(
+        self,
+        bbox_xyxy: list[float] | tuple[float, ...],
+        *,
+        preferred_lane_id: Optional[int] = None,
+    ) -> Optional[int]:
         """Xác định làn theo điểm giữa cạnh đáy của bounding box phương tiện."""
         px, py = bbox_bottom_center(bbox_xyxy)
 
@@ -48,7 +53,9 @@ class LaneLogic:
         if len(matches) == 1:
             return matches[0]
         if len(matches) > 1:
-            # Nếu polygon các làn chồng lấn do cấu hình sai thì tạm lấy làn xuất hiện trước.
+            if preferred_lane_id in matches:
+                return preferred_lane_id
+            # Nếu xe chưa có làn ổn định mà polygon bị chồng lấn thì lấy làn xuất hiện trước.
             return matches[0]
         return None
 
@@ -122,6 +129,12 @@ class TemporalLaneAssigner:
 
         return st.stable_lane_id
 
+    def get_stable_lane(self, *, vehicle_id: int) -> Optional[int]:
+        st = self._vehicle_states.get(vehicle_id)
+        if st is None:
+            return None
+        return st.stable_lane_id
+
     def prune(self, *, current_ts: datetime, max_age_s: float) -> None:
         cutoff_ts = current_ts.timestamp() - float(max_age_s)
         stale_ids = [
@@ -137,4 +150,3 @@ class TemporalLaneAssigner:
         cutoff_ts = current_ts.timestamp() - (self._observation_window_ms / 1000.0)
         while state.recent_observations and state.recent_observations[0][0].timestamp() < cutoff_ts:
             state.recent_observations.popleft()
-

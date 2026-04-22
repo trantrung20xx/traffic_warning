@@ -8,6 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.core.config import CameraLaneConfig, denormalize_lane_config
+from app.logic.lane_logic import LaneLogic, TemporalLaneAssigner
 from app.logic.violation_logic import ViolationLogic
 
 
@@ -153,6 +154,50 @@ class LaneFeatureTests(unittest.TestCase):
         )
 
         self.assertEqual(result, [{"lane_id": 2, "violation": "wrong_lane"}])
+
+    def test_overlap_prefers_current_stable_lane_when_vehicle_already_has_lane(self) -> None:
+        lane_config = CameraLaneConfig.model_validate(
+            {
+                "camera_id": "cam_test",
+                "frame_width": 100,
+                "frame_height": 100,
+                "lanes": [
+                    {
+                        "lane_id": 1,
+                        "polygon": [[0.0, 0.0], [0.7, 0.0], [0.7, 1.0], [0.0, 1.0]],
+                    },
+                    {
+                        "lane_id": 2,
+                        "polygon": [[0.3, 0.0], [1.0, 0.0], [1.0, 1.0], [0.3, 1.0]],
+                    },
+                ],
+            }
+        )
+        runtime_lane_config = denormalize_lane_config(lane_config)
+        lane_logic = LaneLogic(runtime_lane_config.lanes)
+        temporal_assigner = TemporalLaneAssigner(min_majority_hits=1, switch_min_duration_ms=0)
+        ts = datetime(2026, 4, 23, 8, 0, 0, tzinfo=timezone.utc)
+        bbox_xyxy = [45, 10, 55, 20]
+
+        self.assertEqual(lane_logic.assign_lane_id_from_bbox_xyxy(bbox_xyxy), 1)
+
+        first_lane = lane_logic.assign_lane_id_from_bbox_xyxy(bbox_xyxy)
+        resolved_first_lane = temporal_assigner.resolve_lane(vehicle_id=501, raw_lane_id=first_lane, ts=ts)
+        self.assertEqual(resolved_first_lane, 1)
+        self.assertEqual(temporal_assigner.get_stable_lane(vehicle_id=501), 1)
+
+        raw_lane_with_preference = lane_logic.assign_lane_id_from_bbox_xyxy(
+            bbox_xyxy,
+            preferred_lane_id=temporal_assigner.get_stable_lane(vehicle_id=501),
+        )
+        resolved_lane = temporal_assigner.resolve_lane(
+            vehicle_id=501,
+            raw_lane_id=raw_lane_with_preference,
+            ts=ts + timedelta(milliseconds=100),
+        )
+
+        self.assertEqual(raw_lane_with_preference, 1)
+        self.assertEqual(resolved_lane, 1)
 
     def test_illegal_turn_fires_for_disallowed_maneuver_from_current_lane(self) -> None:
         lane_config = CameraLaneConfig.model_validate(
