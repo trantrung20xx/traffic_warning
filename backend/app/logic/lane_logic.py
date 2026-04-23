@@ -3,10 +3,11 @@ from __future__ import annotations
 from collections import Counter, deque
 from dataclasses import dataclass, field
 from datetime import datetime
+from math import isclose
 from typing import Optional
 
 from app.core.config import LanePolygon
-from app.logic.polygon import PreparedPolygon, bbox_bottom_center
+from app.logic.polygon import PreparedPolygon, bbox_bottom_center, bbox_bottom_contact_points
 
 
 @dataclass(frozen=True)
@@ -42,8 +43,43 @@ class LaneLogic:
         *,
         preferred_lane_id: Optional[int] = None,
     ) -> Optional[int]:
-        """Xác định làn theo điểm giữa cạnh đáy của bounding box phương tiện."""
+        """
+        Xác định làn dựa trên phần đáy bbox chạm mặt đường.
+
+        Đây là cách bền hơn so với chỉ dùng đúng 1 điểm giữa đáy bbox, đặc biệt khi:
+        - xe lớn đè sang mép làn
+        - polygon các làn có vùng chồng lấn
+        - bbox rung nhẹ làm điểm giữa nhảy qua biên lane
+        """
         px, py = bbox_bottom_center(bbox_xyxy)
+        left_point, center_point, right_point = bbox_bottom_contact_points(bbox_xyxy)
+
+        overlap_scores: list[tuple[float, int, bool]] = []
+        for lane_id in self._lane_order:
+            shape = self._lane_shapes[lane_id]
+            overlap_length = shape.segment_overlap_length(left_point, right_point)
+            center_inside = shape.contains_xy(px, py)
+            overlap_scores.append((overlap_length, lane_id, center_inside))
+
+        best_overlap = max((score for score, _, _ in overlap_scores), default=0.0)
+        if best_overlap > 0.0:
+            overlap_matches = [
+                lane_id
+                for score, lane_id, _ in overlap_scores
+                if isclose(score, best_overlap, rel_tol=1e-9, abs_tol=1e-9)
+            ]
+            if len(overlap_matches) == 1:
+                return overlap_matches[0]
+            if preferred_lane_id in overlap_matches:
+                return preferred_lane_id
+
+            center_overlap_matches = [
+                lane_id
+                for score, lane_id, center_inside in overlap_scores
+                if center_inside and isclose(score, best_overlap, rel_tol=1e-9, abs_tol=1e-9)
+            ]
+            if len(center_overlap_matches) == 1:
+                return center_overlap_matches[0]
 
         matches: list[int] = []
         for lane_id in self._lane_order:

@@ -214,6 +214,34 @@ class LaneFeatureTests(unittest.TestCase):
         self.assertEqual(raw_lane_with_preference, 1)
         self.assertEqual(resolved_lane, 1)
 
+    def test_lane_assignment_prefers_lane_with_larger_bottom_overlap_for_wide_vehicle(self) -> None:
+        lane_config = CameraLaneConfig.model_validate(
+            {
+                "camera_id": "cam_test",
+                "frame_width": 100,
+                "frame_height": 100,
+                "lanes": [
+                    {
+                        "lane_id": 1,
+                        "polygon": [[0.0, 0.0], [0.52, 0.0], [0.52, 1.0], [0.0, 1.0]],
+                    },
+                    {
+                        "lane_id": 2,
+                        "polygon": [[0.40, 0.0], [1.0, 0.0], [1.0, 1.0], [0.40, 1.0]],
+                    },
+                ],
+            }
+        )
+        runtime_lane_config = denormalize_lane_config(lane_config)
+        lane_logic = LaneLogic(runtime_lane_config.lanes)
+
+        # Điểm giữa đáy bbox nằm trong vùng overlap của cả 2 làn.
+        # Cách cũ sẽ chọn lane 1 chỉ vì xuất hiện trước.
+        # Cách mới chọn lane 2 vì đoạn đáy bbox nằm trong lane 2 dài hơn rõ rệt.
+        bbox_xyxy = [35, 10, 65, 20]
+
+        self.assertEqual(lane_logic.assign_lane_id_from_bbox_xyxy(bbox_xyxy), 2)
+
     def test_illegal_turn_fires_for_disallowed_maneuver_from_current_lane(self) -> None:
         logic = self._build_hybrid_logic(
             {

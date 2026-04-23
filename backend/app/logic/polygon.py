@@ -31,6 +31,19 @@ class PreparedPolygon:
     def contains_xy(self, x: float, y: float) -> bool:
         return bool(contains_xy(self.geometry, float(x), float(y)))
 
+    def segment_overlap_length(self, start: Sequence[float], end: Sequence[float]) -> float:
+        """
+        Độ dài phần đoạn thẳng nằm trong polygon.
+
+        Hữu ích cho bài toán gán làn vì đáy bbox của xe phản ánh tốt hơn việc
+        xe đang đè lên làn nào so với chỉ kiểm tra đúng 1 điểm tâm.
+        """
+        segment = LineString([_normalize_point(start), _normalize_point(end)])
+        if segment.is_empty:
+            return 0.0
+        intersection = self.geometry.intersection(segment)
+        return float(intersection.length)
+
 
 @dataclass(slots=True)
 class PreparedLine:
