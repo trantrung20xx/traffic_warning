@@ -3,13 +3,16 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
+from math import hypot
 from typing import Optional
 
 from app.core.config import LanePolygon
 from app.logic.polygon import (
-    bbox_bottom_center,
+    bbox_bottom_contact_points,
+    line_length,
     point_in_polygon,
     segment_intersects_segment,
+    signed_distance_to_line,
 )
 
 
@@ -26,6 +29,33 @@ class TurnManeuverCandidate:
     enter_ts: datetime
     last_hit_ts: datetime
     hit_count: int
+    anchor_point: tuple[float, float]
+    max_progress_px: float = 0.0
+
+
+@dataclass
+class LineCrossingState:
+    armed_side: Optional[int] = None
+    pre_count: int = 0
+    crossing_active: bool = False
+    expected_post_side: Optional[int] = None
+    post_count: int = 0
+    post_distance_px: float = 0.0
+    crossing_started_ts: Optional[datetime] = None
+    last_seen_ts: Optional[datetime] = None
+    last_confirmed_ts: Optional[datetime] = None
+
+
+@dataclass
+class TrajectorySample:
+    ts: datetime
+    left: tuple[float, float]
+    center: tuple[float, float]
+    right: tuple[float, float]
+
+    @property
+    def contacts(self) -> tuple[tuple[float, float], tuple[float, float], tuple[float, float]]:
+        return (self.left, self.center, self.right)
 
 
 @dataclass
@@ -48,7 +78,8 @@ class VehicleState:
     lane_history: deque[tuple[datetime, int]] = field(default_factory=deque)
     illegal_lane_candidate: Optional[IllegalLaneCandidate] = None
     turn_state: TurnState = field(default_factory=TurnState)
-    last_position: Optional[tuple[float, float]] = None
+    trajectory: deque[TrajectorySample] = field(default_factory=deque)
+    line_crossings: dict[str, LineCrossingState] = field(default_factory=dict)
 
     # Ghi nhớ lỗi đã phát ra để không bắn lặp nhiều lần cho cùng một xe.
     emitted: set[str] = field(default_factory=set)
@@ -59,9 +90,14 @@ class ViolationLogic:
     """
     Bộ luật phát hiện vi phạm, không phải AI end-to-end.
 
-    `wrong_lane` tiếp tục dùng lane ổn định hiện tại.
+    `wrong_lane` dùng lane ổn định.
     `illegal_turn` dùng state machine riêng:
     `idle -> approach -> committed -> confirmed`.
+
+    Phần line crossing không còn dựa vào đúng 2 frame liên tiếp.
+    Mỗi vehicle giữ một trajectory ngắn hạn và từng line có trạng thái
+    pre-side / crossing / post-side để giảm false positive do jitter, low FPS
+    hoặc track jump ngắn hạn.
     """
 
     def __init__(
@@ -74,7 +110,17 @@ class ViolationLogic:
         wrong_lane_min_duration_ms: int = 1200,
         turn_region_min_hits: int = 3,
         turn_candidate_window_ms: int = 500,
+        turn_corridor_min_progress_px: float = 2.0,
+        turn_corridor_min_duration_ms: int = 180,
         turn_state_timeout_ms: int = 3000,
+        trajectory_history_window_ms: int = 2000,
+        line_crossing_side_tolerance_px: float = 2.0,
+        line_crossing_min_pre_frames: int = 2,
+        line_crossing_min_post_frames: int = 2,
+        line_crossing_min_displacement_px: float = 2.0,
+        line_crossing_min_displacement_ratio: float = 0.02,
+        line_crossing_max_gap_ms: int = 400,
+        line_crossing_cooldown_ms: int = 1200,
     ):
         if not lane_polygons:
             raise ValueError("lane_polygons must be non-empty")
@@ -86,7 +132,17 @@ class ViolationLogic:
         self._wrong_lane_min_duration_ms = int(wrong_lane_min_duration_ms)
         self._turn_region_min_hits = int(turn_region_min_hits)
         self._turn_candidate_window_ms = int(turn_candidate_window_ms)
+        self._turn_corridor_min_progress_px = float(turn_corridor_min_progress_px)
+        self._turn_corridor_min_duration_ms = int(turn_corridor_min_duration_ms)
         self._turn_state_timeout_ms = int(turn_state_timeout_ms)
+        self._trajectory_history_window_ms = int(trajectory_history_window_ms)
+        self._line_crossing_side_tolerance_px = float(line_crossing_side_tolerance_px)
+        self._line_crossing_min_pre_frames = int(line_crossing_min_pre_frames)
+        self._line_crossing_min_post_frames = int(line_crossing_min_post_frames)
+        self._line_crossing_min_displacement_px = float(line_crossing_min_displacement_px)
+        self._line_crossing_min_displacement_ratio = float(line_crossing_min_displacement_ratio)
+        self._line_crossing_max_gap_ms = int(line_crossing_max_gap_ms)
+        self._line_crossing_cooldown_ms = int(line_crossing_cooldown_ms)
         self._vehicle_states: dict[int, VehicleState] = {}
 
     def update_and_maybe_generate_violation(
@@ -115,7 +171,10 @@ class ViolationLogic:
         st.last_seen_ts = ts
         st.vehicle_type = vehicle_type
 
-        px, py = bbox_bottom_center(bbox_xyxy)
+        sample = self._build_sample(bbox_xyxy=bbox_xyxy, ts=ts)
+        self._append_trajectory_sample(st=st, sample=sample)
+        line_events = self._update_line_crossing_events(st=st, sample=sample, ts=ts)
+
         violations: list[dict] = []
 
         self._update_lane_state(st=st, lane_id=lane_id, ts=ts, violations=violations)
@@ -136,13 +195,27 @@ class ViolationLogic:
         self._update_turn_state(
             st=st,
             current_lane_id=current_lane_id,
-            point_x=px,
-            point_y=py,
+            sample=sample,
             ts=ts,
+            line_events=line_events,
             violations=violations,
         )
-        st.last_position = (px, py)
         return violations
+
+    def _build_sample(
+        self,
+        *,
+        bbox_xyxy: list[float] | tuple[float, ...],
+        ts: datetime,
+    ) -> TrajectorySample:
+        left, center, right = bbox_bottom_contact_points(bbox_xyxy)
+        return TrajectorySample(ts=ts, left=left, center=center, right=right)
+
+    def _append_trajectory_sample(self, *, st: VehicleState, sample: TrajectorySample) -> None:
+        st.trajectory.append(sample)
+        cutoff_ts = sample.ts.timestamp() - (self._trajectory_history_window_ms / 1000.0)
+        while st.trajectory and st.trajectory[0].ts.timestamp() < cutoff_ts:
+            st.trajectory.popleft()
 
     def _update_lane_state(
         self,
@@ -204,9 +277,9 @@ class ViolationLogic:
         *,
         st: VehicleState,
         current_lane_id: Optional[int],
-        point_x: float,
-        point_y: float,
+        sample: TrajectorySample,
         ts: datetime,
+        line_events: set[str],
         violations: list[dict],
     ) -> None:
         turn_state = st.turn_state
@@ -216,8 +289,7 @@ class ViolationLogic:
 
         approach_lane_id = self._match_approach_lane(
             current_lane_id=current_lane_id,
-            point_x=point_x,
-            point_y=point_y,
+            sample=sample,
         )
         if turn_state.phase in {"idle", "approach"} and approach_lane_id is not None:
             self._enter_approach(turn_state=turn_state, source_lane_id=approach_lane_id, ts=ts)
@@ -225,9 +297,8 @@ class ViolationLogic:
         commit_lane_id = self._match_commit_lane(
             current_lane_id=current_lane_id,
             source_lane_id=turn_state.source_lane_id if turn_state.phase == "approach" else None,
-            previous_point=st.last_position,
-            point_x=point_x,
-            point_y=point_y,
+            sample=sample,
+            line_events=line_events,
         )
         if commit_lane_id is not None and turn_state.phase != "committed":
             if turn_state.phase != "approach" or turn_state.source_lane_id != commit_lane_id:
@@ -239,10 +310,9 @@ class ViolationLogic:
 
         confirmed_maneuver = self._update_turn_confirmation(
             turn_state=turn_state,
-            previous_point=st.last_position,
-            point_x=point_x,
-            point_y=point_y,
+            sample=sample,
             ts=ts,
+            line_events=line_events,
         )
         if confirmed_maneuver is None:
             return
@@ -298,25 +368,23 @@ class ViolationLogic:
         self,
         *,
         turn_state: TurnState,
-        previous_point: Optional[tuple[float, float]],
-        point_x: float,
-        point_y: float,
+        sample: TrajectorySample,
         ts: datetime,
+        line_events: set[str],
     ) -> Optional[str]:
-        exit_line_matches = self._match_line_collection(
-            self._exit_lines,
-            previous_point=previous_point,
-            point_x=point_x,
-            point_y=point_y,
-        )
+        exit_line_matches = [
+            key.split(":", 1)[1]
+            for key in line_events
+            if key.startswith("exit:")
+        ]
         if exit_line_matches:
             return self._select_maneuver(turn_state=turn_state, matches=exit_line_matches)
 
-        exit_matches = self._match_zone_collection(self._exit_zones, point_x=point_x, point_y=point_y)
+        exit_matches = self._match_zone_collection(self._exit_zones, sample=sample)
         if exit_matches:
             return self._select_maneuver(turn_state=turn_state, matches=exit_matches)
 
-        corridor_matches = self._match_zone_collection(self._turn_corridors, point_x=point_x, point_y=point_y)
+        corridor_matches = self._match_zone_collection(self._turn_corridors, sample=sample)
         if not corridor_matches:
             self._expire_maneuver_candidate(turn_state=turn_state, ts=ts)
             return None
@@ -329,9 +397,10 @@ class ViolationLogic:
                 enter_ts=ts,
                 last_hit_ts=ts,
                 hit_count=1,
+                anchor_point=sample.center,
             )
             turn_state.last_activity_ts = ts
-            return None
+            return self._confirm_turn_candidate_if_ready(turn_state=turn_state, ts=ts)
 
         elapsed_since_last_hit_ms = int((ts - candidate.last_hit_ts).total_seconds() * 1000.0)
         if candidate.maneuver != maneuver or elapsed_since_last_hit_ms > self._turn_candidate_window_ms:
@@ -340,14 +409,35 @@ class ViolationLogic:
                 enter_ts=ts,
                 last_hit_ts=ts,
                 hit_count=1,
+                anchor_point=sample.center,
             )
             turn_state.last_activity_ts = ts
-            return None
+            return self._confirm_turn_candidate_if_ready(turn_state=turn_state, ts=ts)
 
         candidate.hit_count += 1
         candidate.last_hit_ts = ts
+        candidate.max_progress_px = max(
+            candidate.max_progress_px,
+            hypot(sample.center[0] - candidate.anchor_point[0], sample.center[1] - candidate.anchor_point[1]),
+        )
         turn_state.last_activity_ts = ts
+        return self._confirm_turn_candidate_if_ready(turn_state=turn_state, ts=ts)
+
+    def _confirm_turn_candidate_if_ready(
+        self,
+        *,
+        turn_state: TurnState,
+        ts: datetime,
+    ) -> Optional[str]:
+        candidate = turn_state.maneuver_candidate
+        if candidate is None:
+            return None
+        elapsed_ms = int((ts - candidate.enter_ts).total_seconds() * 1000.0)
+        if candidate.max_progress_px < self._turn_corridor_min_progress_px:
+            return None
         if candidate.hit_count >= self._turn_region_min_hits:
+            return candidate.maneuver
+        if elapsed_ms >= self._turn_corridor_min_duration_ms:
             return candidate.maneuver
         return None
 
@@ -366,20 +456,22 @@ class ViolationLogic:
             return
         elapsed_ms = int((ts - turn_state.last_activity_ts).total_seconds() * 1000.0)
         if elapsed_ms > self._turn_state_timeout_ms:
-            turn_state.phase = "idle"
-            turn_state.source_lane_id = None
-            turn_state.approach_ts = None
-            turn_state.committed_ts = None
-            turn_state.confirmed_maneuver = None
-            turn_state.last_activity_ts = None
-            turn_state.maneuver_candidate = None
+            self._reset_turn_state(turn_state=turn_state)
+
+    def _reset_turn_state(self, *, turn_state: TurnState) -> None:
+        turn_state.phase = "idle"
+        turn_state.source_lane_id = None
+        turn_state.approach_ts = None
+        turn_state.committed_ts = None
+        turn_state.confirmed_maneuver = None
+        turn_state.last_activity_ts = None
+        turn_state.maneuver_candidate = None
 
     def _match_approach_lane(
         self,
         *,
         current_lane_id: Optional[int],
-        point_x: float,
-        point_y: float,
+        sample: TrajectorySample,
     ) -> Optional[int]:
         prioritized_lane_ids: list[int] = []
         if current_lane_id is not None:
@@ -389,7 +481,7 @@ class ViolationLogic:
         for lane_id in prioritized_lane_ids:
             lane_cfg = self._lane_by_id.get(lane_id)
             approach_polygon = lane_cfg.approach_zone if lane_cfg is not None else None
-            if approach_polygon and point_in_polygon(point_x, point_y, approach_polygon):
+            if approach_polygon and self._sample_inside_polygon(sample=sample, polygon=approach_polygon):
                 return lane_id
         return None
 
@@ -398,9 +490,8 @@ class ViolationLogic:
         *,
         current_lane_id: Optional[int],
         source_lane_id: Optional[int],
-        previous_point: Optional[tuple[float, float]],
-        point_x: float,
-        point_y: float,
+        sample: TrajectorySample,
+        line_events: set[str],
     ) -> Optional[int]:
         prioritized_lane_ids: list[int] = []
         for lane_id in (source_lane_id, current_lane_id):
@@ -412,47 +503,255 @@ class ViolationLogic:
             lane_cfg = self._lane_by_id.get(lane_id)
             if lane_cfg is None:
                 continue
-            if lane_cfg.commit_gate and point_in_polygon(point_x, point_y, lane_cfg.commit_gate):
+            if lane_cfg.commit_gate and self._sample_inside_polygon(sample=sample, polygon=lane_cfg.commit_gate):
                 return lane_id
-            if lane_cfg.commit_line and previous_point is not None:
-                if segment_intersects_segment(
-                    previous_point,
-                    (point_x, point_y),
-                    lane_cfg.commit_line[0],
-                    lane_cfg.commit_line[1],
-                ):
-                    return lane_id
+            if lane_cfg.commit_line and f"commit:{lane_id}" in line_events:
+                return lane_id
         return None
 
     def _match_zone_collection(
         self,
         collection: dict[str, list[list[float]]],
         *,
-        point_x: float,
-        point_y: float,
+        sample: TrajectorySample,
     ) -> list[str]:
         matches: list[str] = []
         for maneuver, polygon in collection.items():
-            if point_in_polygon(point_x, point_y, polygon):
+            if self._sample_inside_polygon(sample=sample, polygon=polygon):
                 matches.append(maneuver)
         return matches
 
-    def _match_line_collection(
+    def _sample_inside_polygon(
         self,
-        collection: dict[str, list[list[float]]],
         *,
-        previous_point: Optional[tuple[float, float]],
-        point_x: float,
-        point_y: float,
-    ) -> list[str]:
-        if previous_point is None:
-            return []
-        matches: list[str] = []
-        current_point = (point_x, point_y)
-        for maneuver, line in collection.items():
-            if segment_intersects_segment(previous_point, current_point, line[0], line[1]):
-                matches.append(maneuver)
-        return matches
+        sample: TrajectorySample,
+        polygon: list[list[float]],
+    ) -> bool:
+        if point_in_polygon(sample.center[0], sample.center[1], polygon):
+            return True
+        hits = 0
+        for point_x, point_y in sample.contacts:
+            if point_in_polygon(point_x, point_y, polygon):
+                hits += 1
+        return hits >= 2
+
+    def _update_line_crossing_events(
+        self,
+        *,
+        st: VehicleState,
+        sample: TrajectorySample,
+        ts: datetime,
+    ) -> set[str]:
+        events: set[str] = set()
+        previous_sample = st.trajectory[-2] if len(st.trajectory) >= 2 else None
+
+        for lane_id in self._lane_order:
+            lane_cfg = self._lane_by_id.get(lane_id)
+            if lane_cfg is None or lane_cfg.commit_line is None:
+                continue
+            key = f"commit:{lane_id}"
+            state = st.line_crossings.setdefault(key, LineCrossingState())
+            if self._update_line_crossing_state(
+                state=state,
+                line=lane_cfg.commit_line,
+                previous_sample=previous_sample,
+                sample=sample,
+                ts=ts,
+            ):
+                events.add(key)
+
+        for maneuver, line in self._exit_lines.items():
+            key = f"exit:{maneuver}"
+            state = st.line_crossings.setdefault(key, LineCrossingState())
+            if self._update_line_crossing_state(
+                state=state,
+                line=line,
+                previous_sample=previous_sample,
+                sample=sample,
+                ts=ts,
+            ):
+                events.add(key)
+        return events
+
+    def _update_line_crossing_state(
+        self,
+        *,
+        state: LineCrossingState,
+        line: list[list[float]],
+        previous_sample: Optional[TrajectorySample],
+        sample: TrajectorySample,
+        ts: datetime,
+    ) -> bool:
+        if state.last_seen_ts is not None:
+            gap_ms = int((ts - state.last_seen_ts).total_seconds() * 1000.0)
+            if gap_ms > self._line_crossing_max_gap_ms:
+                self._reset_line_crossing_state(state=state)
+        state.last_seen_ts = ts
+
+        current_side = self._classify_sample_side(sample=sample, line=line)
+        line_crossed = self._sample_crosses_line(previous_sample=previous_sample, sample=sample, line=line)
+        required_post_distance_px = max(
+            self._line_crossing_min_displacement_px,
+            line_length(line[0], line[1]) * self._line_crossing_min_displacement_ratio,
+        )
+
+        if state.last_confirmed_ts is not None:
+            cooldown_ms = int((ts - state.last_confirmed_ts).total_seconds() * 1000.0)
+            if cooldown_ms <= self._line_crossing_cooldown_ms:
+                self._rearm_line_crossing_state(state=state, current_side=current_side)
+                return False
+
+        if state.crossing_active and state.crossing_started_ts is not None:
+            crossing_elapsed_ms = int((ts - state.crossing_started_ts).total_seconds() * 1000.0)
+            if crossing_elapsed_ms > self._line_crossing_max_gap_ms:
+                self._reset_line_crossing_state(state=state)
+
+        if state.crossing_active:
+            expected_post_side = state.expected_post_side
+            if current_side == expected_post_side:
+                state.post_count += 1
+                state.post_distance_px = max(
+                    state.post_distance_px,
+                    self._sample_post_distance(sample=sample, line=line, expected_side=expected_post_side),
+                )
+                if (
+                    state.post_count >= self._line_crossing_min_post_frames
+                    and state.post_distance_px >= required_post_distance_px
+                ):
+                    state.last_confirmed_ts = ts
+                    self._rearm_line_crossing_state(state=state, current_side=current_side)
+                    return True
+                return False
+
+            if current_side == 0:
+                return False
+
+            self._reset_line_crossing_state(state=state)
+            self._rearm_line_crossing_state(state=state, current_side=current_side)
+            return False
+
+        if state.armed_side is None:
+            self._rearm_line_crossing_state(state=state, current_side=current_side)
+            return False
+
+        if current_side == 0:
+            if line_crossed and state.pre_count >= self._line_crossing_min_pre_frames:
+                state.crossing_active = True
+                state.crossing_started_ts = ts
+                state.expected_post_side = -state.armed_side
+                state.post_count = 0
+                state.post_distance_px = 0.0
+            return False
+
+        if current_side == state.armed_side:
+            state.pre_count += 1
+            return False
+
+        if (
+            line_crossed
+            and state.pre_count >= self._line_crossing_min_pre_frames
+            and current_side == -state.armed_side
+        ):
+            state.crossing_active = True
+            state.crossing_started_ts = ts
+            state.expected_post_side = current_side
+            state.post_count = 1
+            state.post_distance_px = self._sample_post_distance(
+                sample=sample,
+                line=line,
+                expected_side=current_side,
+            )
+            if (
+                state.post_count >= self._line_crossing_min_post_frames
+                and state.post_distance_px >= required_post_distance_px
+            ):
+                state.last_confirmed_ts = ts
+                self._rearm_line_crossing_state(state=state, current_side=current_side)
+                return True
+            return False
+
+        self._rearm_line_crossing_state(state=state, current_side=current_side)
+        return False
+
+    def _reset_line_crossing_state(self, *, state: LineCrossingState) -> None:
+        state.armed_side = None
+        state.pre_count = 0
+        state.crossing_active = False
+        state.expected_post_side = None
+        state.post_count = 0
+        state.post_distance_px = 0.0
+        state.crossing_started_ts = None
+
+    def _rearm_line_crossing_state(self, *, state: LineCrossingState, current_side: int) -> None:
+        state.crossing_active = False
+        state.expected_post_side = None
+        state.post_count = 0
+        state.post_distance_px = 0.0
+        state.crossing_started_ts = None
+        if current_side == 0:
+            return
+        if state.armed_side == current_side:
+            state.pre_count += 1
+            return
+        state.armed_side = current_side
+        state.pre_count = 1
+
+    def _classify_sample_side(self, *, sample: TrajectorySample, line: list[list[float]]) -> int:
+        distances = [
+            signed_distance_to_line(point, line[0], line[1])
+            for point in sample.contacts
+        ]
+        signs = [self._distance_to_side(distance) for distance in distances]
+        non_zero_signs = [sign for sign in signs if sign != 0]
+        if not non_zero_signs:
+            return 0
+        if all(sign == non_zero_signs[0] for sign in non_zero_signs):
+            return non_zero_signs[0]
+        center_sign = signs[1]
+        if center_sign != 0:
+            return center_sign
+        return 0
+
+    def _distance_to_side(self, distance: float) -> int:
+        if abs(distance) < self._line_crossing_side_tolerance_px:
+            return 0
+        return 1 if distance > 0 else -1
+
+    def _sample_crosses_line(
+        self,
+        *,
+        previous_sample: Optional[TrajectorySample],
+        sample: TrajectorySample,
+        line: list[list[float]],
+    ) -> bool:
+        if previous_sample is None:
+            return False
+        for start_point, end_point in zip(previous_sample.contacts, sample.contacts):
+            if segment_intersects_segment(start_point, end_point, line[0], line[1]):
+                return True
+        return False
+
+    def _sample_post_distance(
+        self,
+        *,
+        sample: TrajectorySample,
+        line: list[list[float]],
+        expected_side: Optional[int],
+    ) -> float:
+        if expected_side is None:
+            return 0.0
+        distances = [
+            signed_distance_to_line(point, line[0], line[1])
+            for point in sample.contacts
+        ]
+        relevant = [
+            abs(distance)
+            for distance in distances
+            if self._distance_to_side(distance) == expected_side
+        ]
+        if relevant:
+            return max(relevant)
+        return abs(distances[1])
 
     def _select_maneuver(self, *, turn_state: TurnState, matches: list[str]) -> str:
         candidate = turn_state.maneuver_candidate
@@ -476,14 +775,16 @@ class ViolationLogic:
         """
         Xóa trạng thái của các xe quá cũ để bộ nhớ không tăng mãi trong lúc chạy lâu.
         """
-        cutoff_ms = current_ts.timestamp() - float(max_age_s)
+        cutoff_ts = current_ts.timestamp() - float(max_age_s)
         to_delete: list[int] = []
         for vid, st in self._vehicle_states.items():
             if st.last_seen_ts is None:
                 continue
-            while st.lane_history and st.lane_history[0][0].timestamp() < cutoff_ms:
+            while st.lane_history and st.lane_history[0][0].timestamp() < cutoff_ts:
                 st.lane_history.popleft()
-            if st.last_seen_ts.timestamp() < cutoff_ms:
+            while st.trajectory and st.trajectory[0].ts.timestamp() < cutoff_ts:
+                st.trajectory.popleft()
+            if st.last_seen_ts.timestamp() < cutoff_ts:
                 to_delete.append(vid)
         for vid in to_delete:
             del self._vehicle_states[vid]

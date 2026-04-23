@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from math import hypot
 from typing import Iterable, Sequence
 
 
@@ -32,6 +33,45 @@ def bbox_bottom_center(bbox_xyxy: Sequence[float]) -> tuple[float, float]:
     """Lấy điểm giữa cạnh đáy của bounding box để đại diện vị trí bánh xe chạm mặt đường."""
     x1, y1, x2, y2 = bbox_xyxy
     return (float(x1 + x2) / 2.0, float(y2))
+
+
+def bbox_bottom_contact_points(bbox_xyxy: Sequence[float]) -> tuple[tuple[float, float], tuple[float, float], tuple[float, float]]:
+    """
+    Lấy 3 điểm tiếp xúc gần mép dưới của bounding box để giảm phụ thuộc vào đúng 1 điểm giữa.
+
+    Dùng 1/4, 1/2 và 3/4 cạnh đáy thay vì lấy sát hai góc để đỡ nhạy với box rung hoặc box bị nở.
+    """
+    x1, y1, x2, y2 = bbox_xyxy
+    width = float(x2) - float(x1)
+    left_x = float(x1) + (width * 0.25)
+    center_x = float(x1 + x2) / 2.0
+    right_x = float(x2) - (width * 0.25)
+    bottom_y = float(y2)
+    return ((left_x, bottom_y), (center_x, bottom_y), (right_x, bottom_y))
+
+
+def line_length(start: Sequence[float], end: Sequence[float]) -> float:
+    return hypot(float(end[0]) - float(start[0]), float(end[1]) - float(start[1]))
+
+
+def signed_distance_to_line(
+    point: Sequence[float],
+    line_start: Sequence[float],
+    line_end: Sequence[float],
+) -> float:
+    """
+    Khoảng cách có dấu từ điểm tới đường thẳng vô hạn đi qua `line_start -> line_end`.
+
+    Dấu được dùng để biết điểm nằm ở phía nào của line, rất hữu ích cho xác nhận cắt line theo thời gian.
+    """
+    x0, y0 = float(point[0]), float(point[1])
+    x1, y1 = float(line_start[0]), float(line_start[1])
+    x2, y2 = float(line_end[0]), float(line_end[1])
+    denominator = hypot(x2 - x1, y2 - y1)
+    if denominator <= 1e-9:
+        return 0.0
+    numerator = ((x2 - x1) * (y0 - y1)) - ((y2 - y1) * (x0 - x1))
+    return numerator / denominator
 
 
 def segment_intersects_segment(

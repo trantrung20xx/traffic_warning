@@ -248,7 +248,17 @@ class AppConfig(BaseModel):
     wrong_lane_min_duration_ms: int = 1200
     turn_region_min_hits: int = 3
     turn_candidate_window_ms: int = 500
+    turn_corridor_min_progress_px: float = 2.0
+    turn_corridor_min_duration_ms: int = 180
     turn_state_timeout_ms: int = 3000
+    trajectory_history_window_ms: int = 2000
+    line_crossing_side_tolerance_px: float = 2.0
+    line_crossing_min_pre_frames: int = 2
+    line_crossing_min_post_frames: int = 2
+    line_crossing_min_displacement_px: float = 2.0
+    line_crossing_min_displacement_ratio: float = 0.02
+    line_crossing_max_gap_ms: int = 400
+    line_crossing_cooldown_ms: int = 1200
     state_prune_max_age_s: float = 60.0
     rtsp_reconnect_delay_s: float = 2.0
     preview_max_fps: float = 15.0
@@ -467,7 +477,17 @@ def load_app_config(repo_root: Path) -> AppConfig:
             ),
             turn_region_min_hits=int(settings.get("turn_region_min_hits", 3)),
             turn_candidate_window_ms=int(settings.get("turn_candidate_window_ms", 500)),
+            turn_corridor_min_progress_px=float(settings.get("turn_corridor_min_progress_px", 2.0)),
+            turn_corridor_min_duration_ms=int(settings.get("turn_corridor_min_duration_ms", 180)),
             turn_state_timeout_ms=int(settings.get("turn_state_timeout_ms", 3000)),
+            trajectory_history_window_ms=int(settings.get("trajectory_history_window_ms", 2000)),
+            line_crossing_side_tolerance_px=float(settings.get("line_crossing_side_tolerance_px", 2.0)),
+            line_crossing_min_pre_frames=int(settings.get("line_crossing_min_pre_frames", 2)),
+            line_crossing_min_post_frames=int(settings.get("line_crossing_min_post_frames", 2)),
+            line_crossing_min_displacement_px=float(settings.get("line_crossing_min_displacement_px", 2.0)),
+            line_crossing_min_displacement_ratio=float(settings.get("line_crossing_min_displacement_ratio", 0.02)),
+            line_crossing_max_gap_ms=int(settings.get("line_crossing_max_gap_ms", 400)),
+            line_crossing_cooldown_ms=int(settings.get("line_crossing_cooldown_ms", 1200)),
             state_prune_max_age_s=float(settings.get("state_prune_max_age_s", 60.0)),
             rtsp_reconnect_delay_s=float(settings.get("rtsp_reconnect_delay_s", 2.0)),
             preview_max_fps=float(settings.get("preview_max_fps", 15.0)),

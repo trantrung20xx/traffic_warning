@@ -741,6 +741,275 @@ class LaneFeatureTests(unittest.TestCase):
                 bbox_xyxy=[65, 77, 75, 83],
                 ts=ts + timedelta(milliseconds=300),
             ),
+            [],
+        )
+        self.assertEqual(
+            logic.update_and_maybe_generate_violation(
+                vehicle_id=604,
+                vehicle_type="car",
+                lane_id=2,
+                bbox_xyxy=[65, 80, 75, 86],
+                ts=ts + timedelta(milliseconds=400),
+            ),
+            [{"lane_id": 1, "violation": "turn_right_not_allowed"}],
+        )
+
+    def test_commit_line_requires_stable_post_crossing(self) -> None:
+        logic = self._build_hybrid_logic(
+            {
+                "camera_id": "cam_test",
+                "frame_width": 100,
+                "frame_height": 100,
+                "lanes": [
+                    {
+                        "lane_id": 1,
+                        "polygon": [[0.0, 0.0], [0.49, 0.0], [0.49, 1.0], [0.0, 1.0]],
+                        "approach_zone": [[0.05, 0.45], [0.45, 0.45], [0.45, 0.70], [0.05, 0.70]],
+                        "commit_line": [[0.10, 0.74], [0.45, 0.74]],
+                        "allowed_maneuvers": ["straight"],
+                        "allowed_lane_changes": [1],
+                        "allowed_vehicle_types": ["car"],
+                    }
+                ],
+            }
+        )
+        ts = datetime(2026, 4, 24, 8, 15, 0, tzinfo=timezone.utc)
+
+        self.assertEqual(
+            logic.update_and_maybe_generate_violation(
+                vehicle_id=605,
+                vehicle_type="car",
+                lane_id=1,
+                bbox_xyxy=[20, 48, 30, 68],
+                ts=ts,
+            ),
+            [],
+        )
+        self.assertEqual(
+            logic.update_and_maybe_generate_violation(
+                vehicle_id=605,
+                vehicle_type="car",
+                lane_id=1,
+                bbox_xyxy=[20, 52, 30, 72],
+                ts=ts + timedelta(milliseconds=100),
+            ),
+            [],
+        )
+        self.assertEqual(
+            logic.update_and_maybe_generate_violation(
+                vehicle_id=605,
+                vehicle_type="car",
+                lane_id=1,
+                bbox_xyxy=[20, 55, 30, 76],
+                ts=ts + timedelta(milliseconds=200),
+            ),
+            [],
+        )
+
+        turn_state = logic._vehicle_states[605].turn_state
+        self.assertEqual(turn_state.phase, "approach")
+
+        self.assertEqual(
+            logic.update_and_maybe_generate_violation(
+                vehicle_id=605,
+                vehicle_type="car",
+                lane_id=1,
+                bbox_xyxy=[20, 58, 30, 80],
+                ts=ts + timedelta(milliseconds=300),
+            ),
+            [],
+        )
+        turn_state = logic._vehicle_states[605].turn_state
+        self.assertEqual(turn_state.phase, "committed")
+
+    def test_commit_line_ignores_single_frame_jump_and_reverse(self) -> None:
+        logic = self._build_hybrid_logic(
+            {
+                "camera_id": "cam_test",
+                "frame_width": 100,
+                "frame_height": 100,
+                "lanes": [
+                    {
+                        "lane_id": 1,
+                        "polygon": [[0.0, 0.0], [0.49, 0.0], [0.49, 1.0], [0.0, 1.0]],
+                        "approach_zone": [[0.05, 0.45], [0.45, 0.45], [0.45, 0.70], [0.05, 0.70]],
+                        "commit_line": [[0.10, 0.74], [0.45, 0.74]],
+                        "allowed_maneuvers": ["straight"],
+                        "allowed_lane_changes": [1],
+                        "allowed_vehicle_types": ["car"],
+                    }
+                ],
+            }
+        )
+        ts = datetime(2026, 4, 24, 8, 20, 0, tzinfo=timezone.utc)
+
+        logic.update_and_maybe_generate_violation(
+            vehicle_id=606,
+            vehicle_type="car",
+            lane_id=1,
+            bbox_xyxy=[20, 48, 30, 68],
+            ts=ts,
+        )
+        logic.update_and_maybe_generate_violation(
+            vehicle_id=606,
+            vehicle_type="car",
+            lane_id=1,
+            bbox_xyxy=[20, 52, 30, 72],
+            ts=ts + timedelta(milliseconds=100),
+        )
+        self.assertEqual(
+            logic.update_and_maybe_generate_violation(
+                vehicle_id=606,
+                vehicle_type="car",
+                lane_id=1,
+                bbox_xyxy=[20, 57, 30, 80],
+                ts=ts + timedelta(milliseconds=200),
+            ),
+            [],
+        )
+        self.assertEqual(
+            logic.update_and_maybe_generate_violation(
+                vehicle_id=606,
+                vehicle_type="car",
+                lane_id=1,
+                bbox_xyxy=[20, 53, 30, 72],
+                ts=ts + timedelta(milliseconds=300),
+            ),
+            [],
+        )
+
+        turn_state = logic._vehicle_states[606].turn_state
+        self.assertNotEqual(turn_state.phase, "committed")
+
+    def test_exit_line_ignores_crossing_after_long_tracking_gap(self) -> None:
+        logic = self._build_hybrid_logic(
+            {
+                "camera_id": "cam_test",
+                "frame_width": 100,
+                "frame_height": 100,
+                "turn_corridors": {
+                    "right": [[0.60, 0.70], [0.92, 0.70], [0.92, 0.98], [0.60, 0.98]]
+                },
+                "exit_lines": {
+                    "right": [[0.60, 0.80], [0.92, 0.80]]
+                },
+                "lanes": [
+                    {
+                        "lane_id": 1,
+                        "polygon": [[0.0, 0.0], [0.49, 0.0], [0.49, 1.0], [0.0, 1.0]],
+                        "approach_zone": [[0.05, 0.45], [0.45, 0.45], [0.45, 0.70], [0.05, 0.70]],
+                        "commit_gate": [[0.20, 0.72], [0.45, 0.72], [0.45, 0.86], [0.20, 0.86]],
+                        "allowed_maneuvers": ["straight"],
+                        "allowed_lane_changes": [1, 2],
+                        "allowed_vehicle_types": ["car"],
+                    },
+                    {
+                        "lane_id": 2,
+                        "polygon": [[0.51, 0.0], [1.0, 0.0], [1.0, 1.0], [0.51, 1.0]],
+                        "approach_zone": [[0.55, 0.45], [0.95, 0.45], [0.95, 0.70], [0.55, 0.70]],
+                        "commit_gate": [[0.55, 0.72], [0.82, 0.72], [0.82, 0.86], [0.55, 0.86]],
+                        "allowed_maneuvers": ["right"],
+                        "allowed_lane_changes": [2],
+                        "allowed_vehicle_types": ["car"],
+                    },
+                ],
+            },
+            turn_region_min_hits=3,
+        )
+        ts = datetime(2026, 4, 24, 8, 25, 0, tzinfo=timezone.utc)
+
+        logic.update_and_maybe_generate_violation(
+            vehicle_id=607,
+            vehicle_type="car",
+            lane_id=1,
+            bbox_xyxy=[20, 50, 30, 60],
+            ts=ts,
+        )
+        logic.update_and_maybe_generate_violation(
+            vehicle_id=607,
+            vehicle_type="car",
+            lane_id=1,
+            bbox_xyxy=[24, 62, 34, 78],
+            ts=ts + timedelta(milliseconds=100),
+        )
+        self.assertEqual(
+            logic.update_and_maybe_generate_violation(
+                vehicle_id=607,
+                vehicle_type="car",
+                lane_id=2,
+                bbox_xyxy=[65, 77, 75, 83],
+                ts=ts + timedelta(milliseconds=700),
+            ),
+            [],
+        )
+        self.assertEqual(
+            logic.update_and_maybe_generate_violation(
+                vehicle_id=607,
+                vehicle_type="car",
+                lane_id=2,
+                bbox_xyxy=[65, 80, 75, 86],
+                ts=ts + timedelta(milliseconds=800),
+            ),
+            [],
+        )
+
+    def test_turn_corridor_can_confirm_with_progress_when_frame_count_is_low(self) -> None:
+        logic = self._build_hybrid_logic(
+            {
+                "camera_id": "cam_test",
+                "frame_width": 100,
+                "frame_height": 100,
+                "turn_corridors": {
+                    "right": [[0.20, 0.72], [0.55, 0.72], [0.55, 0.98], [0.20, 0.98]]
+                },
+                "lanes": [
+                    {
+                        "lane_id": 1,
+                        "polygon": [[0.0, 0.0], [0.49, 0.0], [0.49, 1.0], [0.0, 1.0]],
+                        "approach_zone": [[0.10, 0.45], [0.45, 0.45], [0.45, 0.70], [0.10, 0.70]],
+                        "commit_gate": [[0.20, 0.68], [0.45, 0.68], [0.45, 0.82], [0.20, 0.82]],
+                        "allowed_maneuvers": ["straight"],
+                        "allowed_lane_changes": [1],
+                        "allowed_vehicle_types": ["car"],
+                    }
+                ],
+            },
+            turn_region_min_hits=3,
+        )
+        ts = datetime(2026, 4, 24, 8, 30, 0, tzinfo=timezone.utc)
+
+        logic.update_and_maybe_generate_violation(
+            vehicle_id=608,
+            vehicle_type="car",
+            lane_id=1,
+            bbox_xyxy=[20, 50, 30, 70],
+            ts=ts,
+        )
+        logic.update_and_maybe_generate_violation(
+            vehicle_id=608,
+            vehicle_type="car",
+            lane_id=1,
+            bbox_xyxy=[25, 60, 35, 80],
+            ts=ts + timedelta(milliseconds=100),
+        )
+        self.assertEqual(
+            logic.update_and_maybe_generate_violation(
+                vehicle_id=608,
+                vehicle_type="car",
+                lane_id=1,
+                bbox_xyxy=[28, 63, 38, 83],
+                ts=ts + timedelta(milliseconds=200),
+            ),
+            [],
+        )
+        self.assertEqual(
+            logic.update_and_maybe_generate_violation(
+                vehicle_id=608,
+                vehicle_type="car",
+                lane_id=1,
+                bbox_xyxy=[38, 73, 48, 93],
+                ts=ts + timedelta(milliseconds=420),
+            ),
             [{"lane_id": 1, "violation": "turn_right_not_allowed"}],
         )
 
