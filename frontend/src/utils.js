@@ -774,22 +774,21 @@ export function validatePolygonDraft(draft) {
     }
 
     const approachZone = lane.approach_zone || [];
-    if (approachZone.length < 3) {
+    if (approachZone.length > 0 && approachZone.length < 3) {
       errors.push(`Vùng tiếp cận của làn ${lane.lane_id} phải có ít nhất 3 điểm.`);
-    } else if (polygonSelfIntersects(approachZone)) {
+    } else if (approachZone.length >= 3 && polygonSelfIntersects(approachZone)) {
       warnings.push(`Vùng tiếp cận của làn ${lane.lane_id} đang tự cắt nhau.`);
     }
 
     const commitGate = lane.commit_gate || [];
     const commitLine = lane.commit_line || [];
-    if (commitGate.length < 3 && commitLine.length !== 2) {
-      errors.push(`Làn ${lane.lane_id} phải có vùng commit hoặc vạch commit hợp lệ.`);
-    }
-    if (commitGate.length >= 3 && polygonSelfIntersects(commitGate)) {
+    if (commitGate.length > 0 && commitGate.length < 3) {
+      errors.push(`Vùng bắt đầu rẽ của làn ${lane.lane_id} phải có ít nhất 3 điểm.`);
+    } else if (commitGate.length >= 3 && polygonSelfIntersects(commitGate)) {
       warnings.push(`Vùng commit của làn ${lane.lane_id} đang tự cắt nhau.`);
     }
     if (commitLine.length > 0 && commitLine.length !== 2) {
-      errors.push(`Vạch commit của làn ${lane.lane_id} phải có đúng 2 điểm.`);
+      errors.push(`Vạch bắt đầu rẽ của làn ${lane.lane_id} phải có đúng 2 điểm.`);
     }
   });
 

@@ -331,6 +331,49 @@ select {
   color: #cfe4ed;
 }
 
+.camera-id-input:disabled {
+  background: rgba(255, 255, 255, 0.02);
+  border-color: rgba(160, 210, 229, 0.1);
+  color: rgba(237, 247, 251, 0.62);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
+  cursor: not-allowed;
+}
+
+.camera-id-field:has(.camera-id-input:disabled) > span {
+  color: rgba(157, 180, 192, 0.74);
+}
+
+.monitor-camera-picker {
+  min-width: 320px;
+}
+
+.monitor-camera-picker > span {
+  color: #cfe4ed;
+  font-weight: 600;
+}
+
+.monitor-camera-select {
+  background-color: rgba(12, 37, 55, 0.96);
+  border-color: rgba(160, 210, 229, 0.2);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.monitor-camera-select:hover {
+  border-color: rgba(28, 166, 255, 0.34);
+  background-color: rgba(16, 45, 66, 0.98);
+}
+
+.monitor-camera-select option {
+  background: #0c2537;
+  color: #edf7fb;
+}
+
+.monitor-camera-select option:checked,
+.monitor-camera-select option:hover {
+  background: #16384f;
+  color: #ffffff;
+}
+
 .video-stage {
   position: relative;
   line-height: 0;

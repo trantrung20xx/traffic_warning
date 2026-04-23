@@ -214,7 +214,7 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
         setPolygonLocked(false);
         setHasBackgroundImage(Boolean(detail.has_background_image));
         setBackgroundRevision(`${Date.now()}`);
-        setMessage(detail.runtime_applied ? "Cấu hình đang được backend áp dụng runtime." : "");
+        setMessage(detail.runtime_applied ? "Cấu hình hiện tại đang được hệ thống sử dụng." : "");
       })
       .catch(() => {
         setDraft(createCameraDraft());
@@ -280,7 +280,7 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
     });
     if (options.markDirty !== false) {
       setIsDirty(true);
-      setMessage('Có thay đổi chưa lưu. Nhấn "Lưu cấu hình làn đường" để backend áp dụng.');
+      setMessage('Đang có thay đổi chưa lưu. Nhấn "Lưu cấu hình làn đường" để áp dụng cấu hình mới.');
     }
   };
 
@@ -364,6 +364,10 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
 
   const handleCanvasPoint = (point) => {
     if (!selectedLane && !isGlobalEditTarget(editTarget)) return;
+    if (isLineEditTarget(editTarget) && selectedPoints.length >= 2) {
+      setMessage("Đối tượng dạng đường chỉ cho phép tối đa 2 điểm.");
+      return;
+    }
     updateTargetGeometry((points) => [...points, point]);
     setSelectedVertexIndex(selectedPoints.length);
     setMessage("Đã thêm điểm mới vào polygon.");
@@ -471,7 +475,11 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
       setIsDirty(false);
       setHasBackgroundImage(Boolean(freshDetail.has_background_image));
       setBackgroundRevision(`${Date.now()}`);
-      setMessage(response.runtime_applied ? "Đã lưu và backend đã áp dụng ngay cấu hình lane mới." : "Đã lưu cấu hình camera.");
+      setMessage(
+        response.runtime_applied
+          ? "Đã lưu cấu hình và áp dụng ngay vào hệ thống."
+          : "Đã lưu cấu hình camera, nhưng chưa áp dụng ngay vào hệ thống.",
+      );
     } catch (error) {
       setMessage(error.message || "Không thể lưu cấu hình camera.");
     } finally {
@@ -565,15 +573,16 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
             </div>
             <div className="row-sub">
               {isDirty
-                ? "Các thay đổi hiện chỉ nằm ở frontend state cho đến khi bạn nhấn lưu."
-                : "Monitoring và logic backend đang dùng đúng cấu hình hiện tại."}
+                ? "Các thay đổi hiện mới nằm trên giao diện cấu hình và chưa được áp dụng cho hệ thống."
+                : "Màn hình giám sát và hệ thống đang sử dụng đúng cấu hình hiện tại."}
             </div>
           </div>
 
           <div className="form-grid">
-            <label className="field">
+            <label className="field camera-id-field">
               <span>Camera ID</span>
               <input
+                className="camera-id-input"
                 value={draft.camera.camera_id}
                 onChange={(event) =>
                   updateDraft((current) => ({
@@ -721,7 +730,7 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
           <div className="panel-header">
             <div>
               <div className="panel-kicker">Trình chỉnh sửa làn</div>
-              <h3>Số lượng làn, chức năng làn và các vùng turn state</h3>
+              <h3>Cấu hình làn đường và các vùng phục vụ nhận diện hướng rẽ</h3>
             </div>
           </div>
 

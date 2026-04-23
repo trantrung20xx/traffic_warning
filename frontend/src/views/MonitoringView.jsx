@@ -110,9 +110,13 @@ export default function MonitoringView({ cameras, selectedCameraId, onSelectCame
               <div className="panel-kicker">Luồng hình và vi phạm thời gian thực</div>
               <h2>Màn hình giám sát camera</h2>
             </div>
-            <label className="field field-inline">
+            <label className="field field-inline monitor-camera-picker">
               <span>Camera</span>
-              <select value={selectedCameraId || ""} onChange={(event) => onSelectCamera(event.target.value || null)}>
+              <select
+                className="monitor-camera-select"
+                value={selectedCameraId || ""}
+                onChange={(event) => onSelectCamera(event.target.value || null)}
+              >
                 {cameras.map((cameraRow) => (
                   <option key={cameraRow.camera_id} value={cameraRow.camera_id}>
                     {cameraRow.camera_id} - {cameraRow.location.road_name}

@@ -226,6 +226,10 @@ export default function CameraCanvas({
     }
 
     setHoverVertexIndex(null);
+    if (isLineEditTarget(editTarget)) {
+      setHoverEdge(null);
+      return;
+    }
     setHoverEdge(findClosestEdge(editablePointsRef.current, point));
   };
 
@@ -362,7 +366,7 @@ export default function CameraCanvas({
       }
     });
 
-    if (editable && hoverEdge?.point) {
+    if (editable && !isLineEditTarget(editTarget) && hoverEdge?.point) {
       const [hx, hy] = hoverEdge.point;
       ctx.beginPath();
       ctx.arc(hx, hy, 6, 0, Math.PI * 2);
