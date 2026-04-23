@@ -769,6 +769,10 @@ export function validatePolygonDraft(draft) {
       warnings.push(`Polygon của làn ${lane.lane_id} đang tự cắt nhau.`);
     }
 
+    if (!Array.isArray(lane.allowed_maneuvers) || lane.allowed_maneuvers.length === 0) {
+      errors.push(`Làn ${lane.lane_id} phải có ít nhất một hướng di chuyển được phép.`);
+    }
+
     if (!Array.isArray(lane.allowed_vehicle_types) || lane.allowed_vehicle_types.length === 0) {
       errors.push(`Làn ${lane.lane_id} phải có ít nhất một loại phương tiện được phép.`);
     }
