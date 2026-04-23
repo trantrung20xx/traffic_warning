@@ -145,7 +145,6 @@ export default function MonitoringView({ cameras, selectedCameraId, onSelectCame
                   lanes={laneConfig.lanes}
                   vehicles={vehicles}
                   processingFps={processingFps}
-                  showTurnRegions={false}
                 />
               </div>
             </>

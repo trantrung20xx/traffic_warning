@@ -1,10 +1,23 @@
 export const MANEUVERS = ["left", "straight", "right", "u_turn"];
+export const LANE_EDIT_TARGETS = ["lane_polygon", "approach_zone", "commit_gate", "commit_line"];
+export const GLOBAL_TARGET_PREFIXES = {
+  turn_corridor: "turn_corridor",
+  exit_zone: "exit_zone",
+  exit_line: "exit_line",
+};
 
 export const MANEUVER_LABELS = {
   left: "Rẽ trái",
   straight: "Đi thẳng",
   right: "Rẽ phải",
   u_turn: "Quay đầu",
+};
+
+export const LANE_TARGET_LABELS = {
+  lane_polygon: "Biên làn xe",
+  approach_zone: "Vùng chuẩn bị rẽ",
+  commit_gate: "Vùng bắt đầu rẽ",
+  commit_line: "Vạch bắt đầu rẽ",
 };
 
 export const VEHICLE_TYPES = ["motorcycle", "car", "truck", "bus"];
@@ -258,16 +271,30 @@ export function denormalizePoints(points, frameWidth, frameHeight) {
   return (points || []).map((point) => denormalizePoint(point, frameWidth, frameHeight));
 }
 
+function denormalizeGeometryCollection(collection, frameWidth, frameHeight) {
+  return Object.fromEntries(
+    Object.entries(collection || {}).map(([maneuver, points]) => [
+      maneuver,
+      denormalizePoints(points || [], frameWidth, frameHeight),
+    ]),
+  );
+}
+
+function normalizeGeometryCollection(collection) {
+  return Object.fromEntries(
+    Object.entries(collection || {})
+      .map(([maneuver, points]) => [maneuver, Array.isArray(points) ? points : []])
+      .filter(([, points]) => points.length > 0),
+  );
+}
+
 export function denormalizeLane(lane, frameWidth, frameHeight) {
   return {
     ...lane,
     polygon: denormalizePoints(lane.polygon || [], frameWidth, frameHeight),
-    turn_regions: Object.fromEntries(
-      Object.entries(lane.turn_regions || {}).map(([maneuver, points]) => [
-        maneuver,
-        denormalizePoints(points, frameWidth, frameHeight),
-      ]),
-    ),
+    approach_zone: denormalizePoints(lane.approach_zone || [], frameWidth, frameHeight),
+    commit_gate: denormalizePoints(lane.commit_gate || [], frameWidth, frameHeight),
+    commit_line: denormalizePoints(lane.commit_line || [], frameWidth, frameHeight),
   };
 }
 
@@ -442,6 +469,83 @@ export function getVehicleTypeLabel(value) {
   return VEHICLE_TYPE_LABELS[value] || value;
 }
 
+export function isLineEditTarget(target) {
+  return target === "commit_line" || String(target || "").startsWith(`${GLOBAL_TARGET_PREFIXES.exit_line}:`);
+}
+
+export function isGlobalEditTarget(target) {
+  return (
+    String(target || "").startsWith(`${GLOBAL_TARGET_PREFIXES.turn_corridor}:`) ||
+    String(target || "").startsWith(`${GLOBAL_TARGET_PREFIXES.exit_zone}:`) ||
+    String(target || "").startsWith(`${GLOBAL_TARGET_PREFIXES.exit_line}:`)
+  );
+}
+
+export function parseEditTarget(target) {
+  if (LANE_EDIT_TARGETS.includes(target)) {
+    return { scope: "lane", key: target, maneuver: null };
+  }
+  if (String(target || "").startsWith(`${GLOBAL_TARGET_PREFIXES.turn_corridor}:`)) {
+    return {
+      scope: "global",
+      key: GLOBAL_TARGET_PREFIXES.turn_corridor,
+      maneuver: String(target).slice(`${GLOBAL_TARGET_PREFIXES.turn_corridor}:`.length),
+    };
+  }
+  if (String(target || "").startsWith(`${GLOBAL_TARGET_PREFIXES.exit_zone}:`)) {
+    return {
+      scope: "global",
+      key: GLOBAL_TARGET_PREFIXES.exit_zone,
+      maneuver: String(target).slice(`${GLOBAL_TARGET_PREFIXES.exit_zone}:`.length),
+    };
+  }
+  if (String(target || "").startsWith(`${GLOBAL_TARGET_PREFIXES.exit_line}:`)) {
+    return {
+      scope: "global",
+      key: GLOBAL_TARGET_PREFIXES.exit_line,
+      maneuver: String(target).slice(`${GLOBAL_TARGET_PREFIXES.exit_line}:`.length),
+    };
+  }
+  return { scope: "lane", key: "lane_polygon", maneuver: null };
+}
+
+export function getEditTargetLabel(target, laneId = null) {
+  const parsed = parseEditTarget(target);
+  if (parsed.scope === "lane") {
+    const base = LANE_TARGET_LABELS[parsed.key] || parsed.key;
+    return laneId != null ? `${base} của làn ${laneId}` : base;
+  }
+  const maneuverLabel = getManeuverLabel(parsed.maneuver);
+  if (parsed.key === GLOBAL_TARGET_PREFIXES.turn_corridor) {
+    return `Quỹ đạo ${maneuverLabel}`;
+  }
+  if (parsed.key === GLOBAL_TARGET_PREFIXES.exit_line) {
+    return `Đường xác nhận lỗi ${maneuverLabel}`;
+  }
+  return `Vùng xác nhận lỗi ${maneuverLabel}`;
+}
+
+export function getEditTargetMinimumPoints(target) {
+  return isLineEditTarget(target) ? 2 : 3;
+}
+
+export function getTargetPoints({ lane, laneConfig, editTarget }) {
+  const parsed = parseEditTarget(editTarget);
+  if (parsed.scope === "lane") {
+    if (!lane) return [];
+    const laneField = parsed.key === "lane_polygon" ? "polygon" : parsed.key;
+    return lane[laneField] || [];
+  }
+  if (!laneConfig) return [];
+  const collection =
+    parsed.key === GLOBAL_TARGET_PREFIXES.turn_corridor
+      ? laneConfig.turn_corridors
+      : parsed.key === GLOBAL_TARGET_PREFIXES.exit_line
+        ? laneConfig.exit_lines
+        : laneConfig.exit_zones;
+  return collection?.[parsed.maneuver] || [];
+}
+
 export function getViolationLabel(value) {
   return VIOLATION_LABELS[value] || value;
 }
@@ -469,7 +573,9 @@ export function createEmptyLane(laneId, frameWidth, frameHeight) {
     allowed_maneuvers: ["straight"],
     allowed_lane_changes: [laneId],
     allowed_vehicle_types: [...VEHICLE_TYPES],
-    turn_regions: {},
+    approach_zone: [],
+    commit_gate: [],
+    commit_line: [],
   };
 }
 
@@ -494,6 +600,9 @@ export function createCameraDraft(cameraId = "") {
       camera_id: cameraId,
       frame_width: 1280,
       frame_height: 720,
+      turn_corridors: {},
+      exit_zones: {},
+      exit_lines: {},
       lanes: [createEmptyLane(1, 1280, 720)],
     },
   };
@@ -515,13 +624,18 @@ export function normalizeCameraDetail(detail) {
     ...draft.lane_config,
     frame_width: draft.lane_config?.frame_width || camera.frame_width || 1280,
     frame_height: draft.lane_config?.frame_height || camera.frame_height || 720,
+    turn_corridors: normalizeGeometryCollection(draft.lane_config?.turn_corridors || {}),
+    exit_zones: normalizeGeometryCollection(draft.lane_config?.exit_zones || {}),
+    exit_lines: normalizeGeometryCollection(draft.lane_config?.exit_lines || {}),
     lanes: (draft.lane_config?.lanes || []).map((lane) => ({
       lane_id: lane.lane_id,
       polygon: lane.polygon || [],
+      approach_zone: lane.approach_zone || [],
+      commit_gate: lane.commit_gate || [],
+      commit_line: lane.commit_line || [],
       allowed_maneuvers: lane.allowed_maneuvers || [],
       allowed_lane_changes: lane.allowed_lane_changes || [lane.lane_id],
       allowed_vehicle_types: lane.allowed_vehicle_types || [...VEHICLE_TYPES],
-      turn_regions: lane.turn_regions || {},
     })),
   };
   return {
@@ -533,20 +647,34 @@ export function normalizeCameraDetail(detail) {
 export function buildPayload(draft) {
   const frameWidth = Number(draft.camera.frame_width) || 1280;
   const frameHeight = Number(draft.camera.frame_height) || 720;
+  const normalizeOptionalGeometry = (points, minimumPoints) => {
+    const normalized = (points || []).map(([x, y]) => [Number(x), Number(y)]);
+    return normalized.length >= minimumPoints ? normalized : null;
+  };
   const lanes = draft.lane_config.lanes.map((lane) => ({
     lane_id: Number(lane.lane_id),
     // Giữ polygon ở dạng chuẩn hóa ngay trong state và payload để cấu hình không phụ thuộc độ phân giải.
     // Khi vẽ lên canvas mới đổi ngược về pixel.
     polygon: (lane.polygon || []).map(([x, y]) => [Number(x), Number(y)]),
+    approach_zone: normalizeOptionalGeometry(lane.approach_zone, 3),
+    commit_gate: normalizeOptionalGeometry(lane.commit_gate, 3),
+    commit_line: normalizeOptionalGeometry(lane.commit_line, 2),
     allowed_maneuvers: lane.allowed_maneuvers || [],
     allowed_lane_changes: (lane.allowed_lane_changes || []).map((value) => Number(value)),
     allowed_vehicle_types: lane.allowed_vehicle_types || [...VEHICLE_TYPES],
-    turn_regions: Object.fromEntries(
-      Object.entries(lane.turn_regions || {})
+  }));
+  const buildGlobalCollection = (collection) =>
+    Object.fromEntries(
+      Object.entries(collection || {})
         .filter(([, points]) => Array.isArray(points) && points.length >= 3)
         .map(([key, points]) => [key, points.map(([x, y]) => [Number(x), Number(y)])]),
-    ),
-  }));
+    );
+  const buildGlobalLineCollection = (collection) =>
+    Object.fromEntries(
+      Object.entries(collection || {})
+        .filter(([, points]) => Array.isArray(points) && points.length === 2)
+        .map(([key, points]) => [key, points.map(([x, y]) => [Number(x), Number(y)])]),
+    );
   return {
     camera: {
       camera_id: draft.camera.camera_id.trim(),
@@ -567,6 +695,9 @@ export function buildPayload(draft) {
       camera_id: draft.camera.camera_id.trim(),
       frame_width: frameWidth,
       frame_height: frameHeight,
+      turn_corridors: buildGlobalCollection(draft.lane_config.turn_corridors),
+      exit_zones: buildGlobalCollection(draft.lane_config.exit_zones),
+      exit_lines: buildGlobalLineCollection(draft.lane_config.exit_lines),
       lanes,
     },
   };
@@ -642,14 +773,45 @@ export function validatePolygonDraft(draft) {
       errors.push(`Làn ${lane.lane_id} phải có ít nhất một loại phương tiện được phép.`);
     }
 
-    Object.entries(lane.turn_regions || {}).forEach(([maneuver, points]) => {
-      if (!Array.isArray(points) || points.length === 0) return;
-      if (points.length < 3) {
-        errors.push(`Vùng rẽ "${getManeuverLabel(maneuver)}" của làn ${lane.lane_id} phải có ít nhất 3 điểm.`);
-      } else if (polygonSelfIntersects(points)) {
-        warnings.push(`Vùng rẽ "${getManeuverLabel(maneuver)}" của làn ${lane.lane_id} đang tự cắt nhau.`);
-      }
-    });
+    const approachZone = lane.approach_zone || [];
+    if (approachZone.length < 3) {
+      errors.push(`Vùng tiếp cận của làn ${lane.lane_id} phải có ít nhất 3 điểm.`);
+    } else if (polygonSelfIntersects(approachZone)) {
+      warnings.push(`Vùng tiếp cận của làn ${lane.lane_id} đang tự cắt nhau.`);
+    }
+
+    const commitGate = lane.commit_gate || [];
+    const commitLine = lane.commit_line || [];
+    if (commitGate.length < 3 && commitLine.length !== 2) {
+      errors.push(`Làn ${lane.lane_id} phải có vùng commit hoặc vạch commit hợp lệ.`);
+    }
+    if (commitGate.length >= 3 && polygonSelfIntersects(commitGate)) {
+      warnings.push(`Vùng commit của làn ${lane.lane_id} đang tự cắt nhau.`);
+    }
+    if (commitLine.length > 0 && commitLine.length !== 2) {
+      errors.push(`Vạch commit của làn ${lane.lane_id} phải có đúng 2 điểm.`);
+    }
+  });
+
+  MANEUVERS.forEach((maneuver) => {
+    const corridor = draft?.lane_config?.turn_corridors?.[maneuver] || [];
+    if (corridor.length > 0 && corridor.length < 3) {
+      errors.push(`Hành lang rẽ "${getManeuverLabel(maneuver)}" phải có ít nhất 3 điểm.`);
+    } else if (corridor.length >= 3 && polygonSelfIntersects(corridor)) {
+      warnings.push(`Hành lang rẽ "${getManeuverLabel(maneuver)}" đang tự cắt nhau.`);
+    }
+
+    const exitZone = draft?.lane_config?.exit_zones?.[maneuver] || [];
+    if (exitZone.length > 0 && exitZone.length < 3) {
+      errors.push(`Vùng thoát "${getManeuverLabel(maneuver)}" phải có ít nhất 3 điểm.`);
+    } else if (exitZone.length >= 3 && polygonSelfIntersects(exitZone)) {
+      warnings.push(`Vùng thoát "${getManeuverLabel(maneuver)}" đang tự cắt nhau.`);
+    }
+
+    const exitLine = draft?.lane_config?.exit_lines?.[maneuver] || [];
+    if (exitLine.length > 0 && exitLine.length !== 2) {
+      errors.push(`Đường xác nhận lỗi "${getManeuverLabel(maneuver)}" phải có đúng 2 điểm.`);
+    }
   });
 
   return { errors, warnings };

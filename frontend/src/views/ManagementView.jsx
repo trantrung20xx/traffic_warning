@@ -10,13 +10,19 @@ import {
   updateCamera,
 } from "../api";
 import {
+  GLOBAL_TARGET_PREFIXES,
   MANEUVERS,
   VEHICLE_TYPES,
   buildPayload,
   createCameraDraft,
   createEmptyLane,
+  getEditTargetLabel,
+  getEditTargetMinimumPoints,
   getManeuverLabel,
+  getTargetPoints,
   getVehicleTypeLabel,
+  isGlobalEditTarget,
+  isLineEditTarget,
   normalizeCameraDetail,
   polygonSelfIntersects,
   validatePolygonDraft,
@@ -179,7 +185,7 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
   const [activeCameraId, setActiveCameraId] = useState(selectedCameraId || null);
   const [selectedLaneId, setSelectedLaneId] = useState(1);
   const [selectedVertexIndex, setSelectedVertexIndex] = useState(null);
-  const [editTarget, setEditTarget] = useState("lane");
+  const [editTarget, setEditTarget] = useState("lane_polygon");
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
   const [isNewCamera, setIsNewCamera] = useState(false);
@@ -224,20 +230,22 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
   );
 
   const selectedPoints = useMemo(() => {
-    if (!selectedLane) return [];
-    if (editTarget === "lane") return selectedLane.polygon || [];
-    return selectedLane.turn_regions?.[editTarget] || [];
-  }, [editTarget, selectedLane]);
+    return getTargetPoints({
+      lane: selectedLane,
+      laneConfig: draft.lane_config,
+      editTarget,
+    });
+  }, [draft.lane_config, editTarget, selectedLane]);
 
   const polygonStatus = useMemo(() => {
-    if (!selectedLane) return { warnings: [] };
-    const targetLabel = editTarget === "lane" ? `Polygon làn ${selectedLane.lane_id}` : `${getManeuverLabel(editTarget)} của làn ${selectedLane.lane_id}`;
+    if (!selectedLane && !isGlobalEditTarget(editTarget)) return { warnings: [] };
+    const targetLabel = getEditTargetLabel(editTarget, selectedLane?.lane_id ?? null);
     const warnings = [];
-    const minimumPoints = 3;
+    const minimumPoints = getEditTargetMinimumPoints(editTarget);
     if (selectedPoints.length > 0 && selectedPoints.length < minimumPoints) {
       warnings.push(`${targetLabel} hiện có dưới ${minimumPoints} điểm, chưa đủ để tạo vùng hợp lệ.`);
     }
-    if (selectedPoints.length >= 4 && polygonSelfIntersects(selectedPoints)) {
+    if (!isLineEditTarget(editTarget) && selectedPoints.length >= 4 && polygonSelfIntersects(selectedPoints)) {
       warnings.push(`${targetLabel} đang tự cắt nhau, nên chỉnh lại để tránh vùng hình học khó kiểm soát.`);
     }
     return { warnings };
@@ -315,55 +323,75 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
     setMessage(`Đã xóa làn ${laneId}.`);
   };
 
-  const updateTargetPolygon = (lane, updater) => {
-    if (editTarget === "lane") {
-      return {
-        ...lane,
-        polygon: updater(lane.polygon || []),
-      };
+  const updateTargetGeometry = (updater) => {
+    if (isGlobalEditTarget(editTarget)) {
+      updateDraft((current) => {
+        const nextLaneConfig = { ...current.lane_config };
+        const [collectionKey, maneuver] = editTarget.split(":");
+        const collection =
+          collectionKey === GLOBAL_TARGET_PREFIXES.turn_corridor
+            ? nextLaneConfig.turn_corridors || {}
+            : collectionKey === GLOBAL_TARGET_PREFIXES.exit_line
+              ? nextLaneConfig.exit_lines || {}
+              : nextLaneConfig.exit_zones || {};
+        const nextCollection = {
+          ...collection,
+          [maneuver]: updater(collection[maneuver] || []),
+        };
+        if (collectionKey === GLOBAL_TARGET_PREFIXES.turn_corridor) {
+          nextLaneConfig.turn_corridors = nextCollection;
+        } else if (collectionKey === GLOBAL_TARGET_PREFIXES.exit_line) {
+          nextLaneConfig.exit_lines = nextCollection;
+        } else {
+          nextLaneConfig.exit_zones = nextCollection;
+        }
+        return {
+          ...current,
+          lane_config: nextLaneConfig,
+        };
+      });
+      return;
     }
-    return {
+
+    if (!selectedLane) return;
+    updateLane(selectedLane.lane_id, (lane) => ({
       ...lane,
-      turn_regions: {
-        ...(lane.turn_regions || {}),
-        [editTarget]: updater(lane.turn_regions?.[editTarget] || []),
-      },
-    };
+      [editTarget === "lane_polygon" ? "polygon" : editTarget]: updater(
+        lane[editTarget === "lane_polygon" ? "polygon" : editTarget] || [],
+      ),
+    }));
   };
 
   const handleCanvasPoint = (point) => {
-    if (!selectedLane) return;
-    updateLane(selectedLane.lane_id, (lane) => updateTargetPolygon(lane, (points) => [...points, point]));
+    if (!selectedLane && !isGlobalEditTarget(editTarget)) return;
+    updateTargetGeometry((points) => [...points, point]);
     setSelectedVertexIndex(selectedPoints.length);
     setMessage("Đã thêm điểm mới vào polygon.");
   };
 
   const replaceTargetPolygon = (nextPoints) => {
-    if (!selectedLane) return;
-    updateLane(selectedLane.lane_id, (lane) => updateTargetPolygon(lane, () => nextPoints));
+    if (!selectedLane && !isGlobalEditTarget(editTarget)) return;
+    updateTargetGeometry(() => nextPoints);
     setMessage("Đã cập nhật polygon trên canvas, chưa lưu xuống backend.");
   };
 
   const deleteSelectedVertex = () => {
-    if (!selectedLane || selectedVertexIndex == null) return;
-    updateLane(
-      selectedLane.lane_id,
-      (lane) => updateTargetPolygon(lane, (points) => points.filter((_, index) => index !== selectedVertexIndex)),
-    );
+    if ((!selectedLane && !isGlobalEditTarget(editTarget)) || selectedVertexIndex == null) return;
+    updateTargetGeometry((points) => points.filter((_, index) => index !== selectedVertexIndex));
     setSelectedVertexIndex(null);
     setMessage("Đã xóa điểm đang chọn.");
   };
 
   const undoPoint = () => {
-    if (!selectedLane) return;
-    updateLane(selectedLane.lane_id, (lane) => updateTargetPolygon(lane, (points) => points.slice(0, -1)));
+    if (!selectedLane && !isGlobalEditTarget(editTarget)) return;
+    updateTargetGeometry((points) => points.slice(0, -1));
     setSelectedVertexIndex(null);
     setMessage("Đã xóa điểm vừa vẽ.");
   };
 
   const clearPolygon = () => {
-    if (!selectedLane) return;
-    updateLane(selectedLane.lane_id, (lane) => updateTargetPolygon(lane, () => []));
+    if (!selectedLane && !isGlobalEditTarget(editTarget)) return;
+    updateTargetGeometry(() => []);
     setSelectedVertexIndex(null);
     setMessage("Đã xóa toàn bộ polygon hiện tại.");
   };
@@ -376,7 +404,7 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
     setDraft(draftState);
     setSelectedLaneId(1);
     setSelectedVertexIndex(null);
-    setEditTarget("lane");
+    setEditTarget("lane_polygon");
     setIsDirty(false);
     setPolygonLocked(false);
     setHasBackgroundImage(false);
@@ -693,7 +721,7 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
           <div className="panel-header">
             <div>
               <div className="panel-kicker">Trình chỉnh sửa làn</div>
-              <h3>Số lượng làn, chức năng làn và vùng đa giác rẽ</h3>
+              <h3>Số lượng làn, chức năng làn và các vùng turn state</h3>
             </div>
           </div>
 
@@ -783,12 +811,29 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
                   <label className="field lane-field-target">
                     <span>Đối tượng chỉnh sửa</span>
                     <select value={editTarget} onChange={(event) => setEditTarget(event.target.value)}>
-                      <option value="lane">Đa giác làn</option>
-                      {MANEUVERS.map((maneuver) => (
-                        <option key={maneuver} value={maneuver}>
-                          Vùng rẽ: {getManeuverLabel(maneuver)}
-                        </option>
-                      ))}
+                      <optgroup label="Theo từng làn">
+                        <option value="lane_polygon">Biên làn xe</option>
+                        <option value="approach_zone">Vùng chuẩn bị rẽ</option>
+                        <option value="commit_gate">Vùng bắt đầu rẽ</option>
+                        <option value="commit_line">Vạch bắt đầu rẽ</option>
+                      </optgroup>
+                      <optgroup label="Theo hướng rẽ">
+                        {MANEUVERS.map((maneuver) => (
+                          <option key={`turn_corridor:${maneuver}`} value={`turn_corridor:${maneuver}`}>
+                            Quỹ đạo: {getManeuverLabel(maneuver)}
+                          </option>
+                        ))}
+                        {MANEUVERS.map((maneuver) => (
+                          <option key={`exit_zone:${maneuver}`} value={`exit_zone:${maneuver}`}>
+                            Vùng xác nhận lỗi: {getManeuverLabel(maneuver)}
+                          </option>
+                        ))}
+                        {MANEUVERS.map((maneuver) => (
+                          <option key={`exit_line:${maneuver}`} value={`exit_line:${maneuver}`}>
+                            Đường xác nhận lỗi: {getManeuverLabel(maneuver)}
+                          </option>
+                        ))}
+                      </optgroup>
                     </select>
                   </label>
                 </div>
@@ -898,13 +943,15 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
               frameWidth={draft.camera.frame_width}
               frameHeight={draft.camera.frame_height}
               lanes={draft.lane_config.lanes}
+              turnCorridors={draft.lane_config.turn_corridors}
+              exitZones={draft.lane_config.exit_zones}
+              exitLines={draft.lane_config.exit_lines}
               vehicles={[]}
               backgroundImageUrl={
                 !isNewCamera && hasBackgroundImage && draft.camera.camera_id
                   ? getBackgroundImageUrl(draft.camera.camera_id, backgroundRevision)
                   : null
               }
-              showTurnRegions
               selectedLaneId={selectedLaneId}
               selectedVertexIndex={selectedVertexIndex}
               editable={!polygonLocked}

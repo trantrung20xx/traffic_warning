@@ -65,6 +65,7 @@ class CameraContext:
         wrong_lane_min_duration_ms: int = 1200,
         turn_region_min_hits: int = 3,
         turn_candidate_window_ms: int = 500,
+        turn_state_timeout_ms: int = 3000,
         state_prune_max_age_s: float = 60.0,
         rtsp_reconnect_delay_s: float = 2.0,
         preview_max_fps: float = 15.0,
@@ -124,9 +125,13 @@ class CameraContext:
         )
         self.violation_logic = ViolationLogic(
             lane_config.lanes,
+            turn_corridors=lane_config.turn_corridors,
+            exit_zones=lane_config.exit_zones,
+            exit_lines=lane_config.exit_lines,
             wrong_lane_min_duration_ms=wrong_lane_min_duration_ms,
             turn_region_min_hits=turn_region_min_hits,
             turn_candidate_window_ms=turn_candidate_window_ms,
+            turn_state_timeout_ms=turn_state_timeout_ms,
         )
 
         self.stats = StatisticsEngine()
@@ -168,7 +173,9 @@ class CameraContext:
                 {
                     "lane_id": lp.lane_id,
                     "polygon": lp.polygon,
-                    "turn_regions": lp.turn_regions or {},
+                    "approach_zone": lp.approach_zone,
+                    "commit_gate": lp.commit_gate,
+                    "commit_line": lp.commit_line,
                     "allowed_maneuvers": lp.allowed_maneuvers or [],
                     "allowed_lane_changes": lp.allowed_lane_changes or [lp.lane_id],
                     "allowed_vehicle_types": lp.allowed_vehicle_types or ["motorcycle", "car", "truck", "bus"],
@@ -179,6 +186,9 @@ class CameraContext:
             "frame_width": self.lane_config.frame_width,
             "frame_height": self.lane_config.frame_height,
             "lanes": lanes,
+            "turn_corridors": self.lane_config.turn_corridors or {},
+            "exit_zones": self.lane_config.exit_zones or {},
+            "exit_lines": self.lane_config.exit_lines or {},
         }
 
     def get_latest_preview_jpeg(self) -> Optional[bytes]:

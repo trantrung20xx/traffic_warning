@@ -224,13 +224,18 @@ class CameraManager:
                     {
                         "lane_id": lane.lane_id,
                         "polygon": lane.polygon,
-                        "turn_regions": lane.turn_regions or {},
+                        "approach_zone": lane.approach_zone,
+                        "commit_gate": lane.commit_gate,
+                        "commit_line": lane.commit_line,
                         "allowed_maneuvers": lane.allowed_maneuvers or [],
                         "allowed_lane_changes": lane.allowed_lane_changes or [lane.lane_id],
                         "allowed_vehicle_types": lane.allowed_vehicle_types or ["motorcycle", "car", "truck", "bus"],
                     }
                     for lane in lane_cfg_pixels.lanes
                 ],
+                "turn_corridors": lane_cfg_pixels.turn_corridors or {},
+                "exit_zones": lane_cfg_pixels.exit_zones or {},
+                "exit_lines": lane_cfg_pixels.exit_lines or {},
             }
         return ctx.get_lane_polygons_for_ui()
 
@@ -317,6 +322,7 @@ class CameraManager:
             wrong_lane_min_duration_ms=self.cfg.wrong_lane_min_duration_ms,
             turn_region_min_hits=self.cfg.turn_region_min_hits,
             turn_candidate_window_ms=self.cfg.turn_candidate_window_ms,
+            turn_state_timeout_ms=self.cfg.turn_state_timeout_ms,
             state_prune_max_age_s=self.cfg.state_prune_max_age_s,
             rtsp_reconnect_delay_s=self.cfg.rtsp_reconnect_delay_s,
             preview_max_fps=self.cfg.preview_max_fps,

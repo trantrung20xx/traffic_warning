@@ -129,6 +129,7 @@ File này quyết định tham số runtime:
   - `track_push_interval_ms`
   - `wrong_lane_min_duration_ms`
   - `turn_region_min_hits`
+  - `turn_state_timeout_ms`
   - `state_prune_max_age_s`
   - `rtsp_reconnect_delay_s`
 - preview và ảnh bằng chứng:
@@ -159,10 +160,17 @@ Mỗi camera cần:
 Tọa độ polygon hiện được lưu chuẩn hóa theo `[0, 1]`:
 
 - `polygon`
-- `turn_regions`
+- `approach_zone`
+- `commit_gate`
+- `commit_line`
 - `allowed_maneuvers`
 - `allowed_lane_changes`
 - `allowed_vehicle_types`
+
+Ở cấp giao lộ có thể cấu hình thêm:
+
+- `turn_corridors`
+- `exit_zones`
 
 Khi runtime, backend sẽ đổi lại sang hệ pixel đúng với `frame_width/frame_height`.
 
@@ -210,7 +218,9 @@ Khi runtime, backend sẽ đổi lại sang hệ pixel đúng với `frame_width
 - Lane detection hiện không dùng AI; làn được gán bằng polygon thủ công.
 - Điểm đại diện của xe để gán làn là tâm cạnh đáy của bounding box.
 - Vi phạm sai làn được tính theo thời gian thực, không theo số frame.
-- Hướng rẽ được suy luận từ `turn_regions` và số lần hit tối thiểu.
+- `illegal_turn` dùng state machine `idle -> approach -> committed -> confirmed`.
+- Tính hợp lệ của turn luôn dựa trên `allowed_maneuvers` của `source_lane` đã khóa ở `approach/commit`.
+- `turn_corridors` và `exit_zones` dùng để xác nhận maneuver cuối cùng, không phụ thuộc `current_stable_lane_id` sau khi đã commit.
 - Backend có endpoint preview MJPEG riêng; suy luận AI không chạy ở endpoint này.
 - Trên Windows, `server.py` dùng `WindowsSelectorEventLoopPolicy` để giảm lỗi stack trace khi websocket bị ngắt đột ngột.
 

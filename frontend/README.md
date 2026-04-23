@@ -111,7 +111,7 @@ VITE_API_BASE=http://localhost:8000
   - `gps_lng`
   - `frame_width`
   - `frame_height`
-- Chỉnh polygon làn và `turn_regions` trên canvas.
+- Chỉnh polygon làn, `approach_zone`, `commit_gate`, `commit_line`, `turn_corridors`, `exit_zones` trên canvas.
 - Thêm/xóa làn.
 - Chọn:
   - `allowed_lane_changes`

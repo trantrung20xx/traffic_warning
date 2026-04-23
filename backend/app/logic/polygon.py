@@ -33,3 +33,45 @@ def bbox_bottom_center(bbox_xyxy: Sequence[float]) -> tuple[float, float]:
     x1, y1, x2, y2 = bbox_xyxy
     return (float(x1 + x2) / 2.0, float(y2))
 
+
+def segment_intersects_segment(
+    start_a: Sequence[float],
+    end_a: Sequence[float],
+    start_b: Sequence[float],
+    end_b: Sequence[float],
+) -> bool:
+    """Kiểm tra hai đoạn thẳng có cắt nhau hay không."""
+
+    def orientation(p: Sequence[float], q: Sequence[float], r: Sequence[float]) -> int:
+        value = (float(q[1]) - float(p[1])) * (float(r[0]) - float(q[0])) - (
+            float(q[0]) - float(p[0])
+        ) * (float(r[1]) - float(q[1]))
+        if abs(value) < 1e-9:
+            return 0
+        return 1 if value > 0 else 2
+
+    def on_segment(p: Sequence[float], q: Sequence[float], r: Sequence[float]) -> bool:
+        return (
+            min(float(p[0]), float(r[0])) - 1e-9 <= float(q[0]) <= max(float(p[0]), float(r[0])) + 1e-9
+            and min(float(p[1]), float(r[1])) - 1e-9 <= float(q[1]) <= max(float(p[1]), float(r[1])) + 1e-9
+        )
+
+    o1 = orientation(start_a, end_a, start_b)
+    o2 = orientation(start_a, end_a, end_b)
+    o3 = orientation(start_b, end_b, start_a)
+    o4 = orientation(start_b, end_b, end_a)
+
+    if o1 != o2 and o3 != o4:
+        return True
+
+    if o1 == 0 and on_segment(start_a, start_b, end_a):
+        return True
+    if o2 == 0 and on_segment(start_a, end_b, end_a):
+        return True
+    if o3 == 0 and on_segment(start_b, start_a, end_b):
+        return True
+    if o4 == 0 and on_segment(start_b, end_a, end_b):
+        return True
+
+    return False
+

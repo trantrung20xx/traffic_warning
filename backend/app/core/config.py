@@ -9,6 +9,71 @@ from pydantic import BaseModel, field_validator
 from app.schemas.camera import CameraConfig
 
 ALLOWED_VEHICLE_TYPES = {"motorcycle", "car", "truck", "bus"}
+ALLOWED_MANEUVERS = {"straight", "left", "right", "u_turn"}
+
+
+def _validate_polygon_points(value: list[list[float]], *, field_name: str) -> list[list[float]]:
+    if len(value) < 3:
+        raise ValueError(f"{field_name} must contain at least 3 points")
+    for point in value:
+        if len(point) != 2:
+            raise ValueError(f"{field_name} points must be [x, y]")
+        x, y = point
+        if not (0.0 <= x <= 1.0 and 0.0 <= y <= 1.0):
+            raise ValueError(f"{field_name} points must be normalized to [0, 1]")
+    return value
+
+
+def _validate_line_points(value: list[list[float]], *, field_name: str) -> list[list[float]]:
+    if len(value) != 2:
+        raise ValueError(f"{field_name} must contain exactly 2 points")
+    for point in value:
+        if len(point) != 2:
+            raise ValueError(f"{field_name} points must be [x, y]")
+        x, y = point
+        if not (0.0 <= x <= 1.0 and 0.0 <= y <= 1.0):
+            raise ValueError(f"{field_name} points must be normalized to [0, 1]")
+    return value
+
+
+def _normalize_allowed_maneuvers(value: Optional[list[str]]) -> Optional[list[str]]:
+    if value is None:
+        return value
+    normalized = list(dict.fromkeys(str(item) for item in value))
+    if not normalized:
+        raise ValueError("allowed_maneuvers must contain at least one maneuver")
+    invalid = [item for item in normalized if item not in ALLOWED_MANEUVERS]
+    if invalid:
+        raise ValueError(f"unsupported maneuvers: {', '.join(invalid)}")
+    return normalized
+
+
+def _validate_maneuver_zones(
+    value: Optional[dict[str, list[list[float]]]],
+    *,
+    field_name: str,
+) -> Optional[dict[str, list[list[float]]]]:
+    if value is None:
+        return value
+    for maneuver, polygon in value.items():
+        if maneuver not in ALLOWED_MANEUVERS:
+            raise ValueError(f"unsupported maneuver key: {maneuver}")
+        _validate_polygon_points(polygon, field_name=f"{field_name} '{maneuver}'")
+    return value
+
+
+def _validate_maneuver_lines(
+    value: Optional[dict[str, list[list[float]]]],
+    *,
+    field_name: str,
+) -> Optional[dict[str, list[list[float]]]]:
+    if value is None:
+        return value
+    for maneuver, line in value.items():
+        if maneuver not in ALLOWED_MANEUVERS:
+            raise ValueError(f"unsupported maneuver key: {maneuver}")
+        _validate_line_points(line, field_name=f"{field_name} '{maneuver}'")
+    return value
 
 
 class AnalyticsChartConfig(BaseModel):
@@ -46,9 +111,12 @@ class LanePolygon(BaseModel):
     # khi thay đổi kích thước canvas; lúc chạy sẽ đổi lại về pixel của khung hình camera.
     polygon: list[list[float]]  # [[x,y], ...]
 
-    # Vùng hình học dùng để suy luận hướng di chuyển sau cùng của xe.
-    # Khóa là tên hướng như "straight", "left", "right", "u_turn".
-    turn_regions: Optional[dict[str, list[list[float]]]] = None
+    # Vùng tiếp cận để khóa lane nguồn nghiệp vụ cho bài toán turn.
+    approach_zone: Optional[list[list[float]]] = None
+
+    # Vùng commit hoặc vạch commit để xác nhận xe đã bắt đầu maneuver.
+    commit_gate: Optional[list[list[float]]] = None
+    commit_line: Optional[list[list[float]]] = None
 
     # Nếu làn gốc của xe là làn này thì chỉ được phép thực hiện các hướng trong danh sách.
     allowed_maneuvers: Optional[list[str]] = None
@@ -64,33 +132,26 @@ class LanePolygon(BaseModel):
     @field_validator("polygon")
     @classmethod
     def validate_polygon(cls, value: list[list[float]]) -> list[list[float]]:
-        if len(value) < 3:
-            raise ValueError("lane polygon must contain at least 3 points")
-        for point in value:
-            if len(point) != 2:
-                raise ValueError("lane polygon points must be [x, y]")
-            x, y = point
-            if not (0.0 <= x <= 1.0 and 0.0 <= y <= 1.0):
-                raise ValueError("lane polygon points must be normalized to [0, 1]")
-        return value
+        return _validate_polygon_points(value, field_name="lane polygon")
 
-    @field_validator("turn_regions")
+    @field_validator("approach_zone", "commit_gate")
     @classmethod
-    def validate_turn_regions(
-        cls, value: Optional[dict[str, list[list[float]]]]
-    ) -> Optional[dict[str, list[list[float]]]]:
+    def validate_optional_polygon(cls, value: Optional[list[list[float]]], info) -> Optional[list[list[float]]]:
         if value is None:
             return value
-        for maneuver, points in value.items():
-            if len(points) < 3:
-                raise ValueError(f"turn region '{maneuver}' must contain at least 3 points")
-            for point in points:
-                if len(point) != 2:
-                    raise ValueError(f"turn region '{maneuver}' points must be [x, y]")
-                x, y = point
-                if not (0.0 <= x <= 1.0 and 0.0 <= y <= 1.0):
-                    raise ValueError(f"turn region '{maneuver}' points must be normalized to [0, 1]")
-        return value
+        return _validate_polygon_points(value, field_name=info.field_name)
+
+    @field_validator("commit_line")
+    @classmethod
+    def validate_commit_line(cls, value: Optional[list[list[float]]]) -> Optional[list[list[float]]]:
+        if value is None:
+            return value
+        return _validate_line_points(value, field_name="commit_line")
+
+    @field_validator("allowed_maneuvers")
+    @classmethod
+    def validate_allowed_maneuvers(cls, value: Optional[list[str]]) -> Optional[list[str]]:
+        return _normalize_allowed_maneuvers(value)
 
     @field_validator("allowed_vehicle_types")
     @classmethod
@@ -113,12 +174,35 @@ class CameraLaneConfig(BaseModel):
     frame_width: int
     frame_height: int
     lanes: list[LanePolygon]
+    turn_corridors: Optional[dict[str, list[list[float]]]] = None
+    exit_zones: Optional[dict[str, list[list[float]]]] = None
+    exit_lines: Optional[dict[str, list[list[float]]]] = None
+
+    @field_validator("turn_corridors", "exit_zones")
+    @classmethod
+    def validate_geometry_collection(
+        cls,
+        value: Optional[dict[str, list[list[float]]]],
+        info,
+    ) -> Optional[dict[str, list[list[float]]]]:
+        return _validate_maneuver_zones(value, field_name=info.field_name)
+
+    @field_validator("exit_lines")
+    @classmethod
+    def validate_line_collection(
+        cls,
+        value: Optional[dict[str, list[list[float]]]],
+        info,
+    ) -> Optional[dict[str, list[list[float]]]]:
+        return _validate_maneuver_lines(value, field_name=info.field_name)
 
 
 class RuntimeLanePolygon(BaseModel):
     lane_id: int
     polygon: list[list[float]]
-    turn_regions: Optional[dict[str, list[list[float]]]] = None
+    approach_zone: Optional[list[list[float]]] = None
+    commit_gate: Optional[list[list[float]]] = None
+    commit_line: Optional[list[list[float]]] = None
     allowed_maneuvers: Optional[list[str]] = None
     allowed_lane_changes: Optional[list[int]] = None
     allowed_vehicle_types: Optional[list[str]] = None
@@ -129,6 +213,9 @@ class RuntimeCameraLaneConfig(BaseModel):
     frame_width: int
     frame_height: int
     lanes: list[RuntimeLanePolygon]
+    turn_corridors: Optional[dict[str, list[list[float]]]] = None
+    exit_zones: Optional[dict[str, list[list[float]]]] = None
+    exit_lines: Optional[dict[str, list[list[float]]]] = None
 
 
 class AppConfig(BaseModel):
@@ -161,6 +248,7 @@ class AppConfig(BaseModel):
     wrong_lane_min_duration_ms: int = 1200
     turn_region_min_hits: int = 3
     turn_candidate_window_ms: int = 500
+    turn_state_timeout_ms: int = 3000
     state_prune_max_age_s: float = 60.0
     rtsp_reconnect_delay_s: float = 2.0
     preview_max_fps: float = 15.0
@@ -207,6 +295,78 @@ def denormalize_polygon(points: list[list[float]], frame_width: int, frame_heigh
     return [denormalize_point(point, frame_width, frame_height) for point in points]
 
 
+def normalize_optional_polygon(
+    points: Optional[list[list[float]]],
+    frame_width: int,
+    frame_height: int,
+) -> Optional[list[list[float]]]:
+    if points is None:
+        return None
+    return normalize_polygon(points, frame_width, frame_height)
+
+
+def denormalize_optional_polygon(
+    points: Optional[list[list[float]]],
+    frame_width: int,
+    frame_height: int,
+) -> Optional[list[list[float]]]:
+    if points is None:
+        return None
+    return denormalize_polygon(points, frame_width, frame_height)
+
+
+def normalize_geometry_collection(
+    value: Optional[dict[str, Any]],
+    frame_width: int,
+    frame_height: int,
+) -> Optional[dict[str, list[list[float]]]]:
+    if value is None:
+        return None
+    return {
+        maneuver: normalize_polygon(polygon, frame_width, frame_height)
+        for maneuver, polygon in value.items()
+    }
+
+
+def denormalize_geometry_collection(
+    value: Optional[dict[str, list[list[float]]]],
+    frame_width: int,
+    frame_height: int,
+) -> Optional[dict[str, list[list[float]]]]:
+    if value is None:
+        return None
+    return {
+        maneuver: denormalize_polygon(polygon, frame_width, frame_height)
+        for maneuver, polygon in value.items()
+    }
+
+
+def normalize_line_collection(
+    value: Optional[dict[str, Any]],
+    frame_width: int,
+    frame_height: int,
+) -> Optional[dict[str, list[list[float]]]]:
+    if value is None:
+        return None
+    return {
+        maneuver: normalize_polygon(line, frame_width, frame_height)
+        for maneuver, line in value.items()
+    }
+
+
+def denormalize_line_collection(
+    value: Optional[dict[str, list[list[float]]]],
+    frame_width: int,
+    frame_height: int,
+) -> Optional[dict[str, list[list[float]]]]:
+    if value is None:
+        return None
+    return {
+        maneuver: denormalize_polygon(line, frame_width, frame_height)
+        for maneuver, line in value.items()
+    }
+
+
 def denormalize_lane_config(lane_config: CameraLaneConfig) -> RuntimeCameraLaneConfig:
     """Đổi toàn bộ polygon của camera từ tọa độ chuẩn hóa sang pixel lúc runtime."""
     frame_width = lane_config.frame_width
@@ -220,16 +380,18 @@ def denormalize_lane_config(lane_config: CameraLaneConfig) -> RuntimeCameraLaneC
                 {
                     "lane_id": lane.lane_id,
                     "polygon": denormalize_polygon(lane.polygon, frame_width, frame_height),
-                    "turn_regions": {
-                        maneuver: denormalize_polygon(points, frame_width, frame_height)
-                        for maneuver, points in (lane.turn_regions or {}).items()
-                    },
+                    "approach_zone": denormalize_optional_polygon(lane.approach_zone, frame_width, frame_height),
+                    "commit_gate": denormalize_optional_polygon(lane.commit_gate, frame_width, frame_height),
+                    "commit_line": denormalize_optional_polygon(lane.commit_line, frame_width, frame_height),
                     "allowed_maneuvers": lane.allowed_maneuvers,
                     "allowed_lane_changes": lane.allowed_lane_changes,
                     "allowed_vehicle_types": lane.allowed_vehicle_types,
                 }
                 for lane in lane_config.lanes
             ],
+            "turn_corridors": denormalize_geometry_collection(lane_config.turn_corridors, frame_width, frame_height),
+            "exit_zones": denormalize_geometry_collection(lane_config.exit_zones, frame_width, frame_height),
+            "exit_lines": denormalize_line_collection(lane_config.exit_lines, frame_width, frame_height),
         }
     )
 
@@ -240,14 +402,16 @@ def _normalize_lane_config_payload(raw: dict[str, Any]) -> dict[str, Any]:
     frame_height = int(raw.get("frame_height") or 1)
     return {
         **raw,
+        "turn_corridors": normalize_geometry_collection(raw.get("turn_corridors"), frame_width, frame_height),
+        "exit_zones": normalize_geometry_collection(raw.get("exit_zones"), frame_width, frame_height),
+        "exit_lines": normalize_line_collection(raw.get("exit_lines"), frame_width, frame_height),
         "lanes": [
             {
                 **lane,
                 "polygon": normalize_polygon(lane.get("polygon", []), frame_width, frame_height),
-                "turn_regions": {
-                    maneuver: normalize_polygon(points, frame_width, frame_height)
-                    for maneuver, points in (lane.get("turn_regions") or {}).items()
-                },
+                "approach_zone": normalize_optional_polygon(lane.get("approach_zone"), frame_width, frame_height),
+                "commit_gate": normalize_optional_polygon(lane.get("commit_gate"), frame_width, frame_height),
+                "commit_line": normalize_optional_polygon(lane.get("commit_line"), frame_width, frame_height),
             }
             for lane in raw.get("lanes", [])
         ],
@@ -303,6 +467,7 @@ def load_app_config(repo_root: Path) -> AppConfig:
             ),
             turn_region_min_hits=int(settings.get("turn_region_min_hits", 3)),
             turn_candidate_window_ms=int(settings.get("turn_candidate_window_ms", 500)),
+            turn_state_timeout_ms=int(settings.get("turn_state_timeout_ms", 3000)),
             state_prune_max_age_s=float(settings.get("state_prune_max_age_s", 60.0)),
             rtsp_reconnect_delay_s=float(settings.get("rtsp_reconnect_delay_s", 2.0)),
             preview_max_fps=float(settings.get("preview_max_fps", 15.0)),
