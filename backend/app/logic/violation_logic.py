@@ -8,10 +8,9 @@ from typing import Optional
 
 from app.core.config import LanePolygon
 from app.logic.polygon import (
+    PreparedLine,
+    PreparedPolygon,
     bbox_bottom_contact_points,
-    line_length,
-    point_in_polygon,
-    segment_intersects_segment,
     signed_distance_to_line,
 )
 
@@ -126,9 +125,30 @@ class ViolationLogic:
             raise ValueError("lane_polygons must be non-empty")
         self._lane_by_id = {lp.lane_id: lp for lp in lane_polygons}
         self._lane_order = [lp.lane_id for lp in lane_polygons]
-        self._turn_corridors = turn_corridors or {}
-        self._exit_zones = exit_zones or {}
-        self._exit_lines = exit_lines or {}
+        self._approach_shapes = {
+            lp.lane_id: PreparedPolygon.from_points(lp.approach_zone) if lp.approach_zone else None
+            for lp in lane_polygons
+        }
+        self._commit_gate_shapes = {
+            lp.lane_id: PreparedPolygon.from_points(lp.commit_gate) if lp.commit_gate else None
+            for lp in lane_polygons
+        }
+        self._commit_line_shapes = {
+            lp.lane_id: PreparedLine.from_points(lp.commit_line) if lp.commit_line else None
+            for lp in lane_polygons
+        }
+        self._turn_corridors = {
+            maneuver: PreparedPolygon.from_points(polygon)
+            for maneuver, polygon in (turn_corridors or {}).items()
+        }
+        self._exit_zones = {
+            maneuver: PreparedPolygon.from_points(polygon)
+            for maneuver, polygon in (exit_zones or {}).items()
+        }
+        self._exit_lines = {
+            maneuver: PreparedLine.from_points(points)
+            for maneuver, points in (exit_lines or {}).items()
+        }
         self._wrong_lane_min_duration_ms = int(wrong_lane_min_duration_ms)
         self._turn_region_min_hits = int(turn_region_min_hits)
         self._turn_candidate_window_ms = int(turn_candidate_window_ms)
@@ -479,9 +499,8 @@ class ViolationLogic:
         prioritized_lane_ids.extend(lane_id for lane_id in self._lane_order if lane_id != current_lane_id)
 
         for lane_id in prioritized_lane_ids:
-            lane_cfg = self._lane_by_id.get(lane_id)
-            approach_polygon = lane_cfg.approach_zone if lane_cfg is not None else None
-            if approach_polygon and self._sample_inside_polygon(sample=sample, polygon=approach_polygon):
+            approach_shape = self._approach_shapes.get(lane_id)
+            if approach_shape and self._sample_inside_polygon(sample=sample, polygon=approach_shape):
                 return lane_id
         return None
 
@@ -500,18 +519,16 @@ class ViolationLogic:
         prioritized_lane_ids.extend(lane_id for lane_id in self._lane_order if lane_id not in prioritized_lane_ids)
 
         for lane_id in prioritized_lane_ids:
-            lane_cfg = self._lane_by_id.get(lane_id)
-            if lane_cfg is None:
-                continue
-            if lane_cfg.commit_gate and self._sample_inside_polygon(sample=sample, polygon=lane_cfg.commit_gate):
+            commit_gate = self._commit_gate_shapes.get(lane_id)
+            if commit_gate and self._sample_inside_polygon(sample=sample, polygon=commit_gate):
                 return lane_id
-            if lane_cfg.commit_line and f"commit:{lane_id}" in line_events:
+            if self._commit_line_shapes.get(lane_id) and f"commit:{lane_id}" in line_events:
                 return lane_id
         return None
 
     def _match_zone_collection(
         self,
-        collection: dict[str, list[list[float]]],
+        collection: dict[str, PreparedPolygon],
         *,
         sample: TrajectorySample,
     ) -> list[str]:
@@ -525,13 +542,13 @@ class ViolationLogic:
         self,
         *,
         sample: TrajectorySample,
-        polygon: list[list[float]],
+        polygon: PreparedPolygon,
     ) -> bool:
-        if point_in_polygon(sample.center[0], sample.center[1], polygon):
+        if polygon.contains_xy(sample.center[0], sample.center[1]):
             return True
         hits = 0
         for point_x, point_y in sample.contacts:
-            if point_in_polygon(point_x, point_y, polygon):
+            if polygon.contains_xy(point_x, point_y):
                 hits += 1
         return hits >= 2
 
@@ -545,15 +562,14 @@ class ViolationLogic:
         events: set[str] = set()
         previous_sample = st.trajectory[-2] if len(st.trajectory) >= 2 else None
 
-        for lane_id in self._lane_order:
-            lane_cfg = self._lane_by_id.get(lane_id)
-            if lane_cfg is None or lane_cfg.commit_line is None:
+        for lane_id, line in self._commit_line_shapes.items():
+            if line is None:
                 continue
             key = f"commit:{lane_id}"
             state = st.line_crossings.setdefault(key, LineCrossingState())
             if self._update_line_crossing_state(
                 state=state,
-                line=lane_cfg.commit_line,
+                line=line,
                 previous_sample=previous_sample,
                 sample=sample,
                 ts=ts,
@@ -577,7 +593,7 @@ class ViolationLogic:
         self,
         *,
         state: LineCrossingState,
-        line: list[list[float]],
+        line: PreparedLine,
         previous_sample: Optional[TrajectorySample],
         sample: TrajectorySample,
         ts: datetime,
@@ -592,7 +608,7 @@ class ViolationLogic:
         line_crossed = self._sample_crosses_line(previous_sample=previous_sample, sample=sample, line=line)
         required_post_distance_px = max(
             self._line_crossing_min_displacement_px,
-            line_length(line[0], line[1]) * self._line_crossing_min_displacement_ratio,
+            line.length * self._line_crossing_min_displacement_ratio,
         )
 
         if state.last_confirmed_ts is not None:
@@ -696,9 +712,10 @@ class ViolationLogic:
         state.armed_side = current_side
         state.pre_count = 1
 
-    def _classify_sample_side(self, *, sample: TrajectorySample, line: list[list[float]]) -> int:
+    def _classify_sample_side(self, *, sample: TrajectorySample, line: PreparedLine) -> int:
+        line_start, line_end = line.coords
         distances = [
-            signed_distance_to_line(point, line[0], line[1])
+            signed_distance_to_line(point, line_start, line_end)
             for point in sample.contacts
         ]
         signs = [self._distance_to_side(distance) for distance in distances]
@@ -722,12 +739,12 @@ class ViolationLogic:
         *,
         previous_sample: Optional[TrajectorySample],
         sample: TrajectorySample,
-        line: list[list[float]],
+        line: PreparedLine,
     ) -> bool:
         if previous_sample is None:
             return False
         for start_point, end_point in zip(previous_sample.contacts, sample.contacts):
-            if segment_intersects_segment(start_point, end_point, line[0], line[1]):
+            if line.intersects_segment(start_point, end_point):
                 return True
         return False
 
@@ -735,13 +752,14 @@ class ViolationLogic:
         self,
         *,
         sample: TrajectorySample,
-        line: list[list[float]],
+        line: PreparedLine,
         expected_side: Optional[int],
     ) -> float:
         if expected_side is None:
             return 0.0
+        line_start, line_end = line.coords
         distances = [
-            signed_distance_to_line(point, line[0], line[1])
+            signed_distance_to_line(point, line_start, line_end)
             for point in sample.contacts
         ]
         relevant = [

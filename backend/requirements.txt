@@ -13,6 +13,9 @@ opencv-python
 numpy
 # Thư viện tính toán số học, xử lý ma trận (dùng trong xử lý ảnh)
 
+shapely
+# Thư viện geometry/spatial mature dùng cho point-in-polygon, line intersection và các phép hình học ổn định hơn
+
 pydantic
 # Định nghĩa schema dữ liệu và validate dữ liệu đầu vào/đầu ra API
 

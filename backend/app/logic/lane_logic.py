@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Optional
 
 from app.core.config import LanePolygon
-from app.logic.polygon import bbox_bottom_center, point_in_polygon
+from app.logic.polygon import PreparedPolygon, bbox_bottom_center
 
 
 @dataclass(frozen=True)
@@ -34,6 +34,7 @@ class LaneLogic:
             raise ValueError("lane_polygons must be non-empty")
         self._lane_polygons = {lp.lane_id: lp for lp in lane_polygons}
         self._lane_order = [lp.lane_id for lp in lane_polygons]
+        self._lane_shapes = {lp.lane_id: PreparedPolygon.from_points(lp.polygon) for lp in lane_polygons}
 
     def assign_lane_id_from_bbox_xyxy(
         self,
@@ -46,8 +47,8 @@ class LaneLogic:
 
         matches: list[int] = []
         for lane_id in self._lane_order:
-            lp = self._lane_polygons[lane_id]
-            if point_in_polygon(px, py, lp.polygon):
+            shape = self._lane_shapes[lane_id]
+            if shape.contains_xy(px, py):
                 matches.append(lane_id)
 
         if len(matches) == 1:

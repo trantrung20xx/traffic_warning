@@ -1,32 +1,65 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from math import hypot
-from typing import Iterable, Sequence
+from typing import Sequence
+
+from shapely import LineString, Polygon, contains_xy, intersects, intersects_xy, prepare
+
+
+def _normalize_point(point: Sequence[float]) -> tuple[float, float]:
+    return (float(point[0]), float(point[1]))
+
+
+@dataclass(slots=True)
+class PreparedPolygon:
+    """
+    Polygon đã được `shapely.prepare()` để tăng tốc cho các phép contains lặp lại.
+
+    Đây là hot path của lane matching và spatial turn-state nên việc chuẩn bị trước
+    geometry giúp sạch code hơn và giảm chi phí tự xử lý hình học ở Python.
+    """
+
+    geometry: Polygon
+
+    @classmethod
+    def from_points(cls, points: Sequence[Sequence[float]]) -> "PreparedPolygon":
+        polygon = Polygon([_normalize_point(point) for point in points])
+        prepare(polygon)
+        return cls(geometry=polygon)
+
+    def contains_xy(self, x: float, y: float) -> bool:
+        return bool(contains_xy(self.geometry, float(x), float(y)))
+
+
+@dataclass(slots=True)
+class PreparedLine:
+    geometry: LineString
+
+    @classmethod
+    def from_points(cls, points: Sequence[Sequence[float]]) -> "PreparedLine":
+        return cls(geometry=LineString([_normalize_point(point) for point in points]))
+
+    @property
+    def coords(self) -> tuple[tuple[float, float], tuple[float, float]]:
+        start, end = self.geometry.coords
+        return (_normalize_point(start), _normalize_point(end))
+
+    @property
+    def length(self) -> float:
+        return float(self.geometry.length)
+
+    def intersects_segment(self, start: Sequence[float], end: Sequence[float]) -> bool:
+        start_xy = _normalize_point(start)
+        end_xy = _normalize_point(end)
+        if start_xy == end_xy:
+            return bool(intersects_xy(self.geometry, start_xy[0], start_xy[1]))
+        return bool(intersects(self.geometry, LineString([start_xy, end_xy])))
 
 
 def point_in_polygon(point_x: float, point_y: float, polygon: Sequence[Sequence[float]]) -> bool:
-    """
-    Kiểm tra một điểm có nằm trong polygon hay không bằng thuật toán ray casting.
-    `polygon` có dạng `[[x, y], ...]` và cần ít nhất 3 đỉnh.
-    """
-    inside = False
-    n = len(polygon)
-    if n < 3:
-        return False
-
-    x = point_x
-    y = point_y
-    for i in range(n):
-        x1, y1 = polygon[i]
-        x2, y2 = polygon[(i + 1) % n]
-        # Kiểm tra cạnh hiện tại có cắt tia ngang kéo sang phải từ điểm cần xét hay không.
-        intersects = (y1 > y) != (y2 > y)
-        if intersects:
-            # Tính hoành độ giao điểm để biết có cần đảo trạng thái trong/ngoài polygon hay không.
-            x_int = (x2 - x1) * (y - y1) / (y2 - y1 + 1e-12) + x1
-            if x_int > x:
-                inside = not inside
-    return inside
+    """Wrapper tương thích cho code cũ, bên dưới dùng Shapely thay vì ray casting tự viết."""
+    return PreparedPolygon.from_points(polygon).contains_xy(point_x, point_y)
 
 
 def bbox_bottom_center(bbox_xyxy: Sequence[float]) -> tuple[float, float]:
@@ -51,7 +84,7 @@ def bbox_bottom_contact_points(bbox_xyxy: Sequence[float]) -> tuple[tuple[float,
 
 
 def line_length(start: Sequence[float], end: Sequence[float]) -> float:
-    return hypot(float(end[0]) - float(start[0]), float(end[1]) - float(start[1]))
+    return float(LineString([_normalize_point(start), _normalize_point(end)]).length)
 
 
 def signed_distance_to_line(
@@ -80,38 +113,6 @@ def segment_intersects_segment(
     start_b: Sequence[float],
     end_b: Sequence[float],
 ) -> bool:
-    """Kiểm tra hai đoạn thẳng có cắt nhau hay không."""
-
-    def orientation(p: Sequence[float], q: Sequence[float], r: Sequence[float]) -> int:
-        value = (float(q[1]) - float(p[1])) * (float(r[0]) - float(q[0])) - (
-            float(q[0]) - float(p[0])
-        ) * (float(r[1]) - float(q[1]))
-        if abs(value) < 1e-9:
-            return 0
-        return 1 if value > 0 else 2
-
-    def on_segment(p: Sequence[float], q: Sequence[float], r: Sequence[float]) -> bool:
-        return (
-            min(float(p[0]), float(r[0])) - 1e-9 <= float(q[0]) <= max(float(p[0]), float(r[0])) + 1e-9
-            and min(float(p[1]), float(r[1])) - 1e-9 <= float(q[1]) <= max(float(p[1]), float(r[1])) + 1e-9
-        )
-
-    o1 = orientation(start_a, end_a, start_b)
-    o2 = orientation(start_a, end_a, end_b)
-    o3 = orientation(start_b, end_b, start_a)
-    o4 = orientation(start_b, end_b, end_a)
-
-    if o1 != o2 and o3 != o4:
-        return True
-
-    if o1 == 0 and on_segment(start_a, start_b, end_a):
-        return True
-    if o2 == 0 and on_segment(start_a, end_b, end_a):
-        return True
-    if o3 == 0 and on_segment(start_b, start_a, end_b):
-        return True
-    if o4 == 0 and on_segment(start_b, end_a, end_b):
-        return True
-
-    return False
+    """Wrapper tương thích cho code cũ, bên dưới dùng predicate hình học của Shapely."""
+    return PreparedLine.from_points((start_b, end_b)).intersects_segment(start_a, end_a)
 
