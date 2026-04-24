@@ -1,241 +1,223 @@
 # Backend
 
-Backend dùng FastAPI để điều phối toàn bộ pipeline xử lý video, phát hiện vi phạm và cung cấp API/WebSocket cho frontend.
+Backend dùng FastAPI để chạy pipeline:
 
-## Vai trò của backend
+`Video source -> YOLOv8 -> ByteTrack -> Lane assignment -> Violation logic -> API/WebSocket/DB`
 
-- Quản lý danh sách camera và cấu hình làn.
-- Đọc RTSP hoặc file video bằng OpenCV.
-- Chạy YOLOv8 để phát hiện và phân loại phương tiện.
-- Chạy ByteTrack để theo dõi theo frame.
-- Ổn định `vehicle_id` khi raw id thay đổi ngắn hạn.
-- Làm mượt loại xe theo nhiều frame.
-- Gán làn bằng polygon và point-in-polygon.
-- Phát hiện vi phạm bằng rule engine.
-- Lưu vi phạm vào SQLite.
-- Lưu ảnh bằng chứng.
-- Phát track và vi phạm realtime qua WebSocket.
-- Cung cấp dữ liệu dashboard, lịch sử và export.
-
-## Cấu trúc module
-
-- `app/server.py`: khởi tạo FastAPI, CORS, startup/shutdown.
-- `app/api/`: REST API và WebSocket.
-- `app/managers/`: quản lý camera và pipeline runtime.
-- `app/vision/`: YOLOv8 detector.
-- `app/tracking/`: ByteTrack wrapper.
-- `app/logic/`: gán làn, stable id, smoothing loại xe, phát hiện vi phạm.
-- `app/core/`: cấu hình, ảnh nền, ảnh bằng chứng, export.
-- `app/db/`: model SQLAlchemy, session, repository.
-- `app/schemas/`: schema Pydantic cho API và WebSocket.
-- `app/stats/`: thống kê realtime trong bộ nhớ.
-- `app/rtsp/`: đọc frame từ RTSP/video.
-- `tests/`: test logic và repository.
-
-## Phụ thuộc
-
-Cài trong môi trường ảo:
+## Chạy backend
 
 ```powershell
 cd backend
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-```
-
-`requirements.txt` hiện dùng:
-
-- `fastapi`
-- `uvicorn[standard]`
-- `opencv-python`
-- `numpy`
-- `pydantic`
-- `pydantic-settings`
-- `SQLAlchemy`
-- `sqlalchemy-utils`
-- `ultralytics`
-- `lap`
-- `python-multipart`
-- `openpyxl`
-
-PyTorch cài riêng theo CPU/GPU.
-
-## Chạy backend
-
-```powershell
-cd backend
-.\.venv\Scripts\Activate.ps1
 uvicorn app.server:app --host 0.0.0.0 --port 8000
 ```
 
-Server mặc định chạy tại `http://localhost:8000`.
+## Mô hình YOLO `.pt`: tải, chọn, cấu hình, chạy
 
-## Model YOLO `.pt`
+### 1) Tải model `.pt`
 
-Backend đọc đường dẫn model từ `../config/settings.json` qua khóa `detector_weights_path`.
-
-Ví dụ:
-
-```json
-{
-  "detector_weights_path": "backend/yolov8m.pt",
-  "detector_device": "auto"
-}
-```
-
-### Link tải model chính thức
-
-Nguồn: Ultralytics Assets GitHub Releases.
+Nguồn chính thức: Ultralytics Assets.
 
 - `yolov8n.pt`: `https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8n.pt`
 - `yolov8s.pt`: `https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8s.pt`
 - `yolov8m.pt`: `https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8m.pt`
 - `yolov8x.pt`: `https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8x.pt`
 
-### Tải nhanh bằng PowerShell
+Ví dụ tải `yolov8m.pt` vào thư mục backend:
 
 ```powershell
-Invoke-WebRequest -Uri "https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8m.pt" -OutFile ".\yolov8m.pt"
+Invoke-WebRequest -Uri "https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8m.pt" -OutFile ".\backend\yolov8m.pt"
 ```
 
-Có thể thay `yolov8m.pt` bằng `yolov8n.pt`, `yolov8s.pt` hoặc `yolov8x.pt` tùy nhu cầu.
+### 2) Cài PyTorch phù hợp phần cứng
 
-## Cấu hình backend
+CPU:
 
-Backend đọc cấu hình từ thư mục `../config`.
+```powershell
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+```
 
-### `../config/settings.json`
+GPU NVIDIA (ví dụ CUDA 13.0):
 
-File này quyết định tham số runtime:
+```powershell
+pip install torch==2.10.0 torchvision==0.25.0 --index-url https://download.pytorch.org/whl/cu130
+```
 
-- detector:
-  - `detector_weights_path`
-  - `detector_device`
-  - `detector_conf_threshold`
-  - `detector_iou_threshold`
-- tracker:
-  - `tracker_config`
-- ổn định label/track:
-  - `vehicle_type_history_window_ms`
-  - `vehicle_type_history_size`
-  - `stable_track_max_idle_ms`
-  - `stable_track_min_iou_for_rebind`
-  - `stable_track_max_normalized_distance`
-- ổn định gán làn:
-  - `temporal_lane_observation_window_ms`
-  - `temporal_lane_min_majority_hits`
-  - `temporal_lane_switch_min_duration_ms`
-- realtime:
-  - `track_push_interval_ms`
-  - `wrong_lane_min_duration_ms`
-  - `turn_region_min_hits`
-  - `turn_state_timeout_ms`
-  - `state_prune_max_age_s`
-  - `rtsp_reconnect_delay_s`
-- preview và ảnh bằng chứng:
-  - `preview_max_fps`
-  - `preview_jpeg_quality`
-  - `processing_fps_window_s`
-  - `evidence_crop_expand_x_ratio`
-  - `evidence_crop_expand_y_top_ratio`
-  - `evidence_crop_expand_y_bottom_ratio`
-  - `evidence_crop_min_size_px`
-  - `evidence_jpeg_quality`
+### 3) Cấu hình model trong `config/settings.json`
 
-### `../config/cameras.json`
+```json
+{
+  "detection": {
+    "weights_path": "backend/yolov8m.pt",
+    "device": "auto",
+    "confidence_threshold": 0.28,
+    "iou_threshold": 0.7
+  }
+}
+```
 
-Mỗi camera cần:
+Giải thích:
 
-- `camera_id`
-- `rtsp_url`
-- `camera_type`
-- `view_direction`
-- `location`
-- `monitored_lanes`
-- `frame_width`
-- `frame_height`
+- `weights_path`: file model YOLO dùng để detect.
+- `device`: `auto` (ưu tiên GPU), hoặc ép `cpu` / `cuda:0`.
+- `confidence_threshold`: ngưỡng confidence detector.
+- `iou_threshold`: ngưỡng IoU cho NMS.
 
-### `../config/lane_configs/<camera_id>.json`
+### 4) Chạy backend với model đã chọn
 
-Tọa độ polygon hiện được lưu chuẩn hóa theo `[0, 1]`:
+```powershell
+uvicorn app.server:app --host 0.0.0.0 --port 8000
+```
 
-- `polygon`
-- `approach_zone`
-- `commit_gate`
-- `commit_line`
-- `allowed_maneuvers`
-- `allowed_lane_changes`
-- `allowed_vehicle_types`
+Khi chạy, backend sẽ log `requested_device` và `resolved_device`.
+Nếu sai đường dẫn model hoặc model không đọc được, backend sẽ lỗi ở bước khởi tạo detector.
 
-Ở cấp giao lộ có thể cấu hình thêm:
+### 5) Chọn model theo mục tiêu vận hành
 
-- `turn_corridors`
-- `exit_zones`
+- `yolov8n`: nhẹ, FPS cao, phù hợp nhiều camera hoặc máy yếu.
+- `yolov8s`: cân bằng tốt cho đa số tình huống thực tế.
+- `yolov8m`: ưu tiên độ chính xác hơn tốc độ.
+- `yolov8x`: chính xác cao nhưng rất nặng, nên dùng GPU mạnh.
 
-Khi runtime, backend sẽ đổi lại sang hệ pixel đúng với `frame_width/frame_height`.
+## Luồng xử lý chính
 
-## Database và dữ liệu sinh ra
+1. `RtspFrameReader` đọc `rtsp/rtsps/http/https` hoặc file local.
+2. YOLOv8 phát hiện phương tiện.
+3. ByteTrack gán track theo frame.
+4. `StableTrackIdAssigner` + `TemporalVehicleTypeAssigner` ổn định ID và loại xe.
+5. `LaneLogic` + `TemporalLaneAssigner` xác định lane raw/stable.
+6. `ViolationLogic` chạy wrong-lane + turn evidence fusion + lifecycle dedup.
+7. Ghi DB, lưu ảnh bằng chứng, đẩy WebSocket, phục vụ dashboard/export.
 
-- SQLite mặc định: `../config/traffic_warning.sqlite`
-- Ảnh nền camera: `../config/background_images/`
-- Ảnh bằng chứng: `../config/evidence_images/<camera_id>/<dd-mm-yyyy>/...jpg`
+## Cấu hình backend (đồng bộ với `README.md`)
 
-## API hiện có
+### 1) `config/cameras.json`
 
-### Camera
+| Trường | Giải thích |
+|---|---|
+| `camera_id` | ID camera duy nhất. |
+| `rtsp_url` | Nguồn video đầu vào. |
+| `camera_type` | `roadside` / `overhead` / `intersection`. |
+| `view_direction` | Mô tả hướng nhìn camera. |
+| `location.*` | Metadata vị trí camera. |
+| `monitored_lanes` | Lane ID mà camera giám sát. |
+| `frame_width`, `frame_height` | Kích thước frame runtime. |
 
-- `GET /api/cameras`
-- `GET /api/cameras/{camera_id}`
-- `POST /api/cameras`
-- `PUT /api/cameras/{camera_id}`
-- `DELETE /api/cameras/{camera_id}`
-- `GET /api/cameras/{camera_id}/lanes`
-- `GET /api/cameras/{camera_id}/preview`
+### 2) `config/lane_configs/<camera_id>.json`
 
-### Ảnh nền
+| Trường | Giải thích |
+|---|---|
+| `lanes[].polygon` | Vùng làn để gán lane. |
+| `lanes[].approach_zone` | Vùng khóa lane nguồn cho turn logic. |
+| `lanes[].commit_gate` | Vùng commit maneuver. |
+| `lanes[].commit_line` | Vạch commit cho directed crossing. |
+| `lanes[].allowed_lane_changes` | Rule đổi làn hợp lệ cho `wrong_lane`. |
+| `lanes[].allowed_vehicle_types` | Rule loại xe hợp lệ theo làn. |
+| `lanes[].allowed_maneuvers` | Rule hướng đi hợp lệ theo làn. |
+| `lanes[].maneuvers.<m>.enabled` | Bật theo dõi maneuver. |
+| `lanes[].maneuvers.<m>.allowed` | Cho phép/cấm maneuver theo luật. |
+| `lanes[].maneuvers.<m>.movement_path` | Polyline đường đi kỳ vọng. |
+| `lanes[].maneuvers.<m>.corridor_preset` | Preset corridor (`narrow`, `normal`, `wide`). |
+| `lanes[].maneuvers.<m>.corridor_width_px` | Độ rộng corridor (px). |
+| `lanes[].maneuvers.<m>.turn_corridor` | Polygon corridor (có thể auto sinh từ `movement_path`). |
+| `lanes[].maneuvers.<m>.exit_line` | Vạch xác nhận thoát nhánh. |
+| `lanes[].maneuvers.<m>.exit_zone` | Vùng xác nhận thoát nhánh. |
 
-- `POST /api/camera/{camera_id}/background-image`
-- `GET /api/camera/{camera_id}/background-image`
-- `DELETE /api/camera/{camera_id}/background-image`
+### 3) `config/settings.json`
 
-### Vi phạm và thống kê
+| Key | Giải thích |
+|---|---|
+| `database.path` | Đường dẫn SQLite. |
+| `camera.stream.rtsp_reconnect_delay_s` | Delay reconnect source video khi lỗi. |
+| `detection.weights_path` | Model YOLO. |
+| `detection.device` | Thiết bị suy luận. |
+| `detection.confidence_threshold` | Ngưỡng confidence detector. |
+| `detection.iou_threshold` | Ngưỡng IoU detector/NMS. |
+| `tracking.tracker_config` | Cấu hình ByteTrack. |
+| `tracking.vehicle_type_history.window_ms` | Cửa sổ làm mượt loại xe. |
+| `tracking.vehicle_type_history.size` | Số mẫu tối đa làm mượt loại xe. |
+| `tracking.stable_track.max_idle_ms` | Idle tối đa để giữ khả năng nối track. |
+| `tracking.stable_track.min_iou_for_rebind` | IoU tối thiểu để nối track. |
+| `tracking.stable_track.max_normalized_distance` | Khoảng cách tối đa để nối track. |
+| `lane_assignment.temporal.observation_window_ms` | Cửa sổ quan sát lane raw. |
+| `lane_assignment.temporal.min_majority_hits` | Số hit majority để chốt lane. |
+| `lane_assignment.temporal.switch_min_duration_ms` | Thời gian tối thiểu để đổi lane ổn định. |
+| `wrong_lane.min_duration_ms` | Thời gian tối thiểu để xác nhận đi sai làn. |
+| `turn_detection.turn_region_min_hits` | Số hit turn evidence tối thiểu khi không có exit mạnh. |
+| `turn_detection.turn_state_timeout_ms` | Timeout reset turn state. |
+| `turn_detection.trajectory_history_window_ms` | Cửa sổ trajectory dùng cho turn inference. |
+| `evidence_fusion.line_crossing.side_tolerance_px` | Tolerance phía của line crossing. |
+| `evidence_fusion.line_crossing.min_pre_frames` | Frame ổn định tối thiểu trước crossing. |
+| `evidence_fusion.line_crossing.min_post_frames` | Frame ổn định tối thiểu sau crossing. |
+| `evidence_fusion.line_crossing.min_displacement_px` | Dịch chuyển tối thiểu để confirm crossing. |
+| `evidence_fusion.line_crossing.min_displacement_ratio` | Dịch chuyển tối thiểu theo tỷ lệ chiều dài line. |
+| `evidence_fusion.line_crossing.max_gap_ms` | Gap tối đa trước khi reset crossing state. |
+| `evidence_fusion.line_crossing.cooldown_ms` | Cooldown crossing để tránh double hit. |
+| `evidence_fusion.evidence_expire_ms` | TTL của turn evidence trước khi decay/xóa. |
+| `evidence_fusion.motion_window_samples` | Số mẫu dùng tính heading/curvature/opposite-direction. |
+| `event_lifecycle.violation_rearm_window_ms` | Cửa sổ re-arm để emit lại vi phạm sau lifecycle cũ. |
+| `event_lifecycle.state_prune_max_age_s` | Tuổi state tối đa trước khi prune. |
+| `websocket.track_push_interval_ms` | Chu kỳ push track realtime tối thiểu. |
+| `performance.preview.max_fps` | FPS preview MJPEG tối đa. |
+| `performance.preview.jpeg_quality` | Chất lượng JPEG preview. |
+| `performance.processing.fps_window_s` | Cửa sổ tính `processing_fps`. |
+| `geometry.evidence_crop.expand_x_ratio` | Nới ngang ảnh evidence. |
+| `geometry.evidence_crop.expand_y_top_ratio` | Nới phía trên ảnh evidence. |
+| `geometry.evidence_crop.expand_y_bottom_ratio` | Nới phía dưới ảnh evidence. |
+| `geometry.evidence_crop.min_size_px` | Kích thước crop evidence tối thiểu. |
+| `geometry.evidence_image.jpeg_quality` | Chất lượng JPEG evidence lưu đĩa. |
+| `analytics.chart.minute_granularity_max_range_hours` | Giới hạn range để giữ granularity theo phút. |
+| `analytics.chart.hour_granularity_max_range_days` | Giới hạn range để giữ granularity theo giờ. |
+| `analytics.chart.day_granularity_max_range_days` | Giới hạn range để giữ granularity theo ngày. |
+| `analytics.chart.week_granularity_max_range_days` | Giới hạn range để giữ granularity theo tuần. |
+| `analytics.chart.minute_axis_label_interval_minutes` | Khoảng phút giữa các nhãn trục X ở chế độ phút. |
+| `analytics.chart.minute_axis_max_ticks` | Tick tối đa của biểu đồ minute. |
+| `analytics.chart.hour_axis_max_ticks` | Tick tối đa của biểu đồ hour. |
+| `analytics.chart.overview_axis_max_ticks` | Tick tối đa của biểu đồ overview. |
+| `analytics.chart.point_markers_max_points` | Số điểm tối đa trước khi giảm marker. |
+| `logging.level` | Mức log mong muốn (key dự phòng). |
+| `logging.verbose_violation_trace` | Cờ trace vi phạm chi tiết (key dự phòng). |
+| `debug.draw_runtime_overlays` | Cờ overlay debug (key dự phòng). |
 
-- `GET /api/violations/evidence/{evidence_path}`
-- `GET /api/violations/history`
-- `GET /api/violations/export?format=csv|xlsx`
-- `GET /api/analytics/dashboard`
-- `GET /api/stats`
-- `GET /api/health`
+## API backend (đồng bộ với router hiện tại)
+
+| Method | Endpoint | Giải thích |
+|---|---|---|
+| `GET` | `/api/health` | Health check backend. |
+| `GET` | `/api/cameras` | Danh sách camera. |
+| `GET` | `/api/cameras/{camera_id}` | Chi tiết camera + lane config + validation. |
+| `POST` | `/api/cameras` | Tạo camera + lane config. |
+| `PUT` | `/api/cameras/{camera_id}` | Cập nhật camera + lane config. |
+| `DELETE` | `/api/cameras/{camera_id}` | Xóa camera và dữ liệu liên quan. |
+| `GET` | `/api/cameras/{camera_id}/lanes` | Lane config dạng pixel để UI overlay. |
+| `GET` | `/api/cameras/{camera_id}/trajectories` | Trajectory gần đây (`limit`, `lane_id`, `vehicle_type`). |
+| `GET` | `/api/cameras/{camera_id}/preview` | Stream MJPEG preview. |
+| `POST` | `/api/camera/{camera_id}/background-image` | Upload ảnh nền. |
+| `GET` | `/api/camera/{camera_id}/background-image` | Lấy ảnh nền hiện tại. |
+| `DELETE` | `/api/camera/{camera_id}/background-image` | Xóa ảnh nền. |
+| `GET` | `/api/violations/evidence/{evidence_path}` | Lấy ảnh bằng chứng vi phạm. |
+| `GET` | `/api/violations/history` | Lịch sử vi phạm có lọc thời gian/camera/limit. |
+| `GET` | `/api/violations/export` | Export lịch sử vi phạm (`format=csv|xlsx`). |
+| `GET` | `/api/analytics/dashboard` | Dữ liệu dashboard tổng hợp + chart config. |
+| `GET` | `/api/stats` | Thống kê tổng hợp theo thời gian. |
 
 ### WebSocket
 
-- `WS /ws/tracks?camera_id=...`
-- `WS /ws/violations`
-- `WS /ws/violations?camera_id=...`
-
-## Ghi chú xử lý
-
-- Lane detection hiện không dùng AI; làn được gán bằng polygon thủ công.
-- Điểm đại diện của xe để gán làn là tâm cạnh đáy của bounding box.
-- Vi phạm sai làn được tính theo thời gian thực, không theo số frame.
-- `illegal_turn` dùng state machine `idle -> approach -> committed -> confirmed`.
-- Tính hợp lệ của turn luôn dựa trên `allowed_maneuvers` của `source_lane` đã khóa ở `approach/commit`.
-- `turn_corridors` và `exit_zones` dùng để xác nhận maneuver cuối cùng, không phụ thuộc `current_stable_lane_id` sau khi đã commit.
-- Backend có endpoint preview MJPEG riêng; suy luận AI không chạy ở endpoint này.
-- Trên Windows, `server.py` dùng `WindowsSelectorEventLoopPolicy` để giảm lỗi stack trace khi websocket bị ngắt đột ngột.
+| Endpoint | Giải thích |
+|---|---|
+| `WS /ws/tracks?camera_id=...` | Stream track realtime. |
+| `WS /ws/violations?camera_id=...` | Stream vi phạm realtime. |
 
 ## Kiểm thử
-
-Các test hiện có:
-
-- `tests/test_lane_features.py`
-- `tests/test_repository_timezones.py`
-- `tests/test_vehicle_type_logic.py`
-
-Chạy:
 
 ```powershell
 cd backend
 .\.venv\Scripts\Activate.ps1
-python -m unittest discover tests
+python -m pytest backend/tests -q
 ```
+
+## Tài liệu tổng quan
+
+Xem thêm tài liệu hệ thống ở [README.md](../README.md) để có mô tả end-to-end và workflow frontend.
