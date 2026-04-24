@@ -368,10 +368,6 @@ select {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
-.lane-overlay-inline {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
 .field {
   display: flex;
   flex-direction: column;
@@ -1300,7 +1296,6 @@ select {
   .summary-grid,
   .management-form-sections,
   .lane-maneuver-inline,
-  .lane-overlay-inline,
   .filter-row,
   .form-grid,
   .inline-fields,

@@ -24,16 +24,6 @@ class IllegalLaneCandidate:
 
 
 @dataclass
-class TurnManeuverCandidate:
-    maneuver: str
-    enter_ts: datetime
-    last_hit_ts: datetime
-    hit_count: int
-    anchor_point: tuple[float, float]
-    max_progress_px: float = 0.0
-
-
-@dataclass
 class TurnEvidence:
     maneuver: str
     score: float = 0.0
@@ -54,7 +44,6 @@ class ViolationLifecycle:
     phase: str = "candidate"  # candidate -> confirmed -> emitted -> active -> expired
     event_window_id: int = 1
     first_ts: Optional[datetime] = None
-    confirmed_ts: Optional[datetime] = None
     emitted_ts: Optional[datetime] = None
     last_seen_ts: Optional[datetime] = None
 
@@ -90,8 +79,6 @@ class MotionFeatures:
     entry_vector: Optional[tuple[float, float]] = None
     heading_change_deg: float = 0.0
     signed_heading_change_deg: float = 0.0
-    path_length_px: float = 0.0
-    displacement_px: float = 0.0
     curvature: float = 0.0
     opposite_direction: bool = False
 
@@ -100,11 +87,8 @@ class MotionFeatures:
 class TurnState:
     phase: str = "idle"
     source_lane_id: Optional[int] = None
-    approach_ts: Optional[datetime] = None
-    committed_ts: Optional[datetime] = None
     confirmed_maneuver: Optional[str] = None
     last_activity_ts: Optional[datetime] = None
-    maneuver_candidate: Optional[TurnManeuverCandidate] = None
 
     entry_heading_vector: Optional[tuple[float, float]] = None
     lane_direction_vector: Optional[tuple[float, float]] = None
@@ -489,11 +473,8 @@ class ViolationLogic:
 
         turn_state.phase = "approach"
         turn_state.source_lane_id = source_lane_id
-        turn_state.approach_ts = ts
-        turn_state.committed_ts = None
         turn_state.confirmed_maneuver = None
         turn_state.last_activity_ts = ts
-        turn_state.maneuver_candidate = None
         turn_state.entry_heading_vector = None
         turn_state.lane_direction_vector = self._lane_direction_vectors.get(source_lane_id)
         turn_state.last_scored_maneuver = None
@@ -508,9 +489,7 @@ class ViolationLogic:
             return
 
         turn_state.phase = "committed"
-        turn_state.committed_ts = ts
         turn_state.last_activity_ts = ts
-        turn_state.maneuver_candidate = None
         turn_state.entry_heading_vector = self._estimate_entry_heading_vector(st=st, turn_state=turn_state)
         if turn_state.lane_direction_vector is None:
             turn_state.lane_direction_vector = self._lane_direction_vectors.get(turn_state.source_lane_id)
@@ -930,8 +909,6 @@ class ViolationLogic:
             entry_vector=entry_vector,
             heading_change_deg=heading_change_deg,
             signed_heading_change_deg=signed_heading_change_deg,
-            path_length_px=path_length,
-            displacement_px=displacement,
             curvature=curvature,
             opposite_direction=opposite_direction,
         )
@@ -994,11 +971,8 @@ class ViolationLogic:
     def _reset_turn_state(self, *, turn_state: TurnState) -> None:
         turn_state.phase = "idle"
         turn_state.source_lane_id = None
-        turn_state.approach_ts = None
-        turn_state.committed_ts = None
         turn_state.confirmed_maneuver = None
         turn_state.last_activity_ts = None
-        turn_state.maneuver_candidate = None
         turn_state.entry_heading_vector = None
         turn_state.lane_direction_vector = None
         turn_state.last_scored_maneuver = None
@@ -1418,7 +1392,6 @@ class ViolationLogic:
     ) -> None:
         lifecycle = self._touch_violation_lifecycle(st=st, key=lifecycle_key, ts=ts)
         lifecycle.phase = "confirmed"
-        lifecycle.confirmed_ts = ts
 
         if lifecycle.first_ts is None:
             lifecycle.first_ts = ts
@@ -1455,7 +1428,6 @@ class ViolationLogic:
                 lifecycle.phase = "expired"
                 lifecycle.event_window_id += 1
                 lifecycle.first_ts = ts
-                lifecycle.confirmed_ts = None
                 lifecycle.emitted_ts = None
 
         if lifecycle.phase == "expired":

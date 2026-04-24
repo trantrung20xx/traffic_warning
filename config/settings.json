@@ -96,8 +96,5 @@
   "logging": {
     "level": "info",
     "verbose_violation_trace": false
-  },
-  "debug": {
-    "draw_runtime_overlays": false
   }
 }

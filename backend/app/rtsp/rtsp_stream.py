@@ -37,14 +37,6 @@ def _describe_video_source(source: str) -> VideoSourceDescriptor:
     return VideoSourceDescriptor(normalized_source=s, is_local_file=False)
 
 
-def normalize_video_source(source: str) -> str:
-    """
-    `cv2.VideoCapture` đọc trực tiếp được RTSP/HTTP URL.
-    Với file cục bộ trên Windows, đổi sang đường dẫn tuyệt đối để tránh lỗi đường dẫn khó đoán.
-    """
-    return _describe_video_source(source).normalized_source
-
-
 def is_local_video_file(source: str) -> bool:
     """
     Xác định source là file video cục bộ để áp dụng nhịp đọc theo FPS gốc.

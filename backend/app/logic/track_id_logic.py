@@ -55,7 +55,6 @@ class StableTrackState:
     vehicle_type: str
     confidence: float
     last_seen_ts: datetime
-    last_raw_track_id: int
 
 
 class StableTrackIdAssigner:
@@ -156,7 +155,6 @@ class StableTrackIdAssigner:
             vehicle_type=track.vehicle_type,
             confidence=track.confidence,
             last_seen_ts=ts,
-            last_raw_track_id=track.vehicle_id,
         )
         self._raw_to_stable[track.vehicle_id] = stable_vehicle_id
         return Track(

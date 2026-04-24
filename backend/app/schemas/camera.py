@@ -13,10 +13,6 @@ class CameraLocation(BaseModel):
     gps_lng: Optional[float] = None
 
 
-class CameraType(str):
-    pass
-
-
 class CameraConfig(BaseModel):
     camera_id: str
     rtsp_url: str

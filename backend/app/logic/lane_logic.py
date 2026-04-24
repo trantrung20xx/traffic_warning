@@ -10,11 +10,6 @@ from app.core.config import LanePolygon
 from app.logic.polygon import PreparedPolygon, bbox_bottom_center, bbox_bottom_contact_points
 
 
-@dataclass(frozen=True)
-class LaneMatch:
-    lane_id: int
-
-
 @dataclass
 class LaneHistoryState:
     stable_lane_id: Optional[int] = None
@@ -39,7 +34,6 @@ class LaneLogic:
     ):
         if not lane_polygons:
             raise ValueError("lane_polygons must be non-empty")
-        self._lane_polygons = {lp.lane_id: lp for lp in lane_polygons}
         self._lane_order = [lp.lane_id for lp in lane_polygons]
         self._lane_shapes = {lp.lane_id: PreparedPolygon.from_points(lp.polygon) for lp in lane_polygons}
         self._preferred_lane_overlap_ratio = float(preferred_lane_overlap_ratio)
@@ -60,7 +54,7 @@ class LaneLogic:
         - bbox rung nhẹ làm điểm giữa nhảy qua biên lane
         """
         px, py = bbox_bottom_center(bbox_xyxy)
-        left_point, center_point, right_point = bbox_bottom_contact_points(bbox_xyxy)
+        left_point, _, right_point = bbox_bottom_contact_points(bbox_xyxy)
 
         overlap_scores: list[tuple[float, int, bool]] = []
         for lane_id in self._lane_order:

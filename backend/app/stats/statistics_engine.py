@@ -35,20 +35,3 @@ class StatisticsEngine:
         )
         self._counts[key] += 1
 
-    def snapshot_rows(self) -> list[dict]:
-        rows: list[dict] = []
-        for key, count in self._counts.items():
-            rows.append(
-                {
-                    "camera_id": key.camera_id,
-                    "road_name": key.road_name,
-                    "intersection": key.intersection,
-                    "vehicle_type": key.vehicle_type,
-                    "violation": key.violation,
-                    "count": count,
-                }
-            )
-        # Sắp xếp cố định để UI hiển thị ổn định giữa các lần render.
-        rows.sort(key=lambda r: (r.get("camera_id") or "", r.get("violation") or "", r.get("vehicle_type") or ""))
-        return rows
-

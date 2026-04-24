@@ -70,11 +70,6 @@ class PreparedLine:
         return bool(intersects(self.geometry, LineString([start_xy, end_xy])))
 
 
-def point_in_polygon(point_x: float, point_y: float, polygon: Sequence[Sequence[float]]) -> bool:
-    """Wrapper tương thích cho code cũ, bên dưới dùng Shapely thay vì ray casting tự viết."""
-    return PreparedPolygon.from_points(polygon).contains_xy(point_x, point_y)
-
-
 def bbox_bottom_center(bbox_xyxy: Sequence[float]) -> tuple[float, float]:
     """Lấy điểm giữa cạnh đáy của bounding box để đại diện vị trí bánh xe chạm mặt đường."""
     x1, y1, x2, y2 = bbox_xyxy
@@ -96,10 +91,6 @@ def bbox_bottom_contact_points(bbox_xyxy: Sequence[float]) -> tuple[tuple[float,
     return ((left_x, bottom_y), (center_x, bottom_y), (right_x, bottom_y))
 
 
-def line_length(start: Sequence[float], end: Sequence[float]) -> float:
-    return float(LineString([_normalize_point(start), _normalize_point(end)]).length)
-
-
 def signed_distance_to_line(
     point: Sequence[float],
     line_start: Sequence[float],
@@ -118,14 +109,4 @@ def signed_distance_to_line(
         return 0.0
     numerator = ((x2 - x1) * (y0 - y1)) - ((y2 - y1) * (x0 - x1))
     return numerator / denominator
-
-
-def segment_intersects_segment(
-    start_a: Sequence[float],
-    end_a: Sequence[float],
-    start_b: Sequence[float],
-    end_b: Sequence[float],
-) -> bool:
-    """Wrapper tương thích cho code cũ, bên dưới dùng predicate hình học của Shapely."""
-    return PreparedLine.from_points((start_b, end_b)).intersects_segment(start_a, end_a)
 

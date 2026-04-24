@@ -5,12 +5,6 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
-
-class PolygonPoint(BaseModel):
-    x: float
-    y: float
-
-
 class BBox(BaseModel):
     # Tọa độ pixel trong hệ trục của khung hình camera.
     x1: float
@@ -84,9 +78,4 @@ class ViolationEvent(BaseModel):
             image_url=image_url,
             timestamp=ts.replace(microsecond=0).isoformat(),
         )
-
-
-class ViolationMessage(BaseModel):
-    type: Literal["violation"] = "violation"
-    event: ViolationEvent
 

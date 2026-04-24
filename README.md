@@ -283,15 +283,13 @@ Toàn bộ tọa độ lưu theo chuẩn hóa `[0, 1]`.
 | `analytics.chart.overview_axis_max_ticks` | Số tick tối đa của biểu đồ tổng quan day/week/month. |
 | `analytics.chart.point_markers_max_points` | Số điểm tối đa trước khi ẩn marker để giảm rối và tải render. |
 
-### `logging` và `debug`
+### `logging`
 
 | Key | Giải thích |
 |---|---|
 | `logging.level` | Mức log mong muốn cho môi trường triển khai. |
 | `logging.verbose_violation_trace` | Cờ dự phòng cho log trace vi phạm chi tiết. |
-| `debug.draw_runtime_overlays` | Cờ dự phòng cho overlay debug runtime. |
-
-Ghi chú: 3 key trên hiện là key cấu hình dự phòng, chưa được backend tiêu thụ trực tiếp ở runtime hiện tại.
+Ghi chú: 2 key trên hiện là key cấu hình dự phòng, chưa được backend tiêu thụ trực tiếp ở runtime hiện tại.
 
 ## API REST (có giải thích theo endpoint)
 
