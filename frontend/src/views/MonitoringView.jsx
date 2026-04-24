@@ -5,33 +5,124 @@ import ViolationDetailModal from "../components/ViolationDetailModal";
 import { connectTracks, connectViolations, fetchCameraDetail, getCameraPreviewUrl } from "../api";
 import { formatTimestamp, getCameraTypeLabel, getVehicleTypeLabel, getViolationLabel } from "../utils";
 
+const MAX_TRAJECTORY_POINTS_PER_VEHICLE = 48;
+const TRAJECTORY_STALE_MS = 1500;
+const MIN_TRAJECTORY_POINT_DISTANCE_PX = 1.5;
+
+function clampTrajectoryLimit(value) {
+  return Math.min(Math.max(Number(value) || 30, 10), 80);
+}
+
+function getVehicleTrajectoryPoint(vehicle) {
+  const bbox = vehicle?.bbox;
+  if (!bbox) return null;
+
+  const x1 = Number(bbox.x1);
+  const y2 = Number(bbox.y2);
+  const x2 = Number(bbox.x2);
+  if (!Number.isFinite(x1) || !Number.isFinite(x2) || !Number.isFinite(y2)) {
+    return null;
+  }
+  return [(x1 + x2) / 2, y2];
+}
+
+function pointDistance(left, right) {
+  return Math.hypot(left[0] - right[0], left[1] - right[1]);
+}
+
 export default function MonitoringView({ cameras, selectedCameraId, onSelectCamera, loading, configRevision }) {
   const [detail, setDetail] = useState(null);
   const [vehicles, setVehicles] = useState([]);
   const [violations, setViolations] = useState([]);
   const [processingFps, setProcessingFps] = useState(null);
   const [selectedViolation, setSelectedViolation] = useState(null);
+  const [trajectoryLimit, setTrajectoryLimit] = useState(30);
+  const [trajectoryRows, setTrajectoryRows] = useState([]);
   const vehicleSeenOrderRef = useRef(new Map());
   const nextVehicleOrderRef = useRef(0);
   const violatingVehicleIdsRef = useRef(new Map());
   const lastTrackUpdateRef = useRef(0);
+  const liveTrajectoriesRef = useRef(new Map());
+  const trajectoryLimitRef = useRef(30);
+
+  useEffect(() => {
+    trajectoryLimitRef.current = trajectoryLimit;
+    setTrajectoryRows((rows) => rows.slice(0, trajectoryLimit));
+  }, [trajectoryLimit]);
 
   useEffect(() => {
     if (!selectedCameraId) {
       setDetail(null);
       setSelectedViolation(null);
+      setTrajectoryRows([]);
+      liveTrajectoriesRef.current = new Map();
       return;
     }
     fetchCameraDetail(selectedCameraId).then(setDetail).catch(() => setDetail(null));
     setVehicles([]);
     setViolations([]);
     setProcessingFps(null);
+    setTrajectoryRows([]);
     setSelectedViolation(null);
     vehicleSeenOrderRef.current = new Map();
     nextVehicleOrderRef.current = 0;
     violatingVehicleIdsRef.current = new Map();
     lastTrackUpdateRef.current = 0;
+    liveTrajectoriesRef.current = new Map();
   }, [configRevision, selectedCameraId]);
+
+  const updateLiveTrajectories = (nextVehicles) => {
+    const now = Date.now();
+    const nextMap = new Map(liveTrajectoriesRef.current);
+
+    nextVehicles.forEach((vehicle) => {
+      const vehicleId = vehicle.vehicle_id;
+      if (vehicleId == null) return;
+
+      const point = getVehicleTrajectoryPoint(vehicle);
+      if (!point) return;
+
+      const current = nextMap.get(vehicleId) || {
+        vehicle_id: vehicleId,
+        vehicle_type: vehicle.vehicle_type,
+        lane_id: vehicle.lane_id,
+        points: [],
+        lastSeenMs: now,
+      };
+      const points = [...current.points];
+      const lastPoint = points[points.length - 1];
+      if (!lastPoint) {
+        points.push(point);
+      } else if (pointDistance(lastPoint, point) >= MIN_TRAJECTORY_POINT_DISTANCE_PX) {
+        points.push(point);
+      } else {
+        points[points.length - 1] = point;
+      }
+
+      nextMap.set(vehicleId, {
+        ...current,
+        vehicle_type: vehicle.vehicle_type,
+        lane_id: vehicle.lane_id,
+        points: points.slice(-MAX_TRAJECTORY_POINTS_PER_VEHICLE),
+        lastSeenMs: now,
+      });
+    });
+
+    nextMap.forEach((row, vehicleId) => {
+      if (now - row.lastSeenMs > TRAJECTORY_STALE_MS) {
+        nextMap.delete(vehicleId);
+      }
+    });
+
+    liveTrajectoriesRef.current = nextMap;
+    setTrajectoryRows(
+      [...nextMap.values()]
+        .filter((row) => row.points.length >= 2)
+        .sort((left, right) => right.lastSeenMs - left.lastSeenMs)
+        .slice(0, trajectoryLimitRef.current)
+        .map(({ lastSeenMs, ...row }) => row),
+    );
+  };
 
   useEffect(() => {
     if (!selectedCameraId) return undefined;
@@ -49,6 +140,7 @@ export default function MonitoringView({ cameras, selectedCameraId, onSelectCame
           isViolating: (violatingVehicleIdsRef.current.get(vehicle.vehicle_id) || 0) > now,
         })),
       );
+      updateLiveTrajectories(message.vehicles || []);
       setProcessingFps(Number.isFinite(message.processing_fps) ? message.processing_fps : null);
     });
     const violationWs = connectViolations(selectedCameraId, (event) => {
@@ -140,6 +232,19 @@ export default function MonitoringView({ cameras, selectedCameraId, onSelectCame
                   value={`${camera.location.road_name}${camera.location.intersection_name ? ` · ${camera.location.intersection_name}` : ""}`}
                 />
               </div>
+              <div className="monitor-overlay-toolbar">
+                <label className="field monitor-trajectory-limit">
+                  <span>Số quỹ đạo hiển thị</span>
+                  <input
+                    type="number"
+                    min={10}
+                    max={80}
+                    value={trajectoryLimit}
+                    onChange={(event) => setTrajectoryLimit(clampTrajectoryLimit(event.target.value))}
+                  />
+                </label>
+                <div className="badge success">Quỹ đạo xanh lá · {trajectoryRows.length}</div>
+              </div>
               <div className="video-stage">
                 <img className="video-preview" alt="Xem trước camera" src={getCameraPreviewUrl(selectedCameraId)} />
                 <CameraCanvas
@@ -148,6 +253,7 @@ export default function MonitoringView({ cameras, selectedCameraId, onSelectCame
                   frameHeight={laneConfig.frame_height}
                   lanes={laneConfig.lanes}
                   vehicles={vehicles}
+                  trajectoryOverlays={trajectoryRows}
                   processingFps={processingFps}
                 />
               </div>

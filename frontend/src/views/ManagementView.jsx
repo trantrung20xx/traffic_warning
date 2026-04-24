@@ -5,7 +5,6 @@ import {
   deleteBackgroundImage,
   deleteCamera,
   fetchCameraDetail,
-  fetchCameraTrajectories,
   getBackgroundImageUrl,
   uploadBackgroundImage,
   updateCamera,
@@ -197,10 +196,6 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
   const [backgroundRevision, setBackgroundRevision] = useState("0");
   const [backgroundBusy, setBackgroundBusy] = useState(false);
   const [configValidation, setConfigValidation] = useState([]);
-  const [trajectoryRows, setTrajectoryRows] = useState([]);
-  const [trajectoryLimit, setTrajectoryLimit] = useState(30);
-  const [trajectoryLaneFilter, setTrajectoryLaneFilter] = useState("all");
-  const [trajectoryVehicleFilter, setTrajectoryVehicleFilter] = useState("all");
 
   useEffect(() => {
     if (!selectedCameraId && cameras[0]?.camera_id) {
@@ -234,50 +229,6 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
         setConfigValidation([]);
       });
   }, [activeCameraId, selectedCameraId, isNewCamera]);
-
-  useEffect(() => {
-    const targetId = activeCameraId || selectedCameraId;
-    if (!targetId || isNewCamera) {
-      setTrajectoryRows([]);
-      return undefined;
-    }
-
-    let cancelled = false;
-    const loadTrajectories = () => {
-      const laneId = trajectoryLaneFilter === "all" ? null : Number(trajectoryLaneFilter);
-      const vehicleType = trajectoryVehicleFilter === "all" ? null : trajectoryVehicleFilter;
-      fetchCameraTrajectories({
-        cameraId: targetId,
-        limit: trajectoryLimit,
-        laneId,
-        vehicleType,
-      })
-        .then((payload) => {
-          if (!cancelled) {
-            setTrajectoryRows(payload.rows || []);
-          }
-        })
-        .catch(() => {
-          if (!cancelled) {
-            setTrajectoryRows([]);
-          }
-        });
-    };
-
-    loadTrajectories();
-    const timer = window.setInterval(loadTrajectories, 2000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [
-    activeCameraId,
-    selectedCameraId,
-    isNewCamera,
-    trajectoryLimit,
-    trajectoryLaneFilter,
-    trajectoryVehicleFilter,
-  ]);
 
   const selectedLane = useMemo(
     () => draft.lane_config.lanes.find((lane) => lane.lane_id === selectedLaneId) || draft.lane_config.lanes[0] || null,
@@ -1087,43 +1038,6 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
                   </div>
                 ) : null}
 
-                <section className="management-subcard">
-                  <div className="management-subcard-title">Trajectory Overlay</div>
-                  <div className="inline-fields lane-overlay-inline">
-                    <label className="field">
-                      <span>Số quỹ đạo hiển thị</span>
-                      <input
-                        type="number"
-                        min={10}
-                        max={80}
-                        value={trajectoryLimit}
-                        onChange={(event) => setTrajectoryLimit(Math.min(Math.max(Number(event.target.value) || 30, 10), 80))}
-                      />
-                    </label>
-                    <label className="field">
-                      <span>Lọc theo làn</span>
-                      <select value={trajectoryLaneFilter} onChange={(event) => setTrajectoryLaneFilter(event.target.value)}>
-                        <option value="all">Tất cả</option>
-                        {draft.lane_config.lanes.map((laneOption) => (
-                          <option key={laneOption.lane_id} value={laneOption.lane_id}>
-                            Làn {laneOption.lane_id}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label className="field">
-                      <span>Lọc theo phương tiện</span>
-                      <select value={trajectoryVehicleFilter} onChange={(event) => setTrajectoryVehicleFilter(event.target.value)}>
-                        <option value="all">Tất cả</option>
-                        {VEHICLE_TYPES.map((vehicleType) => (
-                          <option key={vehicleType} value={vehicleType}>
-                            {getVehicleTypeLabel(vehicleType)}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  </div>
-                </section>
               </div>
             ) : (
               <div className="empty-state slim">Tạo làn đầu tiên để bắt đầu cấu hình.</div>
@@ -1135,7 +1049,6 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
               frameWidth={draft.camera.frame_width}
               frameHeight={draft.camera.frame_height}
               lanes={draft.lane_config.lanes}
-              trajectoryOverlays={trajectoryRows}
               vehicles={[]}
               backgroundImageUrl={
                 !isNewCamera && hasBackgroundImage && draft.camera.camera_id

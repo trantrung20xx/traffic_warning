@@ -467,6 +467,19 @@ select {
   color: #ffffff;
 }
 
+.monitor-overlay-toolbar {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 12px;
+  margin: -4px 0 14px;
+  flex-wrap: wrap;
+}
+
+.monitor-trajectory-limit {
+  width: min(260px, 100%);
+}
+
 .video-stage {
   position: relative;
   line-height: 0;
@@ -1298,6 +1311,10 @@ select {
   .topbar,
   .panel-header {
     flex-direction: column;
+    align-items: stretch;
+  }
+
+  .monitor-overlay-toolbar {
     align-items: stretch;
   }
 

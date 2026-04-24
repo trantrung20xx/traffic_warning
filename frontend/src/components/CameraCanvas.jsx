@@ -88,6 +88,43 @@ function findClosestEdge(points, point) {
   return best;
 }
 
+function drawTrajectory(ctx, points) {
+  const pathPoints = (points || []).filter(
+    (point) =>
+      Array.isArray(point) &&
+      point.length >= 2 &&
+      Number.isFinite(Number(point[0])) &&
+      Number.isFinite(Number(point[1])),
+  );
+  if (pathPoints.length < 2) return;
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(Number(pathPoints[0][0]), Number(pathPoints[0][1]));
+
+  if (pathPoints.length === 2) {
+    ctx.lineTo(Number(pathPoints[1][0]), Number(pathPoints[1][1]));
+  } else {
+    for (let idx = 1; idx < pathPoints.length - 1; idx += 1) {
+      const current = pathPoints[idx];
+      const next = pathPoints[idx + 1];
+      const midX = (Number(current[0]) + Number(next[0])) / 2;
+      const midY = (Number(current[1]) + Number(next[1])) / 2;
+      ctx.quadraticCurveTo(Number(current[0]), Number(current[1]), midX, midY);
+    }
+    const last = pathPoints[pathPoints.length - 1];
+    ctx.lineTo(Number(last[0]), Number(last[1]));
+  }
+
+  ctx.strokeStyle = "rgba(0, 255, 128, 0.92)";
+  ctx.lineWidth = 3;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.setLineDash([]);
+  ctx.stroke();
+  ctx.restore();
+}
+
 export default function CameraCanvas({
   frameWidth,
   frameHeight,
@@ -348,6 +385,10 @@ export default function CameraCanvas({
       ctx.stroke();
     }
 
+    trajectoryOverlays.forEach((row) => {
+      drawTrajectory(ctx, row?.points || []);
+    });
+
     vehicles.forEach((v) => {
       const x1 = v.bbox.x1;
       const y1 = v.bbox.y1;
@@ -366,21 +407,6 @@ export default function CameraCanvas({
       ctx.fillRect(x1, y1 - 22, ctx.measureText(label).width + 10, 22);
       ctx.fillStyle = "rgba(255,255,255,0.95)";
       ctx.fillText(label, x1 + 5, y1 - 7);
-    });
-
-    trajectoryOverlays.forEach((row) => {
-      const points = row?.points || [];
-      if (points.length < 2) return;
-      ctx.beginPath();
-      ctx.moveTo(points[0][0], points[0][1]);
-      for (let idx = 1; idx < points.length; idx += 1) {
-        ctx.lineTo(points[idx][0], points[idx][1]);
-      }
-      ctx.strokeStyle = "rgba(255, 140, 70, 0.55)";
-      ctx.lineWidth = 2;
-      ctx.setLineDash([6, 4]);
-      ctx.stroke();
-      ctx.setLineDash([]);
     });
 
     if (processingFps != null && Number.isFinite(processingFps)) {
