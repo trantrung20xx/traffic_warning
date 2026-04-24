@@ -30,12 +30,20 @@ class LaneLogic:
     Phần này không dùng AI nhận diện làn đường.
     """
 
-    def __init__(self, lane_polygons: list[LanePolygon]):
+    def __init__(
+        self,
+        lane_polygons: list[LanePolygon],
+        *,
+        preferred_lane_overlap_ratio: float = 0.8,
+        preferred_lane_overlap_margin_px: float = 6.0,
+    ):
         if not lane_polygons:
             raise ValueError("lane_polygons must be non-empty")
         self._lane_polygons = {lp.lane_id: lp for lp in lane_polygons}
         self._lane_order = [lp.lane_id for lp in lane_polygons]
         self._lane_shapes = {lp.lane_id: PreparedPolygon.from_points(lp.polygon) for lp in lane_polygons}
+        self._preferred_lane_overlap_ratio = float(preferred_lane_overlap_ratio)
+        self._preferred_lane_overlap_margin_px = float(preferred_lane_overlap_margin_px)
 
     def assign_lane_id_from_bbox_xyxy(
         self,
@@ -63,6 +71,22 @@ class LaneLogic:
 
         best_overlap = max((score for score, _, _ in overlap_scores), default=0.0)
         if best_overlap > 0.0:
+            if preferred_lane_id is not None:
+                preferred_tuple = next(
+                    (item for item in overlap_scores if item[1] == preferred_lane_id),
+                    None,
+                )
+                if preferred_tuple is not None:
+                    preferred_overlap, _, preferred_center_inside = preferred_tuple
+                    if preferred_overlap > 0.0:
+                        if preferred_overlap >= (best_overlap * self._preferred_lane_overlap_ratio):
+                            return preferred_lane_id
+                        if (
+                            preferred_center_inside
+                            and (best_overlap - preferred_overlap) <= self._preferred_lane_overlap_margin_px
+                        ):
+                            return preferred_lane_id
+
             overlap_matches = [
                 lane_id
                 for score, lane_id, _ in overlap_scores

@@ -25,6 +25,7 @@ from app.core.config import (
 from app.db.repository import query_dashboard_analytics, query_violation_history
 from app.db.database import create_engine_and_session
 from app.managers.camera_context import CameraContext
+from app.logic.geometry_validator import validate_lane_geometry
 from app.schemas.camera import CameraConfig
 from app.schemas.events import TrackMessage, ViolationEvent
 
@@ -39,7 +40,7 @@ class CameraManager:
         validate_no_shared_lanes_across_cameras(repo_root)
         self.cameras: list[CameraConfig] = load_cameras(repo_root)
 
-        _, self._SessionLocal = create_engine_and_session(self.cfg.db_path)
+        self._engine, self._SessionLocal = create_engine_and_session(self.cfg.db_path)
 
         self._contexts: dict[str, CameraContext] = {}
         self._stop_event = asyncio.Event()
@@ -83,6 +84,7 @@ class CameraManager:
         if cam is None:
             raise KeyError(camera_id)
         lane_cfg = load_lane_config_for_camera(self.repo_root, camera_id)
+        validation = validate_lane_geometry(lane_cfg)
         return {
             "camera": {
                 "camera_id": cam.camera_id,
@@ -102,6 +104,7 @@ class CameraManager:
             "lane_config": lane_cfg.model_dump(mode="json", exclude_none=True),
             "runtime_applied": camera_id in self._contexts,
             "has_background_image": self.has_background_image(camera_id),
+            "config_validation": validation,
         }
 
     def upsert_camera(self, camera_config: CameraConfig, lane_config: CameraLaneConfig) -> dict:
@@ -216,6 +219,7 @@ class CameraManager:
         if ctx is None:
             lane_cfg = load_lane_config_for_camera(self.repo_root, camera_id)
             lane_cfg_pixels = denormalize_lane_config(lane_cfg)
+            validation = validate_lane_geometry(lane_cfg)
             return {
                 "camera_id": lane_cfg.camera_id,
                 "frame_width": lane_cfg.frame_width,
@@ -230,14 +234,43 @@ class CameraManager:
                         "allowed_maneuvers": lane.allowed_maneuvers or [],
                         "allowed_lane_changes": lane.allowed_lane_changes or [lane.lane_id],
                         "allowed_vehicle_types": lane.allowed_vehicle_types or ["motorcycle", "car", "truck", "bus"],
+                        "maneuvers": lane.maneuvers or {},
                     }
                     for lane in lane_cfg_pixels.lanes
                 ],
-                "turn_corridors": lane_cfg_pixels.turn_corridors or {},
-                "exit_zones": lane_cfg_pixels.exit_zones or {},
-                "exit_lines": lane_cfg_pixels.exit_lines or {},
+                "config_validation": validation,
             }
-        return ctx.get_lane_polygons_for_ui()
+        payload = ctx.get_lane_polygons_for_ui()
+        try:
+            lane_cfg = load_lane_config_for_camera(self.repo_root, camera_id)
+            payload["config_validation"] = validate_lane_geometry(lane_cfg)
+        except Exception:
+            payload["config_validation"] = []
+        return payload
+
+    def get_recent_trajectories(
+        self,
+        camera_id: str,
+        *,
+        limit: int = 30,
+        lane_id: Optional[int] = None,
+        vehicle_type: Optional[str] = None,
+    ) -> dict:
+        self._require_camera_exists(camera_id)
+        ctx = self._contexts.get(camera_id)
+        if ctx is None:
+            return {
+                "camera_id": camera_id,
+                "limit": int(limit),
+                "lane_id": lane_id,
+                "vehicle_type": vehicle_type,
+                "rows": [],
+            }
+        return ctx.get_recent_trajectories_for_ui(
+            limit=limit,
+            lane_id=lane_id,
+            vehicle_type=vehicle_type,
+        )
 
     def has_background_image(self, camera_id: str) -> bool:
         self._require_camera_exists(camera_id)
@@ -280,17 +313,35 @@ class CameraManager:
         self._stop_event.set()
         self._notify_listener_shutdown()
         await self._close_active_websockets()
+        for context in list(self._contexts.values()):
+            context.request_shutdown()
         tasks = list(self._tasks.values())
-        for t in tasks:
-            t.cancel()
         if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*tasks, return_exceptions=True),
+                    timeout=6.0,
+                )
+            except asyncio.TimeoutError:
+                for task in tasks:
+                    task.cancel()
+                try:
+                    await asyncio.wait_for(
+                        asyncio.gather(*tasks, return_exceptions=True),
+                        timeout=2.0,
+                    )
+                except asyncio.TimeoutError:
+                    pass
         self._tasks.clear()
         self._contexts.clear()
         self._track_listeners.clear()
         self._violation_listeners.clear()
         self._track_websockets.clear()
         self._violation_websockets.clear()
+        try:
+            self._engine.dispose()
+        except Exception:
+            pass
         self._running = False
 
     def _build_context(self, camera_id: str) -> CameraContext:
@@ -321,9 +372,6 @@ class CameraManager:
             track_push_interval_ms=self.cfg.track_push_interval_ms,
             wrong_lane_min_duration_ms=self.cfg.wrong_lane_min_duration_ms,
             turn_region_min_hits=self.cfg.turn_region_min_hits,
-            turn_candidate_window_ms=self.cfg.turn_candidate_window_ms,
-            turn_corridor_min_progress_px=self.cfg.turn_corridor_min_progress_px,
-            turn_corridor_min_duration_ms=self.cfg.turn_corridor_min_duration_ms,
             turn_state_timeout_ms=self.cfg.turn_state_timeout_ms,
             trajectory_history_window_ms=self.cfg.trajectory_history_window_ms,
             line_crossing_side_tolerance_px=self.cfg.line_crossing_side_tolerance_px,
@@ -333,6 +381,9 @@ class CameraManager:
             line_crossing_min_displacement_ratio=self.cfg.line_crossing_min_displacement_ratio,
             line_crossing_max_gap_ms=self.cfg.line_crossing_max_gap_ms,
             line_crossing_cooldown_ms=self.cfg.line_crossing_cooldown_ms,
+            violation_rearm_window_ms=self.cfg.violation_rearm_window_ms,
+            evidence_expire_ms=self.cfg.evidence_expire_ms,
+            motion_window_samples=self.cfg.motion_window_samples,
             state_prune_max_age_s=self.cfg.state_prune_max_age_s,
             rtsp_reconnect_delay_s=self.cfg.rtsp_reconnect_delay_s,
             preview_max_fps=self.cfg.preview_max_fps,
@@ -355,7 +406,9 @@ class CameraManager:
         task = self._tasks.pop(camera_id, None)
         if task is not None:
             task.cancel()
-        self._contexts.pop(camera_id, None)
+        ctx = self._contexts.pop(camera_id, None)
+        if ctx is not None:
+            ctx.request_shutdown()
 
     def _reload_context(self, camera_id: str) -> None:
         was_running = self._running

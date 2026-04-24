@@ -4,12 +4,15 @@ import json
 from pathlib import Path
 from typing import Any, Optional
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
+from shapely.geometry import LineString, MultiPolygon, Polygon
 
 from app.schemas.camera import CameraConfig
 
 ALLOWED_VEHICLE_TYPES = {"motorcycle", "car", "truck", "bus"}
 ALLOWED_MANEUVERS = {"straight", "left", "right", "u_turn"}
+MANEUVER_ORDER = ("straight", "right", "left", "u_turn")
+CORRIDOR_WIDTH_PRESETS = {"narrow", "normal", "wide"}
 
 
 def _validate_polygon_points(value: list[list[float]], *, field_name: str) -> list[list[float]]:
@@ -36,6 +39,90 @@ def _validate_line_points(value: list[list[float]], *, field_name: str) -> list[
     return value
 
 
+def _validate_polyline_points(value: list[list[float]], *, field_name: str) -> list[list[float]]:
+    if len(value) < 2:
+        raise ValueError(f"{field_name} must contain at least 2 points")
+    for point in value:
+        if len(point) != 2:
+            raise ValueError(f"{field_name} points must be [x, y]")
+        x, y = point
+        if not (0.0 <= x <= 1.0 and 0.0 <= y <= 1.0):
+            raise ValueError(f"{field_name} points must be normalized to [0, 1]")
+    return value
+
+
+def _normalize_corridor_preset(value: Optional[str]) -> str:
+    preset = str(value or "normal").strip().lower()
+    if preset not in CORRIDOR_WIDTH_PRESETS:
+        raise ValueError(f"unsupported corridor preset: {preset}")
+    return preset
+
+
+def _default_corridor_width_px(*, maneuver: str, preset: str) -> int:
+    base_by_maneuver = {
+        "straight": 72.0,
+        "left": 82.0,
+        "right": 82.0,
+        "u_turn": 104.0,
+    }
+    factor_by_preset = {"narrow": 0.78, "normal": 1.0, "wide": 1.32}
+    base = base_by_maneuver.get(maneuver, 82.0)
+    factor = factor_by_preset.get(preset, 1.0)
+    return max(int(round(base * factor)), 16)
+
+
+def _safe_point_pair(point: list[float]) -> list[float]:
+    x = float(point[0])
+    y = float(point[1])
+    x = min(max(x, 0.0), 1.0)
+    y = min(max(y, 0.0), 1.0)
+    return [x, y]
+
+
+def _largest_polygon(shape: Polygon | MultiPolygon) -> Optional[Polygon]:
+    if isinstance(shape, Polygon):
+        return shape
+    if isinstance(shape, MultiPolygon):
+        polygons = list(shape.geoms)
+        if not polygons:
+            return None
+        polygons.sort(key=lambda item: item.area, reverse=True)
+        return polygons[0]
+    return None
+
+
+def _build_turn_corridor_from_movement_path(
+    *,
+    movement_path: list[list[float]],
+    corridor_width_px: int,
+    frame_width: int,
+    frame_height: int,
+) -> Optional[list[list[float]]]:
+    if len(movement_path) < 2:
+        return None
+    px_path = denormalize_polygon(movement_path, frame_width, frame_height)
+    line = LineString([(float(x), float(y)) for x, y in px_path])
+    if line.length <= 1e-6:
+        return None
+
+    width_px = max(int(corridor_width_px), 1)
+    buffered = line.buffer(width_px / 2.0, cap_style=2, join_style=2)
+    polygon = _largest_polygon(buffered)
+    if polygon is None or polygon.is_empty:
+        return None
+
+    coords = list(polygon.exterior.coords)
+    if len(coords) <= 3:
+        return None
+    if coords and coords[0] == coords[-1]:
+        coords = coords[:-1]
+    normalized = normalize_polygon([[float(x), float(y)] for x, y in coords], frame_width, frame_height)
+    clipped = [_safe_point_pair(point) for point in normalized]
+    if len(clipped) < 3:
+        return None
+    return clipped
+
+
 def _normalize_allowed_maneuvers(value: Optional[list[str]]) -> Optional[list[str]]:
     if value is None:
         return value
@@ -46,34 +133,6 @@ def _normalize_allowed_maneuvers(value: Optional[list[str]]) -> Optional[list[st
     if invalid:
         raise ValueError(f"unsupported maneuvers: {', '.join(invalid)}")
     return normalized
-
-
-def _validate_maneuver_zones(
-    value: Optional[dict[str, list[list[float]]]],
-    *,
-    field_name: str,
-) -> Optional[dict[str, list[list[float]]]]:
-    if value is None:
-        return value
-    for maneuver, polygon in value.items():
-        if maneuver not in ALLOWED_MANEUVERS:
-            raise ValueError(f"unsupported maneuver key: {maneuver}")
-        _validate_polygon_points(polygon, field_name=f"{field_name} '{maneuver}'")
-    return value
-
-
-def _validate_maneuver_lines(
-    value: Optional[dict[str, list[list[float]]]],
-    *,
-    field_name: str,
-) -> Optional[dict[str, list[list[float]]]]:
-    if value is None:
-        return value
-    for maneuver, line in value.items():
-        if maneuver not in ALLOWED_MANEUVERS:
-            raise ValueError(f"unsupported maneuver key: {maneuver}")
-        _validate_line_points(line, field_name=f"{field_name} '{maneuver}'")
-    return value
 
 
 class AnalyticsChartConfig(BaseModel):
@@ -105,6 +164,65 @@ class AnalyticsChartConfig(BaseModel):
         return int(value)
 
 
+class ManeuverConfig(BaseModel):
+    enabled: bool = True
+    allowed: bool = False
+    movement_path: Optional[list[list[float]]] = None
+    corridor_width_px: Optional[int] = None
+    corridor_preset: str = "normal"
+    # `turn_corridor` là hình học nội bộ để runtime check nhanh.
+    # Nếu có `movement_path`, corridor sẽ được dựng tự động từ path + corridor_width.
+    turn_corridor: Optional[list[list[float]]] = None
+    exit_line: Optional[list[list[float]]] = None
+    exit_zone: Optional[list[list[float]]] = None
+
+    @field_validator("movement_path")
+    @classmethod
+    def validate_movement_path(cls, value: Optional[list[list[float]]]) -> Optional[list[list[float]]]:
+        if value is None:
+            return value
+        return _validate_polyline_points(value, field_name="movement_path")
+
+    @field_validator("turn_corridor", "exit_zone")
+    @classmethod
+    def validate_optional_polygon(cls, value: Optional[list[list[float]]], info) -> Optional[list[list[float]]]:
+        if value is None:
+            return value
+        return _validate_polygon_points(value, field_name=info.field_name)
+
+    @field_validator("exit_line")
+    @classmethod
+    def validate_exit_line(cls, value: Optional[list[list[float]]]) -> Optional[list[list[float]]]:
+        if value is None:
+            return value
+        return _validate_line_points(value, field_name="exit_line")
+
+    @field_validator("corridor_width_px")
+    @classmethod
+    def validate_corridor_width(cls, value: Optional[int]) -> Optional[int]:
+        if value is None:
+            return value
+        if int(value) <= 0:
+            raise ValueError("corridor_width_px must be > 0")
+        return int(value)
+
+    @field_validator("corridor_preset")
+    @classmethod
+    def validate_corridor_preset(cls, value: str) -> str:
+        return _normalize_corridor_preset(value)
+
+
+class RuntimeManeuverConfig(BaseModel):
+    enabled: bool = True
+    allowed: bool = False
+    movement_path: Optional[list[list[float]]] = None
+    corridor_width_px: Optional[int] = None
+    corridor_preset: str = "normal"
+    turn_corridor: Optional[list[list[float]]] = None
+    exit_line: Optional[list[list[float]]] = None
+    exit_zone: Optional[list[list[float]]] = None
+
+
 class LanePolygon(BaseModel):
     lane_id: int
     # Lưu polygon theo tọa độ chuẩn hóa [0, 1] để cấu hình thủ công không bị lệch
@@ -128,6 +246,7 @@ class LanePolygon(BaseModel):
 
     # Các loại phương tiện được phép đi trong làn này.
     allowed_vehicle_types: Optional[list[str]] = None
+    maneuvers: Optional[dict[str, ManeuverConfig]] = None
 
     @field_validator("polygon")
     @classmethod
@@ -168,33 +287,58 @@ class LanePolygon(BaseModel):
             raise ValueError(f"unsupported vehicle types: {', '.join(invalid)}")
         return normalized
 
+    @field_validator("maneuvers")
+    @classmethod
+    def validate_maneuvers(
+        cls,
+        value: Optional[dict[str, ManeuverConfig]],
+    ) -> Optional[dict[str, ManeuverConfig]]:
+        if value is None:
+            return value
+        invalid = [maneuver for maneuver in value.keys() if maneuver not in ALLOWED_MANEUVERS]
+        if invalid:
+            raise ValueError(f"unsupported maneuver keys: {', '.join(invalid)}")
+        ordered: dict[str, ManeuverConfig] = {}
+        for maneuver in MANEUVER_ORDER:
+            if maneuver in value:
+                ordered[maneuver] = value[maneuver]
+        for maneuver, config in value.items():
+            if maneuver not in ordered:
+                ordered[maneuver] = config
+        return ordered
+
+    @model_validator(mode="after")
+    def derive_allowed_maneuvers_from_behavior(self):
+        if not self.maneuvers:
+            return self
+
+        normalized: dict[str, ManeuverConfig] = {}
+        for maneuver in MANEUVER_ORDER:
+            cfg = self.maneuvers.get(maneuver)
+            if cfg is None:
+                continue
+            width = cfg.corridor_width_px
+            if width is None:
+                width = _default_corridor_width_px(maneuver=maneuver, preset=cfg.corridor_preset)
+            normalized[maneuver] = cfg.model_copy(update={"corridor_width_px": int(width)})
+        if normalized:
+            self.maneuvers = normalized
+
+        if self.allowed_maneuvers is None:
+            allowed = [
+                maneuver
+                for maneuver, cfg in (self.maneuvers or {}).items()
+                if bool(cfg.enabled) and bool(cfg.allowed)
+            ]
+            self.allowed_maneuvers = allowed
+        return self
+
 
 class CameraLaneConfig(BaseModel):
     camera_id: str
     frame_width: int
     frame_height: int
     lanes: list[LanePolygon]
-    turn_corridors: Optional[dict[str, list[list[float]]]] = None
-    exit_zones: Optional[dict[str, list[list[float]]]] = None
-    exit_lines: Optional[dict[str, list[list[float]]]] = None
-
-    @field_validator("turn_corridors", "exit_zones")
-    @classmethod
-    def validate_geometry_collection(
-        cls,
-        value: Optional[dict[str, list[list[float]]]],
-        info,
-    ) -> Optional[dict[str, list[list[float]]]]:
-        return _validate_maneuver_zones(value, field_name=info.field_name)
-
-    @field_validator("exit_lines")
-    @classmethod
-    def validate_line_collection(
-        cls,
-        value: Optional[dict[str, list[list[float]]]],
-        info,
-    ) -> Optional[dict[str, list[list[float]]]]:
-        return _validate_maneuver_lines(value, field_name=info.field_name)
 
 
 class RuntimeLanePolygon(BaseModel):
@@ -206,6 +350,7 @@ class RuntimeLanePolygon(BaseModel):
     allowed_maneuvers: Optional[list[str]] = None
     allowed_lane_changes: Optional[list[int]] = None
     allowed_vehicle_types: Optional[list[str]] = None
+    maneuvers: Optional[dict[str, RuntimeManeuverConfig]] = None
 
 
 class RuntimeCameraLaneConfig(BaseModel):
@@ -213,9 +358,6 @@ class RuntimeCameraLaneConfig(BaseModel):
     frame_width: int
     frame_height: int
     lanes: list[RuntimeLanePolygon]
-    turn_corridors: Optional[dict[str, list[list[float]]]] = None
-    exit_zones: Optional[dict[str, list[list[float]]]] = None
-    exit_lines: Optional[dict[str, list[list[float]]]] = None
 
 
 class AppConfig(BaseModel):
@@ -241,15 +383,11 @@ class AppConfig(BaseModel):
     temporal_lane_observation_window_ms: int = 1200
     temporal_lane_min_majority_hits: int = 3
     temporal_lane_switch_min_duration_ms: int = 700
-    resize_frame: bool = True
 
     # Ngưỡng cho luồng realtime, phát hiện vi phạm và ảnh bằng chứng.
     track_push_interval_ms: int = 200
     wrong_lane_min_duration_ms: int = 1200
     turn_region_min_hits: int = 3
-    turn_candidate_window_ms: int = 500
-    turn_corridor_min_progress_px: float = 2.0
-    turn_corridor_min_duration_ms: int = 180
     turn_state_timeout_ms: int = 3000
     trajectory_history_window_ms: int = 2000
     line_crossing_side_tolerance_px: float = 2.0
@@ -259,6 +397,9 @@ class AppConfig(BaseModel):
     line_crossing_min_displacement_ratio: float = 0.02
     line_crossing_max_gap_ms: int = 400
     line_crossing_cooldown_ms: int = 1200
+    violation_rearm_window_ms: int = 3500
+    evidence_expire_ms: int = 1600
+    motion_window_samples: int = 8
     state_prune_max_age_s: float = 60.0
     rtsp_reconnect_delay_s: float = 2.0
     preview_max_fps: float = 15.0
@@ -325,62 +466,101 @@ def denormalize_optional_polygon(
     return denormalize_polygon(points, frame_width, frame_height)
 
 
-def normalize_geometry_collection(
-    value: Optional[dict[str, Any]],
+def normalize_optional_polyline(
+    points: Optional[list[list[float]]],
     frame_width: int,
     frame_height: int,
-) -> Optional[dict[str, list[list[float]]]]:
-    if value is None:
+) -> Optional[list[list[float]]]:
+    if points is None:
         return None
+    return normalize_polygon(points, frame_width, frame_height)
+
+
+def _normalize_maneuver_config_payload(
+    *,
+    maneuver: str,
+    raw_config: dict[str, Any],
+    frame_width: int,
+    frame_height: int,
+) -> dict[str, Any]:
+    preset = _normalize_corridor_preset(raw_config.get("corridor_preset"))
+    corridor_width_px = raw_config.get("corridor_width_px")
+    if corridor_width_px is None:
+        corridor_width_px = _default_corridor_width_px(maneuver=maneuver, preset=preset)
+    corridor_width_px = max(int(corridor_width_px), 1)
+
+    movement_path = normalize_optional_polyline(
+        raw_config.get("movement_path"),
+        frame_width,
+        frame_height,
+    )
+    turn_corridor = normalize_optional_polygon(
+        raw_config.get("turn_corridor"),
+        frame_width,
+        frame_height,
+    )
+    if turn_corridor is None and movement_path:
+        turn_corridor = _build_turn_corridor_from_movement_path(
+            movement_path=movement_path,
+            corridor_width_px=corridor_width_px,
+            frame_width=frame_width,
+            frame_height=frame_height,
+        )
+
+    exit_zone = normalize_optional_polygon(raw_config.get("exit_zone"), frame_width, frame_height)
+
+    exit_line = normalize_optional_polygon(raw_config.get("exit_line"), frame_width, frame_height)
+
+    enabled = bool(raw_config.get("enabled", True))
+    allowed = bool(raw_config.get("allowed", False))
+    has_geometry = bool(movement_path or turn_corridor or exit_zone or exit_line)
+    if not enabled and not allowed and not has_geometry:
+        return {}
+
     return {
-        maneuver: normalize_polygon(polygon, frame_width, frame_height)
-        for maneuver, polygon in value.items()
+        "enabled": enabled,
+        "allowed": allowed,
+        "movement_path": movement_path,
+        "corridor_width_px": corridor_width_px,
+        "corridor_preset": preset,
+        "turn_corridor": turn_corridor,
+        "exit_zone": exit_zone,
+        "exit_line": exit_line,
     }
 
 
-def denormalize_geometry_collection(
-    value: Optional[dict[str, list[list[float]]]],
+def _normalize_lane_maneuvers_payload(
+    *,
+    lane_raw: dict[str, Any],
     frame_width: int,
     frame_height: int,
-) -> Optional[dict[str, list[list[float]]]]:
-    if value is None:
-        return None
-    return {
-        maneuver: denormalize_polygon(polygon, frame_width, frame_height)
-        for maneuver, polygon in value.items()
-    }
+) -> Optional[dict[str, Any]]:
+    raw_maneuvers = lane_raw.get("maneuvers")
+    if not isinstance(raw_maneuvers, dict):
+        raw_maneuvers = {}
 
-
-def normalize_line_collection(
-    value: Optional[dict[str, Any]],
-    frame_width: int,
-    frame_height: int,
-) -> Optional[dict[str, list[list[float]]]]:
-    if value is None:
-        return None
-    return {
-        maneuver: normalize_polygon(line, frame_width, frame_height)
-        for maneuver, line in value.items()
-    }
-
-
-def denormalize_line_collection(
-    value: Optional[dict[str, list[list[float]]]],
-    frame_width: int,
-    frame_height: int,
-) -> Optional[dict[str, list[list[float]]]]:
-    if value is None:
-        return None
-    return {
-        maneuver: denormalize_polygon(line, frame_width, frame_height)
-        for maneuver, line in value.items()
-    }
+    normalized: dict[str, Any] = {}
+    maneuver_order = list(dict.fromkeys([*MANEUVER_ORDER, *list(raw_maneuvers.keys())]))
+    for maneuver in maneuver_order:
+        raw_config = raw_maneuvers.get(maneuver)
+        if not isinstance(raw_config, dict):
+            raw_config = {}
+        payload = _normalize_maneuver_config_payload(
+            maneuver=maneuver,
+            raw_config=raw_config,
+            frame_width=frame_width,
+            frame_height=frame_height,
+        )
+        if payload:
+            normalized[maneuver] = payload
+    return normalized or None
 
 
 def denormalize_lane_config(lane_config: CameraLaneConfig) -> RuntimeCameraLaneConfig:
     """Đổi toàn bộ polygon của camera từ tọa độ chuẩn hóa sang pixel lúc runtime."""
     frame_width = lane_config.frame_width
     frame_height = lane_config.frame_height
+
     return RuntimeCameraLaneConfig.model_validate(
         {
             "camera_id": lane_config.camera_id,
@@ -396,12 +576,39 @@ def denormalize_lane_config(lane_config: CameraLaneConfig) -> RuntimeCameraLaneC
                     "allowed_maneuvers": lane.allowed_maneuvers,
                     "allowed_lane_changes": lane.allowed_lane_changes,
                     "allowed_vehicle_types": lane.allowed_vehicle_types,
+                    "maneuvers": {
+                        maneuver: {
+                            "enabled": cfg.enabled,
+                            "allowed": cfg.allowed,
+                            "movement_path": denormalize_optional_polygon(
+                                cfg.movement_path,
+                                frame_width,
+                                frame_height,
+                            ),
+                            "corridor_width_px": cfg.corridor_width_px,
+                            "corridor_preset": cfg.corridor_preset,
+                            "turn_corridor": denormalize_optional_polygon(
+                                cfg.turn_corridor,
+                                frame_width,
+                                frame_height,
+                            ),
+                            "exit_line": denormalize_optional_polygon(
+                                cfg.exit_line,
+                                frame_width,
+                                frame_height,
+                            ),
+                            "exit_zone": denormalize_optional_polygon(
+                                cfg.exit_zone,
+                                frame_width,
+                                frame_height,
+                            ),
+                        }
+                        for maneuver, cfg in (lane.maneuvers or {}).items()
+                    }
+                    or None,
                 }
                 for lane in lane_config.lanes
             ],
-            "turn_corridors": denormalize_geometry_collection(lane_config.turn_corridors, frame_width, frame_height),
-            "exit_zones": denormalize_geometry_collection(lane_config.exit_zones, frame_width, frame_height),
-            "exit_lines": denormalize_line_collection(lane_config.exit_lines, frame_width, frame_height),
         }
     )
 
@@ -410,26 +617,104 @@ def _normalize_lane_config_payload(raw: dict[str, Any]) -> dict[str, Any]:
     """Chuẩn hóa dữ liệu làn từ file cấu hình để thống nhất lưu theo [0, 1]."""
     frame_width = int(raw.get("frame_width") or 1)
     frame_height = int(raw.get("frame_height") or 1)
-    return {
-        **raw,
-        "turn_corridors": normalize_geometry_collection(raw.get("turn_corridors"), frame_width, frame_height),
-        "exit_zones": normalize_geometry_collection(raw.get("exit_zones"), frame_width, frame_height),
-        "exit_lines": normalize_line_collection(raw.get("exit_lines"), frame_width, frame_height),
-        "lanes": [
+
+    normalized_lanes: list[dict[str, Any]] = []
+    for lane in raw.get("lanes", []):
+        if not isinstance(lane, dict):
+            continue
+        normalized_lanes.append(
             {
                 **lane,
                 "polygon": normalize_polygon(lane.get("polygon", []), frame_width, frame_height),
                 "approach_zone": normalize_optional_polygon(lane.get("approach_zone"), frame_width, frame_height),
                 "commit_gate": normalize_optional_polygon(lane.get("commit_gate"), frame_width, frame_height),
                 "commit_line": normalize_optional_polygon(lane.get("commit_line"), frame_width, frame_height),
+                "maneuvers": _normalize_lane_maneuvers_payload(
+                    lane_raw=lane,
+                    frame_width=frame_width,
+                    frame_height=frame_height,
+                ),
             }
-            for lane in raw.get("lanes", [])
-        ],
+        )
+    return {
+        **raw,
+        "lanes": normalized_lanes,
     }
 
 
+def _compact_lane_config_for_storage(lane_config: CameraLaneConfig) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "camera_id": lane_config.camera_id,
+        "frame_width": int(lane_config.frame_width),
+        "frame_height": int(lane_config.frame_height),
+        "lanes": [],
+    }
+
+    for lane in lane_config.lanes:
+        lane_payload: dict[str, Any] = {
+            "lane_id": int(lane.lane_id),
+            "polygon": lane.polygon,
+        }
+        if lane.approach_zone:
+            lane_payload["approach_zone"] = lane.approach_zone
+        if lane.commit_gate:
+            lane_payload["commit_gate"] = lane.commit_gate
+        if lane.commit_line:
+            lane_payload["commit_line"] = lane.commit_line
+        if lane.allowed_lane_changes is not None:
+            lane_payload["allowed_lane_changes"] = lane.allowed_lane_changes
+        if lane.allowed_vehicle_types is not None:
+            lane_payload["allowed_vehicle_types"] = lane.allowed_vehicle_types
+
+        maneuver_payloads: dict[str, Any] = {}
+        for maneuver in MANEUVER_ORDER:
+            cfg = (lane.maneuvers or {}).get(maneuver)
+            if cfg is None:
+                continue
+
+            compact: dict[str, Any] = {
+                "enabled": bool(cfg.enabled),
+                "allowed": bool(cfg.allowed),
+            }
+            if cfg.movement_path:
+                compact["movement_path"] = cfg.movement_path
+            if cfg.corridor_width_px is not None:
+                compact["corridor_width_px"] = int(cfg.corridor_width_px)
+            if cfg.corridor_preset != "normal":
+                compact["corridor_preset"] = cfg.corridor_preset
+            # Chỉ lưu turn_corridor khi không có movement_path để tránh lưu dữ liệu dẫn xuất dư thừa.
+            if cfg.turn_corridor and not cfg.movement_path:
+                compact["turn_corridor"] = cfg.turn_corridor
+            if cfg.exit_line:
+                compact["exit_line"] = cfg.exit_line
+            if cfg.exit_zone:
+                compact["exit_zone"] = cfg.exit_zone
+
+            is_default_disallowed = compact == {"enabled": True, "allowed": False}
+            if not is_default_disallowed:
+                maneuver_payloads[maneuver] = compact
+
+        if maneuver_payloads:
+            lane_payload["maneuvers"] = maneuver_payloads
+
+        payload["lanes"].append(lane_payload)
+
+    return payload
+
+
+def _setting(settings: dict[str, Any], path: tuple[str, ...], default: Any) -> Any:
+    current: Any = settings
+    for key in path:
+        if not isinstance(current, dict):
+            return default
+        if key not in current:
+            return default
+        current = current[key]
+    return default if current is None else current
+
+
 def load_app_config(repo_root: Path) -> AppConfig:
-    """Tải cấu hình ứng dụng từ `settings.json` và áp dụng giá trị mặc định khi thiếu."""
+    """Tải cấu hình ứng dụng từ `settings.json` với schema theo nhóm chức năng."""
     config_dir = repo_root / "config"
     settings_path = config_dir / "settings.json"
     cameras_path = config_dir / "cameras.json"
@@ -437,69 +722,13 @@ def load_app_config(repo_root: Path) -> AppConfig:
     background_images_dir = config_dir / "background_images"
     evidence_images_dir = config_dir / "evidence_images"
 
-    db_path = config_dir / "traffic_warning.sqlite"
+    default_db_path = config_dir / "traffic_warning.sqlite"
+    settings: dict[str, Any] = _read_json(settings_path) if settings_path.exists() else {}
 
-    if settings_path.exists():
-        settings = _read_json(settings_path)
-        db_path_raw = settings.get("db_path", str(db_path))
-        db_path = Path(db_path_raw)
-        if not db_path.is_absolute():
-            db_path = repo_root / db_path
-        return AppConfig(
-            settings_path=settings_path,
-            config_dir=config_dir,
-            cameras_path=cameras_path,
-            lane_configs_dir=lane_configs_dir,
-            background_images_dir=background_images_dir,
-            evidence_images_dir=evidence_images_dir,
-            db_path=db_path,
-            detector_weights_path=str(settings.get("detector_weights_path", "backend/yolov8n.pt")),
-            detector_device=str(settings.get("detector_device", "auto")),
-            detector_conf_threshold=float(settings.get("detector_conf_threshold", 0.28)),
-            detector_iou_threshold=float(settings.get("detector_iou_threshold", 0.7)),
-            tracker_config=str(settings.get("tracker_config", "bytetrack.yaml")),
-            vehicle_type_history_window_ms=int(settings.get("vehicle_type_history_window_ms", 4000)),
-            vehicle_type_history_size=int(settings.get("vehicle_type_history_size", 12)),
-            stable_track_max_idle_ms=int(settings.get("stable_track_max_idle_ms", 1500)),
-            stable_track_min_iou_for_rebind=float(settings.get("stable_track_min_iou_for_rebind", 0.15)),
-            stable_track_max_normalized_distance=float(settings.get("stable_track_max_normalized_distance", 1.6)),
-            temporal_lane_observation_window_ms=int(settings.get("temporal_lane_observation_window_ms", 1200)),
-            temporal_lane_min_majority_hits=int(settings.get("temporal_lane_min_majority_hits", 3)),
-            temporal_lane_switch_min_duration_ms=int(settings.get("temporal_lane_switch_min_duration_ms", 700)),
-            resize_frame=bool(settings.get("resize_frame", True)),
-            track_push_interval_ms=int(settings.get("track_push_interval_ms", 200)),
-            wrong_lane_min_duration_ms=int(
-                settings.get(
-                    "wrong_lane_min_duration_ms",
-                    # Giữ tương thích với khóa cũ trong các bộ cấu hình trước đây.
-                    settings.get("wrong_lane_min_consecutive_frames", 1200),
-                )
-            ),
-            turn_region_min_hits=int(settings.get("turn_region_min_hits", 3)),
-            turn_candidate_window_ms=int(settings.get("turn_candidate_window_ms", 500)),
-            turn_corridor_min_progress_px=float(settings.get("turn_corridor_min_progress_px", 2.0)),
-            turn_corridor_min_duration_ms=int(settings.get("turn_corridor_min_duration_ms", 180)),
-            turn_state_timeout_ms=int(settings.get("turn_state_timeout_ms", 3000)),
-            trajectory_history_window_ms=int(settings.get("trajectory_history_window_ms", 2000)),
-            line_crossing_side_tolerance_px=float(settings.get("line_crossing_side_tolerance_px", 2.0)),
-            line_crossing_min_pre_frames=int(settings.get("line_crossing_min_pre_frames", 2)),
-            line_crossing_min_post_frames=int(settings.get("line_crossing_min_post_frames", 2)),
-            line_crossing_min_displacement_px=float(settings.get("line_crossing_min_displacement_px", 2.0)),
-            line_crossing_min_displacement_ratio=float(settings.get("line_crossing_min_displacement_ratio", 0.02)),
-            line_crossing_max_gap_ms=int(settings.get("line_crossing_max_gap_ms", 400)),
-            line_crossing_cooldown_ms=int(settings.get("line_crossing_cooldown_ms", 1200)),
-            state_prune_max_age_s=float(settings.get("state_prune_max_age_s", 60.0)),
-            rtsp_reconnect_delay_s=float(settings.get("rtsp_reconnect_delay_s", 2.0)),
-            preview_max_fps=float(settings.get("preview_max_fps", 15.0)),
-            preview_jpeg_quality=int(settings.get("preview_jpeg_quality", 75)),
-            processing_fps_window_s=float(settings.get("processing_fps_window_s", 1.5)),
-            evidence_crop_expand_x_ratio=float(settings.get("evidence_crop_expand_x_ratio", 0.28)),
-            evidence_crop_expand_y_top_ratio=float(settings.get("evidence_crop_expand_y_top_ratio", 0.32)),
-            evidence_crop_expand_y_bottom_ratio=float(settings.get("evidence_crop_expand_y_bottom_ratio", 0.27)),
-            evidence_crop_min_size_px=int(settings.get("evidence_crop_min_size_px", 24)),
-            evidence_jpeg_quality=int(settings.get("evidence_jpeg_quality", 92)),
-            analytics_chart=AnalyticsChartConfig.model_validate(settings.get("analytics_chart") or {}),
-        )
+    db_path_raw = _setting(settings, ("database", "path"), str(default_db_path))
+    db_path = Path(str(db_path_raw))
+    if not db_path.is_absolute():
+        db_path = repo_root / db_path
 
     return AppConfig(
         settings_path=settings_path,
@@ -509,8 +738,81 @@ def load_app_config(repo_root: Path) -> AppConfig:
         background_images_dir=background_images_dir,
         evidence_images_dir=evidence_images_dir,
         db_path=db_path,
-        detector_weights_path="backend/yolov8n.pt",
-        detector_device="auto",
+        detector_weights_path=str(_setting(settings, ("detection", "weights_path"), "backend/yolov8n.pt")),
+        detector_device=str(_setting(settings, ("detection", "device"), "auto")),
+        detector_conf_threshold=float(_setting(settings, ("detection", "confidence_threshold"), 0.28)),
+        detector_iou_threshold=float(_setting(settings, ("detection", "iou_threshold"), 0.7)),
+        tracker_config=str(_setting(settings, ("tracking", "tracker_config"), "bytetrack.yaml")),
+        vehicle_type_history_window_ms=int(_setting(settings, ("tracking", "vehicle_type_history", "window_ms"), 4000)),
+        vehicle_type_history_size=int(_setting(settings, ("tracking", "vehicle_type_history", "size"), 12)),
+        stable_track_max_idle_ms=int(_setting(settings, ("tracking", "stable_track", "max_idle_ms"), 1500)),
+        stable_track_min_iou_for_rebind=float(
+            _setting(settings, ("tracking", "stable_track", "min_iou_for_rebind"), 0.15)
+        ),
+        stable_track_max_normalized_distance=float(
+            _setting(settings, ("tracking", "stable_track", "max_normalized_distance"), 1.6)
+        ),
+        temporal_lane_observation_window_ms=int(
+            _setting(settings, ("lane_assignment", "temporal", "observation_window_ms"), 1200)
+        ),
+        temporal_lane_min_majority_hits=int(
+            _setting(settings, ("lane_assignment", "temporal", "min_majority_hits"), 3)
+        ),
+        temporal_lane_switch_min_duration_ms=int(
+            _setting(settings, ("lane_assignment", "temporal", "switch_min_duration_ms"), 700)
+        ),
+        track_push_interval_ms=int(_setting(settings, ("websocket", "track_push_interval_ms"), 200)),
+        wrong_lane_min_duration_ms=int(_setting(settings, ("wrong_lane", "min_duration_ms"), 1200)),
+        turn_region_min_hits=int(_setting(settings, ("turn_detection", "turn_region_min_hits"), 3)),
+        turn_state_timeout_ms=int(_setting(settings, ("turn_detection", "turn_state_timeout_ms"), 3000)),
+        trajectory_history_window_ms=int(_setting(settings, ("turn_detection", "trajectory_history_window_ms"), 2000)),
+        line_crossing_side_tolerance_px=float(
+            _setting(settings, ("evidence_fusion", "line_crossing", "side_tolerance_px"), 2.0)
+        ),
+        line_crossing_min_pre_frames=int(
+            _setting(settings, ("evidence_fusion", "line_crossing", "min_pre_frames"), 2)
+        ),
+        line_crossing_min_post_frames=int(
+            _setting(settings, ("evidence_fusion", "line_crossing", "min_post_frames"), 2)
+        ),
+        line_crossing_min_displacement_px=float(
+            _setting(settings, ("evidence_fusion", "line_crossing", "min_displacement_px"), 2.0)
+        ),
+        line_crossing_min_displacement_ratio=float(
+            _setting(settings, ("evidence_fusion", "line_crossing", "min_displacement_ratio"), 0.02)
+        ),
+        line_crossing_max_gap_ms=int(
+            _setting(settings, ("evidence_fusion", "line_crossing", "max_gap_ms"), 400)
+        ),
+        line_crossing_cooldown_ms=int(
+            _setting(settings, ("evidence_fusion", "line_crossing", "cooldown_ms"), 1200)
+        ),
+        violation_rearm_window_ms=int(
+            _setting(settings, ("event_lifecycle", "violation_rearm_window_ms"), 3500)
+        ),
+        evidence_expire_ms=int(
+            _setting(settings, ("evidence_fusion", "evidence_expire_ms"), 1600)
+        ),
+        motion_window_samples=int(
+            _setting(settings, ("evidence_fusion", "motion_window_samples"), 8)
+        ),
+        state_prune_max_age_s=float(_setting(settings, ("event_lifecycle", "state_prune_max_age_s"), 60.0)),
+        rtsp_reconnect_delay_s=float(_setting(settings, ("camera", "stream", "rtsp_reconnect_delay_s"), 2.0)),
+        preview_max_fps=float(_setting(settings, ("performance", "preview", "max_fps"), 15.0)),
+        preview_jpeg_quality=int(_setting(settings, ("performance", "preview", "jpeg_quality"), 75)),
+        processing_fps_window_s=float(_setting(settings, ("performance", "processing", "fps_window_s"), 1.5)),
+        evidence_crop_expand_x_ratio=float(_setting(settings, ("geometry", "evidence_crop", "expand_x_ratio"), 0.28)),
+        evidence_crop_expand_y_top_ratio=float(
+            _setting(settings, ("geometry", "evidence_crop", "expand_y_top_ratio"), 0.32)
+        ),
+        evidence_crop_expand_y_bottom_ratio=float(
+            _setting(settings, ("geometry", "evidence_crop", "expand_y_bottom_ratio"), 0.27)
+        ),
+        evidence_crop_min_size_px=int(_setting(settings, ("geometry", "evidence_crop", "min_size_px"), 24)),
+        evidence_jpeg_quality=int(_setting(settings, ("geometry", "evidence_image", "jpeg_quality"), 92)),
+        analytics_chart=AnalyticsChartConfig.model_validate(
+            _setting(settings, ("analytics", "chart"), {}) or {}
+        ),
     )
 
 
@@ -539,7 +841,7 @@ def load_lane_config_for_camera(repo_root: Path, camera_id: str) -> CameraLaneCo
 def save_lane_config_for_camera(repo_root: Path, lane_config: CameraLaneConfig) -> None:
     cfg = load_app_config(repo_root)
     path = cfg.lane_configs_dir / f"{lane_config.camera_id}.json"
-    _write_json(path, lane_config.model_dump(mode="json", exclude_none=True))
+    _write_json(path, _compact_lane_config_for_storage(lane_config))
 
 
 def delete_lane_config_for_camera(repo_root: Path, camera_id: str) -> None:

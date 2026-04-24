@@ -10,6 +10,10 @@ from app.managers.camera_manager import CameraManager
 from app.schemas.events import TrackMessage, ViolationEvent
 
 
+def _is_client_connection_reset(exc: BaseException) -> bool:
+    return isinstance(exc, OSError) and getattr(exc, "winerror", None) == 10054
+
+
 def create_ws_router(manager: CameraManager) -> APIRouter:
     router = APIRouter()
 
@@ -24,17 +28,32 @@ def create_ws_router(manager: CameraManager) -> APIRouter:
 
         for task in pending:
             task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
 
         if receive_task in done:
-            message = receive_task.result()
+            try:
+                message = receive_task.result()
+            except WebSocketDisconnect:
+                if not queue_task.done():
+                    queue_task.cancel()
+                return "disconnect", None
+            except Exception as exc:
+                if _is_client_connection_reset(exc):
+                    if not queue_task.done():
+                        queue_task.cancel()
+                    return "disconnect", None
+                raise
             if message.get("type") == "websocket.disconnect":
                 if not queue_task.done():
                     queue_task.cancel()
                 return "disconnect", None
-            if queue_task.done():
+            if queue_task.done() and not queue_task.cancelled():
                 return "queue", queue_task.result()
             return "noop", None
 
+        if queue_task.cancelled():
+            return "noop", None
         return "queue", queue_task.result()
 
     @router.websocket("/ws/tracks")
@@ -60,6 +79,10 @@ def create_ws_router(manager: CameraManager) -> APIRouter:
             raise
         except WebSocketDisconnect:
             return
+        except OSError as exc:
+            if _is_client_connection_reset(exc):
+                return
+            raise
         finally:
             if q is not None:
                 manager.remove_track_listener(q)  # type: ignore[arg-type]
@@ -93,6 +116,10 @@ def create_ws_router(manager: CameraManager) -> APIRouter:
             raise
         except WebSocketDisconnect:
             return
+        except OSError as exc:
+            if _is_client_connection_reset(exc):
+                return
+            raise
         finally:
             if q is not None:
                 manager.remove_violation_listener(q)

@@ -64,9 +64,6 @@ class CameraContext:
         track_push_interval_ms: int = 200,
         wrong_lane_min_duration_ms: int = 1200,
         turn_region_min_hits: int = 3,
-        turn_candidate_window_ms: int = 500,
-        turn_corridor_min_progress_px: float = 2.0,
-        turn_corridor_min_duration_ms: int = 180,
         turn_state_timeout_ms: int = 3000,
         trajectory_history_window_ms: int = 2000,
         line_crossing_side_tolerance_px: float = 2.0,
@@ -76,6 +73,9 @@ class CameraContext:
         line_crossing_min_displacement_ratio: float = 0.02,
         line_crossing_max_gap_ms: int = 400,
         line_crossing_cooldown_ms: int = 1200,
+        violation_rearm_window_ms: int = 3500,
+        evidence_expire_ms: int = 1600,
+        motion_window_samples: int = 8,
         state_prune_max_age_s: float = 60.0,
         rtsp_reconnect_delay_s: float = 2.0,
         preview_max_fps: float = 15.0,
@@ -135,14 +135,8 @@ class CameraContext:
         )
         self.violation_logic = ViolationLogic(
             lane_config.lanes,
-            turn_corridors=lane_config.turn_corridors,
-            exit_zones=lane_config.exit_zones,
-            exit_lines=lane_config.exit_lines,
             wrong_lane_min_duration_ms=wrong_lane_min_duration_ms,
             turn_region_min_hits=turn_region_min_hits,
-            turn_candidate_window_ms=turn_candidate_window_ms,
-            turn_corridor_min_progress_px=turn_corridor_min_progress_px,
-            turn_corridor_min_duration_ms=turn_corridor_min_duration_ms,
             turn_state_timeout_ms=turn_state_timeout_ms,
             trajectory_history_window_ms=trajectory_history_window_ms,
             line_crossing_side_tolerance_px=line_crossing_side_tolerance_px,
@@ -152,6 +146,9 @@ class CameraContext:
             line_crossing_min_displacement_ratio=line_crossing_min_displacement_ratio,
             line_crossing_max_gap_ms=line_crossing_max_gap_ms,
             line_crossing_cooldown_ms=line_crossing_cooldown_ms,
+            violation_rearm_window_ms=violation_rearm_window_ms,
+            evidence_expire_ms=evidence_expire_ms,
+            motion_window_samples=motion_window_samples,
         )
 
         self.stats = StatisticsEngine()
@@ -199,6 +196,7 @@ class CameraContext:
                     "allowed_maneuvers": lp.allowed_maneuvers or [],
                     "allowed_lane_changes": lp.allowed_lane_changes or [lp.lane_id],
                     "allowed_vehicle_types": lp.allowed_vehicle_types or ["motorcycle", "car", "truck", "bus"],
+                    "maneuvers": lp.maneuvers or {},
                 }
             )
         return {
@@ -206,14 +204,38 @@ class CameraContext:
             "frame_width": self.lane_config.frame_width,
             "frame_height": self.lane_config.frame_height,
             "lanes": lanes,
-            "turn_corridors": self.lane_config.turn_corridors or {},
-            "exit_zones": self.lane_config.exit_zones or {},
-            "exit_lines": self.lane_config.exit_lines or {},
+        }
+
+    def get_recent_trajectories_for_ui(
+        self,
+        *,
+        limit: int = 30,
+        lane_id: Optional[int] = None,
+        vehicle_type: Optional[str] = None,
+    ) -> dict[str, Any]:
+        trajectories = self.violation_logic.get_recent_trajectories(
+            limit=limit,
+            lane_id=lane_id,
+            vehicle_type=vehicle_type,
+        )
+        return {
+            "camera_id": self.camera_id,
+            "limit": int(limit),
+            "lane_id": lane_id,
+            "vehicle_type": vehicle_type,
+            "rows": trajectories,
         }
 
     def get_latest_preview_jpeg(self) -> Optional[bytes]:
         with self._preview_lock:
             return self._latest_preview_jpeg
+
+    def request_shutdown(self) -> None:
+        """Signal camera resources to close promptly during server shutdown."""
+        try:
+            self.rtsp_reader.close()
+        except Exception:
+            pass
 
     def _maybe_update_preview(self, frame_bgr) -> None:
         """Mã hóa JPEG theo nhịp giới hạn để giao diện web xem được ảnh camera trực tiếp."""
@@ -236,8 +258,9 @@ class CameraContext:
         """Vòng lặp xử lý liên tục cho một camera cho đến khi nhận tín hiệu dừng."""
         try:
             while not stop_event.is_set():
-                frame = await asyncio.to_thread(self.rtsp_reader.read)
+                frame = self.rtsp_reader.read(only_new=True)
                 if frame is None:
+                    await asyncio.sleep(0.01)
                     continue
 
                 await asyncio.to_thread(self._maybe_update_preview, frame.bgr)

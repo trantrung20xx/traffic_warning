@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import sys
-import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
@@ -15,9 +14,14 @@ from app.schemas.events import ViolationEvent, ViolationLocation
 
 
 class RepositoryTimezoneTests(unittest.TestCase):
+    @staticmethod
+    def _create_session_factory():
+        return create_engine_and_session(":memory:")
+
     def test_history_and_time_series_are_returned_in_vietnam_time(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            _, session_factory = create_engine_and_session(Path(tmp_dir) / "test.sqlite")
+        engine = None
+        try:
+            engine, session_factory = self._create_session_factory()
             event = ViolationEvent(
                 camera_id="cam_01",
                 location=ViolationLocation(road_name="Vo Van Kiet", intersection="Ham Nghi"),
@@ -32,6 +36,9 @@ class RepositoryTimezoneTests(unittest.TestCase):
                 insert_violation(session, event)
                 history = query_violation_history(session)
                 dashboard = query_dashboard_analytics(session)
+        finally:
+            if engine is not None:
+                engine.dispose()
 
         self.assertEqual(len(history), 1)
         self.assertEqual(history[0]["timestamp"], "2026-04-10T16:30:00+07:00")
@@ -45,8 +52,9 @@ class RepositoryTimezoneTests(unittest.TestCase):
         self.assertEqual(dashboard["hourly_series"][0]["bucket"], "2026-04-10T16:00:00+07:00")
 
     def test_history_returns_all_rows_when_limit_is_not_provided(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            _, session_factory = create_engine_and_session(Path(tmp_dir) / "test.sqlite")
+        engine = None
+        try:
+            engine, session_factory = self._create_session_factory()
 
             with session_factory() as session:
                 for vehicle_id in range(1, 4):
@@ -63,12 +71,16 @@ class RepositoryTimezoneTests(unittest.TestCase):
                         ),
                     )
                 history = query_violation_history(session)
+        finally:
+            if engine is not None:
+                engine.dispose()
 
         self.assertEqual(len(history), 3)
 
     def test_time_series_fills_missing_minute_buckets_for_short_ranges(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            _, session_factory = create_engine_and_session(Path(tmp_dir) / "test.sqlite")
+        engine = None
+        try:
+            engine, session_factory = self._create_session_factory()
 
             with session_factory() as session:
                 insert_violation(
@@ -88,6 +100,9 @@ class RepositoryTimezoneTests(unittest.TestCase):
                     from_ts=datetime(2026, 4, 10, 9, 29, 0, tzinfo=timezone.utc).isoformat(),
                     to_ts=datetime(2026, 4, 10, 9, 31, 0, tzinfo=timezone.utc).isoformat(),
                 )
+        finally:
+            if engine is not None:
+                engine.dispose()
 
         self.assertEqual(dashboard["time_series_granularity"], "minute")
         self.assertEqual(
@@ -101,8 +116,9 @@ class RepositoryTimezoneTests(unittest.TestCase):
         self.assertEqual([row["total"] for row in dashboard["time_series"]], [0, 1, 0])
 
     def test_time_series_granularity_uses_chart_config_thresholds(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            _, session_factory = create_engine_and_session(Path(tmp_dir) / "test.sqlite")
+        engine = None
+        try:
+            engine, session_factory = self._create_session_factory()
 
             with session_factory() as session:
                 insert_violation(
@@ -123,6 +139,9 @@ class RepositoryTimezoneTests(unittest.TestCase):
                     to_ts=datetime(2026, 4, 11, 8, 0, 0, tzinfo=timezone.utc).isoformat(),
                     chart_config=AnalyticsChartConfig(minute_granularity_max_range_hours=12),
                 )
+        finally:
+            if engine is not None:
+                engine.dispose()
 
         self.assertEqual(dashboard["time_series_granularity"], "hour")
 

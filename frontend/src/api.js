@@ -99,6 +99,16 @@ export async function fetchCameraDetail(cameraId) {
   return await request(`/api/cameras/${cameraId}`);
 }
 
+export async function fetchCameraTrajectories({ cameraId, limit = 30, laneId = null, vehicleType = null }) {
+  return await request(
+    withQuery(`/api/cameras/${cameraId}/trajectories`, {
+      limit,
+      lane_id: laneId,
+      vehicle_type: vehicleType,
+    }),
+  );
+}
+
 export async function fetchDashboard({ cameraId, fromTs, toTs }) {
   return await request(
     withQuery("/api/analytics/dashboard", {

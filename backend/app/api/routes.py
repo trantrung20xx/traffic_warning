@@ -130,6 +130,23 @@ def create_api_router(manager: CameraManager) -> APIRouter:
         except KeyError:
             raise HTTPException(status_code=404, detail="Camera not found")
 
+    @router.get("/api/cameras/{camera_id}/trajectories")
+    def get_camera_trajectories(
+        camera_id: str,
+        limit: int = Query(default=30, ge=1, le=200),
+        lane_id: Optional[int] = Query(default=None),
+        vehicle_type: Optional[str] = Query(default=None),
+    ):
+        try:
+            return manager.get_recent_trajectories(
+                camera_id,
+                limit=limit,
+                lane_id=lane_id,
+                vehicle_type=vehicle_type,
+            )
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Camera not found")
+
     @router.get("/api/cameras/{camera_id}/preview")
     async def camera_preview_mjpeg(camera_id: str):
         """

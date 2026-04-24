@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import sys
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,6 +16,47 @@ if sys.platform.startswith("win") and hasattr(asyncio, "WindowsSelectorEventLoop
     # Trên Windows, ProactorEventLoop dễ in stack trace WinError 10054 khi trình duyệt
     # đóng tab hoặc ngắt websocket đột ngột. Selector policy ổn định hơn cho tải FastAPI/WebSocket này.
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+
+def _is_ignorable_windows_reset(context: dict[str, Any]) -> bool:
+    if not sys.platform.startswith("win"):
+        return False
+    exc = context.get("exception")
+    if not isinstance(exc, OSError):
+        return False
+    if getattr(exc, "winerror", None) != 10054:
+        return False
+
+    handle_repr = repr(context.get("handle") or "")
+    if "_call_connection_lost" in handle_repr and "ProactorBasePipeTransport" in handle_repr:
+        return True
+
+    message = str(context.get("message") or "").lower()
+    return "connection was forcibly closed by the remote host" in message
+
+
+def _install_event_loop_exception_guard() -> None:
+    """
+    Trên Windows có thể xuất hiện callback benign khi client đóng socket đột ngột
+    trong lúc shutdown, gây in traceback WinError 10054 dù backend vẫn dừng đúng.
+    Guard này chỉ bỏ qua đúng case đó, còn lại vẫn chuyển cho default handler.
+    """
+    loop = asyncio.get_running_loop()
+    if getattr(loop, "_traffic_warning_exception_guard_installed", False):
+        return
+
+    previous_handler = loop.get_exception_handler()
+
+    def _handler(active_loop: asyncio.AbstractEventLoop, context: dict[str, Any]) -> None:
+        if _is_ignorable_windows_reset(context):
+            return
+        if previous_handler is not None:
+            previous_handler(active_loop, context)
+            return
+        active_loop.default_exception_handler(context)
+
+    loop.set_exception_handler(_handler)
+    setattr(loop, "_traffic_warning_exception_guard_installed", True)
 
 
 def create_app() -> FastAPI:
@@ -38,6 +80,7 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     async def _startup():
+        _install_event_loop_exception_guard()
         await manager.start()
 
     @app.on_event("shutdown")

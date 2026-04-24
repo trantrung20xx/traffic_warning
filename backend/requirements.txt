@@ -19,6 +19,9 @@ shapely
 pydantic
 # Định nghĩa schema dữ liệu và validate dữ liệu đầu vào/đầu ra API
 
+pytest
+# Bộ test runner cho backend
+
 SQLAlchemy
 # ORM dùng để thao tác với cơ sở dữ liệu (SQLite)
 

@@ -6,130 +6,98 @@
     {
       "lane_id": 1,
       "polygon": [
-        [
-          0.39921875,
-          0.36944444444444446
-        ],
-        [
-          0.4265625,
-          0.36944444444444446
-        ],
-        [
-          0.37109375,
-          0.9069444444444444
-        ],
-        [
-          0.3640625,
-          1.0
-        ],
-        [
-          0.296875,
-          1.0
-        ],
-        [
-          0.3421875,
-          0.7375
-        ]
+        [0.40234375, 0.3625],
+        [0.428125, 0.3638888888888889],
+        [0.37421875, 0.9],
+        [0.3671875, 0.9930555555555556],
+        [0.3, 0.9930555555555556],
+        [0.3453125, 0.7305555555555555]
       ],
-      "allowed_maneuvers": [
-        "straight",
-        "right"
-      ],
-      "allowed_lane_changes": [
-        1
-      ],
-      "allowed_vehicle_types": [
-        "motorcycle",
-        "truck",
-        "bus",
-        "car"
-      ]
+      "allowed_lane_changes": [1],
+      "allowed_vehicle_types": ["motorcycle", "truck", "bus", "car"],
+      "maneuvers": {
+        "straight": {
+          "enabled": true,
+          "allowed": true
+        },
+        "right": {
+          "enabled": true,
+          "allowed": true
+        },
+        "left": {
+          "enabled": true,
+          "allowed": false
+        },
+        "u_turn": {
+          "enabled": true,
+          "allowed": false,
+          "corridor_preset": "wide"
+        }
+      }
     },
     {
       "lane_id": 2,
       "polygon": [
-        [
-          0.51328125,
-          0.9972222222222222
-        ],
-        [
-          0.4765625,
-          0.35555555555555557
-        ],
-        [
-          0.5234375,
-          0.35
-        ],
-        [
-          0.58125,
-          0.6888888888888889
-        ],
-        [
-          0.6375,
-          0.9986111111111111
-        ]
+        [0.51328125, 0.9972222222222222],
+        [0.4765625, 0.35555555555555557],
+        [0.5234375, 0.35],
+        [0.58125, 0.6888888888888889],
+        [0.6375, 0.9986111111111111]
       ],
-      "allowed_maneuvers": [
-        "straight",
-        "left"
-      ],
-      "allowed_lane_changes": [
-        2
-      ],
-      "allowed_vehicle_types": [
-        "motorcycle",
-        "truck",
-        "bus"
-      ]
+      "allowed_lane_changes": [2],
+      "allowed_vehicle_types": ["motorcycle", "truck", "bus"],
+      "maneuvers": {
+        "straight": {
+          "enabled": true,
+          "allowed": true
+        },
+        "left": {
+          "enabled": true,
+          "allowed": true
+        },
+        "right": {
+          "enabled": true,
+          "allowed": false
+        },
+        "u_turn": {
+          "enabled": true,
+          "allowed": false,
+          "corridor_preset": "wide"
+        }
+      }
     },
     {
       "lane_id": 3,
       "polygon": [
-        [
-          0.525,
-          0.34444444444444444
-        ],
-        [
-          0.565625,
-          0.34305555555555556
-        ],
-        [
-          0.76171875,
-          0.9958333333333333
-        ],
-        [
-          0.6390625,
-          1.0
-        ],
-        [
-          0.6125,
-          0.8625
-        ],
-        [
-          0.58125,
-          0.6791666666666667
-        ],
-        [
-          0.53125,
-          0.39444444444444443
-        ]
+        [0.525, 0.34444444444444444],
+        [0.565625, 0.34305555555555556],
+        [0.76171875, 0.9958333333333333],
+        [0.6390625, 1.0],
+        [0.6125, 0.8625],
+        [0.58125, 0.6791666666666667],
+        [0.53125, 0.39444444444444443]
       ],
-      "allowed_maneuvers": [
-        "straight",
-        "left"
-      ],
-      "allowed_lane_changes": [
-        3
-      ],
-      "allowed_vehicle_types": [
-        "motorcycle",
-        "car",
-        "truck",
-        "bus"
-      ]
+      "allowed_lane_changes": [3],
+      "allowed_vehicle_types": ["motorcycle", "car", "truck", "bus"],
+      "maneuvers": {
+        "straight": {
+          "enabled": true,
+          "allowed": true
+        },
+        "left": {
+          "enabled": true,
+          "allowed": true
+        },
+        "right": {
+          "enabled": true,
+          "allowed": true
+        },
+        "u_turn": {
+          "enabled": true,
+          "allowed": true,
+          "corridor_preset": "wide"
+        }
+      }
     }
-  ],
-  "turn_corridors": {},
-  "exit_zones": {},
-  "exit_lines": {}
+  ]
 }

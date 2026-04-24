@@ -3,12 +3,10 @@ import { drawBackgroundImage, useBackgroundImage } from "./canvas/BackgroundImag
 import { drawPolygon } from "./canvas/PolygonLayer";
 import {
   denormalizeLane,
-  denormalizePoints,
   getEditTargetLabel,
   getManeuverLabel,
   getTargetPoints,
   getVehicleTypeLabel,
-  isGlobalEditTarget,
   isLineEditTarget,
   normalizePoint,
   parseEditTarget,
@@ -90,23 +88,12 @@ function findClosestEdge(points, point) {
   return best;
 }
 
-function denormalizeGeometryCollection(collection, frameWidth, frameHeight) {
-  return Object.fromEntries(
-    Object.entries(collection || {}).map(([maneuver, points]) => [
-      maneuver,
-      denormalizePoints(points || [], frameWidth, frameHeight),
-    ]),
-  );
-}
-
 export default function CameraCanvas({
   frameWidth,
   frameHeight,
   lanes,
-  turnCorridors = {},
-  exitZones = {},
-  exitLines = {},
   vehicles,
+  trajectoryOverlays = [],
   processingFps = null,
   overlay = false,
   selectedLaneId = null,
@@ -116,6 +103,7 @@ export default function CameraCanvas({
   onPolygonReplace = null,
   onVertexSelect = null,
   editTarget = "lane_polygon",
+  selectedManeuver = "straight",
   backgroundImageUrl = null,
 }) {
   const canvasRef = useRef(null);
@@ -143,21 +131,6 @@ export default function CameraCanvas({
     [frameHeight, frameWidth, lanes],
   );
 
-  const renderedTurnCorridors = useMemo(
-    () => denormalizeGeometryCollection(turnCorridors, frameWidth, frameHeight),
-    [frameHeight, frameWidth, turnCorridors],
-  );
-
-  const renderedExitZones = useMemo(
-    () => denormalizeGeometryCollection(exitZones, frameWidth, frameHeight),
-    [exitZones, frameHeight, frameWidth],
-  );
-
-  const renderedExitLines = useMemo(
-    () => denormalizeGeometryCollection(exitLines, frameWidth, frameHeight),
-    [exitLines, frameHeight, frameWidth],
-  );
-
   const selectedLane = useMemo(
     () => lanes.find((lane) => lane.lane_id === selectedLaneId) || null,
     [lanes, selectedLaneId],
@@ -171,14 +144,11 @@ export default function CameraCanvas({
   const editablePoints = useMemo(() => {
     return getTargetPoints({
       lane: renderedSelectedLane,
-      laneConfig: {
-        turn_corridors: renderedTurnCorridors,
-        exit_zones: renderedExitZones,
-        exit_lines: renderedExitLines,
-      },
+      laneConfig: null,
       editTarget,
+      selectedManeuver,
     });
-  }, [editTarget, renderedExitLines, renderedExitZones, renderedSelectedLane, renderedTurnCorridors]);
+  }, [editTarget, renderedSelectedLane, selectedManeuver]);
 
   const parsedEditTarget = useMemo(() => parseEditTarget(editTarget), [editTarget]);
 
@@ -212,7 +182,7 @@ export default function CameraCanvas({
   };
 
   const updateHoverState = (point) => {
-    if (!editable || (!selectedLane && !isGlobalEditTarget(editTarget))) {
+    if (!editable || !selectedLane) {
       setHoverEdge(null);
       setHoverVertexIndex(null);
       return;
@@ -307,63 +277,64 @@ export default function CameraCanvas({
           ctx.fillText(`${geometry.label} · làn ${lane.lane_id}`, anchor[0] + 6, anchor[1] - 6);
         }
       });
-    });
 
-    Object.entries(renderedTurnCorridors).forEach(([maneuver, region]) => {
-      if (region.length < 2) return;
-      const isEditableRegion = editable && editTarget === `turn_corridor:${maneuver}`;
-      drawPolygon(ctx, region, {
-        dashed: true,
-        strokeStyle: isEditableRegion ? "rgba(255, 209, 102, 1)" : "rgba(52, 152, 219, 0.95)",
-        lineWidth: isEditableRegion ? 3 : 2,
-        isEditableTarget: isEditableRegion,
-        hoverVertexIndex,
-        selectedVertexIndex,
-      });
-      const anchor = region[0];
-      if (anchor) {
-        ctx.fillStyle = "rgba(255,255,255,0.88)";
-        ctx.font = "12px sans-serif";
-        ctx.fillText(`quỹ đạo ${getManeuverLabel(maneuver)}`, anchor[0] + 6, anchor[1] - 6);
-      }
-    });
+      Object.entries(lane.maneuvers || {}).forEach(([maneuver, cfg]) => {
+        const maneuverLabel = getManeuverLabel(maneuver);
+        const movementPath = cfg.movement_path || [];
+        const turnCorridor = cfg.turn_corridor || [];
+        const exitZone = cfg.exit_zone || [];
+        const exitLine = cfg.exit_line || [];
 
-    Object.entries(renderedExitZones).forEach(([maneuver, region]) => {
-      if (region.length < 2) return;
-      const isEditableRegion = editable && editTarget === `exit_zone:${maneuver}`;
-      drawPolygon(ctx, region, {
-        dashed: true,
-        strokeStyle: isEditableRegion ? "rgba(255, 209, 102, 1)" : "rgba(155, 89, 182, 0.95)",
-        lineWidth: isEditableRegion ? 3 : 2,
-        isEditableTarget: isEditableRegion,
-        hoverVertexIndex,
-        selectedVertexIndex,
-      });
-      const anchor = region[0];
-      if (anchor) {
-        ctx.fillStyle = "rgba(255,255,255,0.88)";
-        ctx.font = "12px sans-serif";
-        ctx.fillText(`xác nhận lỗi ${getManeuverLabel(maneuver)}`, anchor[0] + 6, anchor[1] - 6);
-      }
-    });
+        const isSelectedManeuver = lane.lane_id === selectedLaneId && maneuver === selectedManeuver;
 
-    Object.entries(renderedExitLines).forEach(([maneuver, line]) => {
-      if (line.length < 2) return;
-      const isEditableLine = editable && editTarget === `exit_line:${maneuver}`;
-      drawPolygon(ctx, line, {
-        dashed: false,
-        strokeStyle: isEditableLine ? "rgba(255, 209, 102, 1)" : "rgba(230, 126, 34, 0.95)",
-        lineWidth: isEditableLine ? 3 : 2,
-        isEditableTarget: isEditableLine,
-        hoverVertexIndex,
-        selectedVertexIndex,
+        if (movementPath.length >= 2) {
+          const isEditablePath = editable && isSelectedManeuver && editTarget === "movement_path";
+          drawPolygon(ctx, movementPath, {
+            dashed: true,
+            strokeStyle: isEditablePath ? "rgba(255, 209, 102, 1)" : "rgba(52, 152, 219, 0.95)",
+            lineWidth: isEditablePath ? 3 : 2,
+            isEditableTarget: isEditablePath,
+            hoverVertexIndex,
+            selectedVertexIndex,
+          });
+          const anchor = movementPath[0];
+          if (anchor) {
+            ctx.fillStyle = "rgba(255,255,255,0.88)";
+            ctx.font = "12px sans-serif";
+            ctx.fillText(`${maneuverLabel} · lane ${lane.lane_id}`, anchor[0] + 6, anchor[1] - 6);
+          }
+        } else if (turnCorridor.length >= 2) {
+          drawPolygon(ctx, turnCorridor, {
+            dashed: true,
+            strokeStyle: "rgba(52, 152, 219, 0.65)",
+            lineWidth: 1.5,
+          });
+        }
+
+        if (exitZone.length >= 3) {
+          const isEditableExitZone = editable && isSelectedManeuver && editTarget === "exit_zone";
+          drawPolygon(ctx, exitZone, {
+            dashed: true,
+            strokeStyle: isEditableExitZone ? "rgba(255, 209, 102, 1)" : "rgba(155, 89, 182, 0.95)",
+            lineWidth: isEditableExitZone ? 3 : 2,
+            isEditableTarget: isEditableExitZone,
+            hoverVertexIndex,
+            selectedVertexIndex,
+          });
+        }
+
+        if (exitLine.length >= 2) {
+          const isEditableExitLine = editable && isSelectedManeuver && editTarget === "exit_line";
+          drawPolygon(ctx, exitLine, {
+            dashed: false,
+            strokeStyle: isEditableExitLine ? "rgba(255, 209, 102, 1)" : "rgba(230, 126, 34, 0.95)",
+            lineWidth: isEditableExitLine ? 3 : 2,
+            isEditableTarget: isEditableExitLine,
+            hoverVertexIndex,
+            selectedVertexIndex,
+          });
+        }
       });
-      const anchor = line[0];
-      if (anchor) {
-        ctx.fillStyle = "rgba(255,255,255,0.88)";
-        ctx.font = "12px sans-serif";
-        ctx.fillText(`đường xác nhận lỗi ${getManeuverLabel(maneuver)}`, anchor[0] + 6, anchor[1] - 6);
-      }
     });
 
     if (editable && !isLineEditTarget(editTarget) && hoverEdge?.point) {
@@ -395,6 +366,21 @@ export default function CameraCanvas({
       ctx.fillRect(x1, y1 - 22, ctx.measureText(label).width + 10, 22);
       ctx.fillStyle = "rgba(255,255,255,0.95)";
       ctx.fillText(label, x1 + 5, y1 - 7);
+    });
+
+    trajectoryOverlays.forEach((row) => {
+      const points = row?.points || [];
+      if (points.length < 2) return;
+      ctx.beginPath();
+      ctx.moveTo(points[0][0], points[0][1]);
+      for (let idx = 1; idx < points.length; idx += 1) {
+        ctx.lineTo(points[idx][0], points[idx][1]);
+      }
+      ctx.strokeStyle = "rgba(255, 140, 70, 0.55)";
+      ctx.lineWidth = 2;
+      ctx.setLineDash([6, 4]);
+      ctx.stroke();
+      ctx.setLineDash([]);
     });
 
     if (processingFps != null && Number.isFinite(processingFps)) {
@@ -434,7 +420,7 @@ export default function CameraCanvas({
       ctx.fillStyle = "rgba(255,255,255,0.78)";
       ctx.font = "12px sans-serif";
       ctx.fillText(
-        `${getEditTargetLabel(editTarget, parsedEditTarget.scope === "lane" ? selectedLaneId : null)}: keo diem de chinh, keo trong vung de di chuyen, click canh de chen diem.`,
+        `${getEditTargetLabel(editTarget, parsedEditTarget.scope === "lane" || parsedEditTarget.scope === "lane_maneuver" ? selectedLaneId : null, selectedManeuver)}: keo diem de chinh, keo trong vung de di chuyen, click canh de chen diem.`,
         14,
         22,
       );
@@ -449,13 +435,12 @@ export default function CameraCanvas({
     hoverVertexIndex,
     laneColors,
     parsedEditTarget.scope,
+    selectedManeuver,
     renderedLanes,
-    renderedExitLines,
-    renderedTurnCorridors,
-    renderedExitZones,
     selectedVertexIndex,
     selectedLaneId,
     vehicles,
+    trajectoryOverlays,
     processingFps,
   ]);
 

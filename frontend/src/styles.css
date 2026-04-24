@@ -182,6 +182,47 @@ select {
 
 .management-layout {
   grid-template-columns: 320px minmax(0, 1fr);
+  align-items: start;
+}
+
+.management-sidebar {
+  position: sticky;
+  top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: calc(100vh - 56px);
+}
+
+.management-sidebar-header {
+  margin-bottom: 4px;
+}
+
+.management-add-camera-button {
+  white-space: nowrap;
+}
+
+.management-camera-list {
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+  max-height: calc(100vh - 190px);
+  scrollbar-color: rgba(28, 166, 255, 0.42) rgba(255, 255, 255, 0.04);
+}
+
+.management-camera-list::-webkit-scrollbar {
+  width: 8px;
+}
+
+.management-camera-list::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 999px;
+}
+
+.management-camera-list::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(28, 166, 255, 0.72), rgba(0, 214, 143, 0.62));
+  border-radius: 999px;
+  border: 1px solid rgba(160, 210, 229, 0.14);
 }
 
 .panel {
@@ -232,6 +273,43 @@ select {
   gap: 10px;
 }
 
+.management-camera-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.management-status-strip {
+  margin-bottom: 2px;
+}
+
+.management-form-sections {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.management-subcard {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.management-subcard-title {
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.management-form-grid {
+  gap: 12px;
+}
+
 .history-header-actions {
   display: flex;
   flex-wrap: wrap;
@@ -277,6 +355,21 @@ select {
 .lane-editor-grid {
   grid-template-columns: 180px minmax(0, 1fr);
   margin-bottom: 16px;
+}
+
+.lane-settings {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.lane-maneuver-inline {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.lane-overlay-inline {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .field {
@@ -1150,6 +1243,10 @@ select {
   border: 1px solid rgba(255, 255, 255, 0.06);
 }
 
+.management-canvas-wrap {
+  margin-top: 4px;
+}
+
 .status-strip {
   display: flex;
   align-items: center;
@@ -1188,6 +1285,9 @@ select {
   .chart-grid,
   .camera-meta-grid,
   .summary-grid,
+  .management-form-sections,
+  .lane-maneuver-inline,
+  .lane-overlay-inline,
   .filter-row,
   .form-grid,
   .inline-fields,
@@ -1203,6 +1303,17 @@ select {
 
   .history-header-actions {
     justify-content: flex-start;
+  }
+
+  .management-sidebar {
+    position: static;
+    max-height: none;
+  }
+
+  .management-camera-list {
+    max-height: none;
+    overflow-y: visible;
+    padding-right: 0;
   }
 
   .editor-actions {
@@ -1256,6 +1367,10 @@ select {
 
   .violation-media-frame {
     min-height: 260px;
+  }
+
+  .management-subcard {
+    padding: 12px;
   }
 }
 

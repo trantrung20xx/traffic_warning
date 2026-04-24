@@ -5,12 +5,14 @@ import {
   deleteBackgroundImage,
   deleteCamera,
   fetchCameraDetail,
+  fetchCameraTrajectories,
   getBackgroundImageUrl,
   uploadBackgroundImage,
   updateCamera,
 } from "../api";
 import {
-  GLOBAL_TARGET_PREFIXES,
+  CORRIDOR_PRESET_LABELS,
+  CORRIDOR_PRESET_OPTIONS,
   MANEUVERS,
   VEHICLE_TYPES,
   buildPayload,
@@ -21,7 +23,6 @@ import {
   getManeuverLabel,
   getTargetPoints,
   getVehicleTypeLabel,
-  isGlobalEditTarget,
   isLineEditTarget,
   normalizeCameraDetail,
   polygonSelfIntersects,
@@ -184,6 +185,7 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
   const [draft, setDraft] = useState(createCameraDraft());
   const [activeCameraId, setActiveCameraId] = useState(selectedCameraId || null);
   const [selectedLaneId, setSelectedLaneId] = useState(1);
+  const [selectedManeuver, setSelectedManeuver] = useState("straight");
   const [selectedVertexIndex, setSelectedVertexIndex] = useState(null);
   const [editTarget, setEditTarget] = useState("lane_polygon");
   const [saving, setSaving] = useState(false);
@@ -194,6 +196,11 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
   const [hasBackgroundImage, setHasBackgroundImage] = useState(false);
   const [backgroundRevision, setBackgroundRevision] = useState("0");
   const [backgroundBusy, setBackgroundBusy] = useState(false);
+  const [configValidation, setConfigValidation] = useState([]);
+  const [trajectoryRows, setTrajectoryRows] = useState([]);
+  const [trajectoryLimit, setTrajectoryLimit] = useState(30);
+  const [trajectoryLaneFilter, setTrajectoryLaneFilter] = useState("all");
+  const [trajectoryVehicleFilter, setTrajectoryVehicleFilter] = useState("all");
 
   useEffect(() => {
     if (!selectedCameraId && cameras[0]?.camera_id) {
@@ -209,37 +216,91 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
         const normalized = normalizeCameraDetail(detail);
         setDraft(normalized);
         setSelectedLaneId(normalized.lane_config.lanes[0]?.lane_id || 1);
+        setSelectedManeuver("straight");
         setSelectedVertexIndex(null);
         setIsDirty(false);
         setPolygonLocked(false);
         setHasBackgroundImage(Boolean(detail.has_background_image));
         setBackgroundRevision(`${Date.now()}`);
+        setConfigValidation(detail.config_validation || []);
         setMessage(detail.runtime_applied ? "Cấu hình hiện tại đang được hệ thống sử dụng." : "");
       })
       .catch(() => {
         setDraft(createCameraDraft());
+        setSelectedManeuver("straight");
         setSelectedVertexIndex(null);
         setIsDirty(false);
         setHasBackgroundImage(false);
+        setConfigValidation([]);
       });
   }, [activeCameraId, selectedCameraId, isNewCamera]);
+
+  useEffect(() => {
+    const targetId = activeCameraId || selectedCameraId;
+    if (!targetId || isNewCamera) {
+      setTrajectoryRows([]);
+      return undefined;
+    }
+
+    let cancelled = false;
+    const loadTrajectories = () => {
+      const laneId = trajectoryLaneFilter === "all" ? null : Number(trajectoryLaneFilter);
+      const vehicleType = trajectoryVehicleFilter === "all" ? null : trajectoryVehicleFilter;
+      fetchCameraTrajectories({
+        cameraId: targetId,
+        limit: trajectoryLimit,
+        laneId,
+        vehicleType,
+      })
+        .then((payload) => {
+          if (!cancelled) {
+            setTrajectoryRows(payload.rows || []);
+          }
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setTrajectoryRows([]);
+          }
+        });
+    };
+
+    loadTrajectories();
+    const timer = window.setInterval(loadTrajectories, 2000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [
+    activeCameraId,
+    selectedCameraId,
+    isNewCamera,
+    trajectoryLimit,
+    trajectoryLaneFilter,
+    trajectoryVehicleFilter,
+  ]);
 
   const selectedLane = useMemo(
     () => draft.lane_config.lanes.find((lane) => lane.lane_id === selectedLaneId) || draft.lane_config.lanes[0] || null,
     [draft, selectedLaneId],
   );
 
+  const selectedManeuverConfig = useMemo(() => {
+    if (!selectedLane) return null;
+    return selectedLane.maneuvers?.[selectedManeuver] || null;
+  }, [selectedLane, selectedManeuver]);
+
   const selectedPoints = useMemo(() => {
     return getTargetPoints({
       lane: selectedLane,
       laneConfig: draft.lane_config,
       editTarget,
+      selectedManeuver,
     });
-  }, [draft.lane_config, editTarget, selectedLane]);
+  }, [draft.lane_config, editTarget, selectedLane, selectedManeuver]);
 
   const polygonStatus = useMemo(() => {
-    if (!selectedLane && !isGlobalEditTarget(editTarget)) return { warnings: [] };
-    const targetLabel = getEditTargetLabel(editTarget, selectedLane?.lane_id ?? null);
+    if (!selectedLane) return { warnings: [] };
+    const targetLabel = getEditTargetLabel(editTarget, selectedLane?.lane_id ?? null, selectedManeuver);
     const warnings = [];
     const minimumPoints = getEditTargetMinimumPoints(editTarget);
     if (selectedPoints.length > 0 && selectedPoints.length < minimumPoints) {
@@ -249,11 +310,11 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
       warnings.push(`${targetLabel} đang tự cắt nhau, nên chỉnh lại để tránh vùng hình học khó kiểm soát.`);
     }
     return { warnings };
-  }, [editTarget, selectedLane, selectedPoints]);
+  }, [editTarget, selectedLane, selectedPoints, selectedManeuver]);
 
   useEffect(() => {
     setSelectedVertexIndex(null);
-  }, [editTarget, selectedLaneId]);
+  }, [editTarget, selectedLaneId, selectedManeuver]);
 
   const updateDraft = (updater, options = {}) => {
     setDraft((current) => {
@@ -294,6 +355,34 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
     }));
   };
 
+  const updateSelectedManeuverConfig = (updater) => {
+    if (!selectedLane) return;
+    updateLane(selectedLane.lane_id, (lane) => {
+      const maneuvers = lane.maneuvers || {};
+      const currentCfg = maneuvers[selectedManeuver] || {
+        enabled: true,
+        allowed: false,
+        movement_path: [],
+        corridor_preset: selectedManeuver === "u_turn" ? "wide" : "normal",
+        corridor_width_px: null,
+        turn_corridor: [],
+        exit_line: [],
+        exit_zone: [],
+      };
+      const nextCfg = updater(currentCfg);
+      const nextManeuvers = { ...maneuvers, [selectedManeuver]: nextCfg };
+      const nextAllowed = MANEUVERS.filter((maneuver) => {
+        const cfg = nextManeuvers[maneuver];
+        return Boolean(cfg?.enabled && cfg?.allowed);
+      });
+      return {
+        ...lane,
+        maneuvers: nextManeuvers,
+        allowed_maneuvers: nextAllowed,
+      };
+    });
+  };
+
   const addLane = () => {
     const existingIds = draft.lane_config.lanes.map((lane) => lane.lane_id);
     const nextLaneId = existingIds.length ? Math.max(...existingIds) + 1 : 1;
@@ -324,36 +413,34 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
   };
 
   const updateTargetGeometry = (updater) => {
-    if (isGlobalEditTarget(editTarget)) {
-      updateDraft((current) => {
-        const nextLaneConfig = { ...current.lane_config };
-        const [collectionKey, maneuver] = editTarget.split(":");
-        const collection =
-          collectionKey === GLOBAL_TARGET_PREFIXES.turn_corridor
-            ? nextLaneConfig.turn_corridors || {}
-            : collectionKey === GLOBAL_TARGET_PREFIXES.exit_line
-              ? nextLaneConfig.exit_lines || {}
-              : nextLaneConfig.exit_zones || {};
-        const nextCollection = {
-          ...collection,
-          [maneuver]: updater(collection[maneuver] || []),
+    if (!selectedLane) return;
+    if (editTarget === "movement_path" || editTarget === "exit_line" || editTarget === "exit_zone") {
+      updateLane(selectedLane.lane_id, (lane) => {
+        const currentManeuvers = lane.maneuvers || {};
+        const currentManeuverCfg = currentManeuvers[selectedManeuver] || {
+          enabled: true,
+          allowed: false,
+          movement_path: [],
+          corridor_preset: selectedManeuver === "u_turn" ? "wide" : "normal",
+          corridor_width_px: null,
+          turn_corridor: [],
+          exit_line: [],
+          exit_zone: [],
         };
-        if (collectionKey === GLOBAL_TARGET_PREFIXES.turn_corridor) {
-          nextLaneConfig.turn_corridors = nextCollection;
-        } else if (collectionKey === GLOBAL_TARGET_PREFIXES.exit_line) {
-          nextLaneConfig.exit_lines = nextCollection;
-        } else {
-          nextLaneConfig.exit_zones = nextCollection;
-        }
         return {
-          ...current,
-          lane_config: nextLaneConfig,
+          ...lane,
+          maneuvers: {
+            ...currentManeuvers,
+            [selectedManeuver]: {
+              ...currentManeuverCfg,
+              [editTarget]: updater(currentManeuverCfg[editTarget] || []),
+            },
+          },
         };
       });
       return;
     }
 
-    if (!selectedLane) return;
     updateLane(selectedLane.lane_id, (lane) => ({
       ...lane,
       [editTarget === "lane_polygon" ? "polygon" : editTarget]: updater(
@@ -363,7 +450,7 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
   };
 
   const handleCanvasPoint = (point) => {
-    if (!selectedLane && !isGlobalEditTarget(editTarget)) return;
+    if (!selectedLane) return;
     if (isLineEditTarget(editTarget) && selectedPoints.length >= 2) {
       setMessage("Đối tượng dạng đường chỉ cho phép tối đa 2 điểm.");
       return;
@@ -374,27 +461,27 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
   };
 
   const replaceTargetPolygon = (nextPoints) => {
-    if (!selectedLane && !isGlobalEditTarget(editTarget)) return;
+    if (!selectedLane) return;
     updateTargetGeometry(() => nextPoints);
     setMessage("Đã cập nhật polygon trên canvas, chưa lưu xuống backend.");
   };
 
   const deleteSelectedVertex = () => {
-    if ((!selectedLane && !isGlobalEditTarget(editTarget)) || selectedVertexIndex == null) return;
+    if (!selectedLane || selectedVertexIndex == null) return;
     updateTargetGeometry((points) => points.filter((_, index) => index !== selectedVertexIndex));
     setSelectedVertexIndex(null);
     setMessage("Đã xóa điểm đang chọn.");
   };
 
   const undoPoint = () => {
-    if (!selectedLane && !isGlobalEditTarget(editTarget)) return;
+    if (!selectedLane) return;
     updateTargetGeometry((points) => points.slice(0, -1));
     setSelectedVertexIndex(null);
     setMessage("Đã xóa điểm vừa vẽ.");
   };
 
   const clearPolygon = () => {
-    if (!selectedLane && !isGlobalEditTarget(editTarget)) return;
+    if (!selectedLane) return;
     updateTargetGeometry(() => []);
     setSelectedVertexIndex(null);
     setMessage("Đã xóa toàn bộ polygon hiện tại.");
@@ -407,6 +494,7 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
     const draftState = createCameraDraft(`cam_${String(cameras.length + 1).padStart(2, "0")}`);
     setDraft(draftState);
     setSelectedLaneId(1);
+    setSelectedManeuver("straight");
     setSelectedVertexIndex(null);
     setEditTarget("lane_polygon");
     setIsDirty(false);
@@ -471,10 +559,12 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
       const normalized = normalizeCameraDetail(freshDetail);
       setDraft(normalized);
       setSelectedLaneId(normalized.lane_config.lanes[0]?.lane_id || 1);
+      setSelectedManeuver("straight");
       setSelectedVertexIndex(null);
       setIsDirty(false);
       setHasBackgroundImage(Boolean(freshDetail.has_background_image));
       setBackgroundRevision(`${Date.now()}`);
+      setConfigValidation(freshDetail.config_validation || []);
       setMessage(
         response.runtime_applied
           ? "Đã lưu cấu hình và áp dụng ngay vào hệ thống."
@@ -500,10 +590,12 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
       setActiveCameraId(null);
       setDraft(createCameraDraft());
       setSelectedLaneId(1);
+      setSelectedManeuver("straight");
       setSelectedVertexIndex(null);
       setIsDirty(false);
       setHasBackgroundImage(false);
       setBackgroundRevision("0");
+      setConfigValidation([]);
       setMessage(`Đã xóa ${activeCameraId}.`);
     } catch (error) {
       setMessage(error.message || "Không thể xóa camera.");
@@ -514,17 +606,17 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
 
   return (
     <div className="management-layout">
-      <aside className="panel sidebar-panel">
-        <div className="panel-header compact">
+      <aside className="panel sidebar-panel management-sidebar">
+        <div className="panel-header compact management-sidebar-header">
           <div>
             <div className="panel-kicker">Danh mục</div>
             <h3>Danh sách camera</h3>
           </div>
-          <button className="button secondary" onClick={startCreateCamera}>
+          <button className="button secondary management-add-camera-button" onClick={startCreateCamera}>
             Thêm camera
           </button>
         </div>
-        <div className="entity-list">
+        <div className="entity-list management-camera-list">
           {cameras.map((camera) => (
             <button
               key={camera.camera_id}
@@ -549,7 +641,7 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
       </aside>
 
       <section className="management-main">
-        <section className="panel">
+        <section className="panel management-camera-panel">
           <div className="panel-header">
             <div>
               <div className="panel-kicker">Thông tin camera</div>
@@ -567,7 +659,7 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
             </div>
           </div>
 
-          <div className="status-strip">
+          <div className="status-strip management-status-strip">
             <div className={isDirty ? "badge warning" : "badge success"}>
               {isDirty ? "Chưa lưu" : "Đã đồng bộ backend"}
             </div>
@@ -578,152 +670,172 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
             </div>
           </div>
 
-          <div className="form-grid">
-            <label className="field camera-id-field">
-              <span>Camera ID</span>
-              <input
-                className="camera-id-input"
-                value={draft.camera.camera_id}
-                onChange={(event) =>
-                  updateDraft((current) => ({
-                    ...current,
-                    camera: { ...current.camera, camera_id: event.target.value },
-                    lane_config: { ...current.lane_config, camera_id: event.target.value },
-                  }))
-                }
-                disabled={!isNewCamera}
-              />
-            </label>
-            <label className="field">
-              <span>Nguồn RTSP / video</span>
-              <input
-                value={draft.camera.rtsp_url}
-                onChange={(event) =>
-                  updateDraft((current) => ({
-                    ...current,
-                    camera: { ...current.camera, rtsp_url: event.target.value },
-                  }))
-                }
-              />
-            </label>
-            <label className="field">
-              <span>Loại camera</span>
-              <select
-                value={draft.camera.camera_type}
-                onChange={(event) =>
-                  updateDraft((current) => ({
-                    ...current,
-                    camera: { ...current.camera, camera_type: event.target.value },
-                  }))
-                }
-              >
-                <option value="roadside">Bên đường</option>
-                <option value="overhead">Trên cao</option>
-                <option value="intersection">Nút giao</option>
-              </select>
-            </label>
-            <label className="field">
-              <span>Hướng quan sát</span>
-              <input
-                value={draft.camera.view_direction}
-                onChange={(event) =>
-                  updateDraft((current) => ({
-                    ...current,
-                    camera: { ...current.camera, view_direction: event.target.value },
-                  }))
-                }
-              />
-            </label>
-            <label className="field">
-              <span>Tuyến đường</span>
-              <input
-                value={draft.camera.location.road_name}
-                onChange={(event) =>
-                  updateDraft((current) => ({
-                    ...current,
-                    camera: {
-                      ...current.camera,
-                      location: { ...current.camera.location, road_name: event.target.value },
-                    },
-                  }))
-                }
-              />
-            </label>
-            <label className="field">
-              <span>Ngã tư / nút giao</span>
-              <input
-                value={draft.camera.location.intersection_name}
-                onChange={(event) =>
-                  updateDraft((current) => ({
-                    ...current,
-                    camera: {
-                      ...current.camera,
-                      location: { ...current.camera.location, intersection_name: event.target.value },
-                    },
-                  }))
-                }
-              />
-            </label>
-            <label className="field">
-              <span>GPS lat</span>
-              <input
-                value={draft.camera.location.gps_lat}
-                onChange={(event) =>
-                  updateDraft((current) => ({
-                    ...current,
-                    camera: {
-                      ...current.camera,
-                      location: { ...current.camera.location, gps_lat: event.target.value },
-                    },
-                  }))
-                }
-              />
-            </label>
-            <label className="field">
-              <span>GPS lng</span>
-              <input
-                value={draft.camera.location.gps_lng}
-                onChange={(event) =>
-                  updateDraft((current) => ({
-                    ...current,
-                    camera: {
-                      ...current.camera,
-                      location: { ...current.camera.location, gps_lng: event.target.value },
-                    },
-                  }))
-                }
-              />
-            </label>
-            <label className="field">
-              <span>Frame width</span>
-              <input
-                type="number"
-                value={draft.camera.frame_width}
-                onChange={(event) =>
-                  updateDraft((current) => ({
-                    ...current,
-                    camera: { ...current.camera, frame_width: Number(event.target.value) || 1280 },
-                  }))
-                }
-              />
-            </label>
-            <label className="field">
-              <span>Frame height</span>
-              <input
-                type="number"
-                value={draft.camera.frame_height}
-                onChange={(event) =>
-                  updateDraft((current) => ({
-                    ...current,
-                    camera: { ...current.camera, frame_height: Number(event.target.value) || 720 },
-                  }))
-                }
-              />
-            </label>
+          <div className="management-form-sections">
+            <section className="management-subcard">
+              <div className="management-subcard-title">RTSP / Kết nối</div>
+              <div className="form-grid management-form-grid">
+                <label className="field camera-id-field">
+                  <span>Camera ID</span>
+                  <input
+                    className="camera-id-input"
+                    value={draft.camera.camera_id}
+                    onChange={(event) =>
+                      updateDraft((current) => ({
+                        ...current,
+                        camera: { ...current.camera, camera_id: event.target.value },
+                        lane_config: { ...current.lane_config, camera_id: event.target.value },
+                      }))
+                    }
+                    disabled={!isNewCamera}
+                  />
+                </label>
+                <label className="field">
+                  <span>Nguồn RTSP / video</span>
+                  <input
+                    value={draft.camera.rtsp_url}
+                    onChange={(event) =>
+                      updateDraft((current) => ({
+                        ...current,
+                        camera: { ...current.camera, rtsp_url: event.target.value },
+                      }))
+                    }
+                  />
+                </label>
+                <label className="field">
+                  <span>Loại camera</span>
+                  <select
+                    value={draft.camera.camera_type}
+                    onChange={(event) =>
+                      updateDraft((current) => ({
+                        ...current,
+                        camera: { ...current.camera, camera_type: event.target.value },
+                      }))
+                    }
+                  >
+                    <option value="roadside">Bên đường</option>
+                    <option value="overhead">Trên cao</option>
+                    <option value="intersection">Nút giao</option>
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Hướng quan sát</span>
+                  <input
+                    value={draft.camera.view_direction}
+                    onChange={(event) =>
+                      updateDraft((current) => ({
+                        ...current,
+                        camera: { ...current.camera, view_direction: event.target.value },
+                      }))
+                    }
+                  />
+                </label>
+                <label className="field">
+                  <span>Frame width</span>
+                  <input
+                    type="number"
+                    value={draft.camera.frame_width}
+                    onChange={(event) =>
+                      updateDraft((current) => ({
+                        ...current,
+                        camera: { ...current.camera, frame_width: Number(event.target.value) || 1280 },
+                      }))
+                    }
+                  />
+                </label>
+                <label className="field">
+                  <span>Frame height</span>
+                  <input
+                    type="number"
+                    value={draft.camera.frame_height}
+                    onChange={(event) =>
+                      updateDraft((current) => ({
+                        ...current,
+                        camera: { ...current.camera, frame_height: Number(event.target.value) || 720 },
+                      }))
+                    }
+                  />
+                </label>
+              </div>
+            </section>
+
+            <section className="management-subcard">
+              <div className="management-subcard-title">Vị trí camera</div>
+              <div className="form-grid management-form-grid">
+                <label className="field">
+                  <span>Tuyến đường</span>
+                  <input
+                    value={draft.camera.location.road_name}
+                    onChange={(event) =>
+                      updateDraft((current) => ({
+                        ...current,
+                        camera: {
+                          ...current.camera,
+                          location: { ...current.camera.location, road_name: event.target.value },
+                        },
+                      }))
+                    }
+                  />
+                </label>
+                <label className="field">
+                  <span>Ngã tư / nút giao</span>
+                  <input
+                    value={draft.camera.location.intersection_name}
+                    onChange={(event) =>
+                      updateDraft((current) => ({
+                        ...current,
+                        camera: {
+                          ...current.camera,
+                          location: { ...current.camera.location, intersection_name: event.target.value },
+                        },
+                      }))
+                    }
+                  />
+                </label>
+                <label className="field">
+                  <span>GPS lat</span>
+                  <input
+                    value={draft.camera.location.gps_lat}
+                    onChange={(event) =>
+                      updateDraft((current) => ({
+                        ...current,
+                        camera: {
+                          ...current.camera,
+                          location: { ...current.camera.location, gps_lat: event.target.value },
+                        },
+                      }))
+                    }
+                  />
+                </label>
+                <label className="field">
+                  <span>GPS lng</span>
+                  <input
+                    value={draft.camera.location.gps_lng}
+                    onChange={(event) =>
+                      updateDraft((current) => ({
+                        ...current,
+                        camera: {
+                          ...current.camera,
+                          location: { ...current.camera.location, gps_lng: event.target.value },
+                        },
+                      }))
+                    }
+                  />
+                </label>
+              </div>
+            </section>
           </div>
 
           {message ? <div className="message-bar">{message}</div> : null}
-
+          {configValidation.length > 0 ? (
+            <div className="message-bar warning">
+              {configValidation.slice(0, 6).map((issue, idx) => (
+                <div key={`${issue.code || "issue"}-${idx}`}>
+                  [{String(issue.level || "info").toUpperCase()}] {issue.message}
+                  {issue.suggestion ? ` · Gợi ý: ${issue.suggestion}` : ""}
+                </div>
+              ))}
+            </div>
+          ) : null}
         </section>
 
         <section className="panel lane-panel">
@@ -767,172 +879,205 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
 
             {selectedLane ? (
               <div className="lane-settings">
-                <div className="inline-fields lane-inline-fields">
-                  <label className="field lane-field-changes">
-                    <span>Các làn được phép chuyển</span>
-                    <MultiSelectDropdown
-                      summary={
-                        draft.lane_config.lanes
-                          .filter((laneOption) => (selectedLane.allowed_lane_changes || []).includes(laneOption.lane_id))
-                          .map((laneOption) => `Làn ${laneOption.lane_id}`)
-                          .join(", ")
-                      }
-                      placeholder="Chọn làn"
-                      options={draft.lane_config.lanes}
-                      getKey={(laneOption) => laneOption.lane_id}
-                      getLabel={(laneOption) => `Làn ${laneOption.lane_id}`}
-                      isChecked={(laneOption) => (selectedLane.allowed_lane_changes || []).includes(laneOption.lane_id)}
-                      isDisabled={(laneOption) => laneOption.lane_id === selectedLane.lane_id}
-                      getNote={(laneOption) => (laneOption.lane_id === selectedLane.lane_id ? "Hiện tại" : null)}
-                      onToggle={(laneOption, checked) =>
-                        updateLane(selectedLane.lane_id, (lane) => ({
-                          ...lane,
-                          allowed_lane_changes: checked
-                            ? [...new Set([...(lane.allowed_lane_changes || []), laneOption.lane_id])]
-                            : (lane.allowed_lane_changes || []).filter((value) => value !== laneOption.lane_id),
-                        }))
-                      }
-                    />
-                  </label>
-                  <label className="field lane-field-vehicles">
-                    <span>Loại phương tiện được phép</span>
-                    <MultiSelectDropdown
-                      summary={
-                        VEHICLE_TYPES.filter((vehicleType) => (selectedLane.allowed_vehicle_types || []).includes(vehicleType))
-                          .map((vehicleType) => getVehicleTypeLabel(vehicleType))
-                          .join(", ")
-                      }
-                      placeholder="Chọn phương tiện"
-                      options={VEHICLE_TYPES}
-                      getKey={(vehicleType) => vehicleType}
-                      getLabel={(vehicleType) => getVehicleTypeLabel(vehicleType)}
-                      isChecked={(vehicleType) => (selectedLane.allowed_vehicle_types || []).includes(vehicleType)}
-                      onToggle={(vehicleType, checked) =>
-                        updateLane(selectedLane.lane_id, (lane) => ({
-                          ...lane,
-                          allowed_vehicle_types: checked
-                            ? [...new Set([...(lane.allowed_vehicle_types || []), vehicleType])]
-                            : (lane.allowed_vehicle_types || []).filter((value) => value !== vehicleType),
-                        }))
-                      }
-                    />
-                  </label>
-                  <label className="field lane-field-target">
-                    <span>Đối tượng chỉnh sửa</span>
-                    <select value={editTarget} onChange={(event) => setEditTarget(event.target.value)}>
-                      <optgroup label="Theo từng làn">
-                        <option value="lane_polygon">Biên làn xe</option>
-                        <option value="approach_zone">Vùng chuẩn bị rẽ</option>
-                        <option value="commit_gate">Vùng bắt đầu rẽ</option>
-                        <option value="commit_line">Vạch bắt đầu rẽ</option>
-                      </optgroup>
-                      <optgroup label="Theo hướng rẽ">
-                        {MANEUVERS.map((maneuver) => (
-                          <option key={`turn_corridor:${maneuver}`} value={`turn_corridor:${maneuver}`}>
-                            Quỹ đạo: {getManeuverLabel(maneuver)}
-                          </option>
-                        ))}
-                        {MANEUVERS.map((maneuver) => (
-                          <option key={`exit_zone:${maneuver}`} value={`exit_zone:${maneuver}`}>
-                            Vùng xác nhận lỗi: {getManeuverLabel(maneuver)}
-                          </option>
-                        ))}
-                        {MANEUVERS.map((maneuver) => (
-                          <option key={`exit_line:${maneuver}`} value={`exit_line:${maneuver}`}>
-                            Đường xác nhận lỗi: {getManeuverLabel(maneuver)}
-                          </option>
-                        ))}
-                      </optgroup>
-                    </select>
-                  </label>
-                </div>
+                <section className="management-subcard">
+                  <div className="management-subcard-title">Quy tắc làn và đối tượng chỉnh sửa</div>
+                  <div className="inline-fields lane-inline-fields">
+                    <label className="field lane-field-changes">
+                      <span>Các làn được phép chuyển</span>
+                      <MultiSelectDropdown
+                        summary={
+                          draft.lane_config.lanes
+                            .filter((laneOption) => (selectedLane.allowed_lane_changes || []).includes(laneOption.lane_id))
+                            .map((laneOption) => `Làn ${laneOption.lane_id}`)
+                            .join(", ")
+                        }
+                        placeholder="Chọn làn"
+                        options={draft.lane_config.lanes}
+                        getKey={(laneOption) => laneOption.lane_id}
+                        getLabel={(laneOption) => `Làn ${laneOption.lane_id}`}
+                        isChecked={(laneOption) => (selectedLane.allowed_lane_changes || []).includes(laneOption.lane_id)}
+                        isDisabled={(laneOption) => laneOption.lane_id === selectedLane.lane_id}
+                        getNote={(laneOption) => (laneOption.lane_id === selectedLane.lane_id ? "Hiện tại" : null)}
+                        onToggle={(laneOption, checked) =>
+                          updateLane(selectedLane.lane_id, (lane) => ({
+                            ...lane,
+                            allowed_lane_changes: checked
+                              ? [...new Set([...(lane.allowed_lane_changes || []), laneOption.lane_id])]
+                              : (lane.allowed_lane_changes || []).filter((value) => value !== laneOption.lane_id),
+                          }))
+                        }
+                      />
+                    </label>
+                    <label className="field lane-field-vehicles">
+                      <span>Loại phương tiện được phép</span>
+                      <MultiSelectDropdown
+                        summary={
+                          VEHICLE_TYPES.filter((vehicleType) => (selectedLane.allowed_vehicle_types || []).includes(vehicleType))
+                            .map((vehicleType) => getVehicleTypeLabel(vehicleType))
+                            .join(", ")
+                        }
+                        placeholder="Chọn phương tiện"
+                        options={VEHICLE_TYPES}
+                        getKey={(vehicleType) => vehicleType}
+                        getLabel={(vehicleType) => getVehicleTypeLabel(vehicleType)}
+                        isChecked={(vehicleType) => (selectedLane.allowed_vehicle_types || []).includes(vehicleType)}
+                        onToggle={(vehicleType, checked) =>
+                          updateLane(selectedLane.lane_id, (lane) => ({
+                            ...lane,
+                            allowed_vehicle_types: checked
+                              ? [...new Set([...(lane.allowed_vehicle_types || []), vehicleType])]
+                              : (lane.allowed_vehicle_types || []).filter((value) => value !== vehicleType),
+                          }))
+                        }
+                      />
+                    </label>
+                    <label className="field lane-field-target">
+                      <span>Đối tượng chỉnh sửa</span>
+                      <select value={editTarget} onChange={(event) => setEditTarget(event.target.value)}>
+                        <optgroup label="Theo từng làn">
+                          <option value="lane_polygon">Biên làn xe</option>
+                          <option value="approach_zone">Vùng chuẩn bị rẽ</option>
+                          <option value="commit_line">Vạch bắt đầu rẽ</option>
+                        </optgroup>
+                        <optgroup label="Theo hướng đang chọn">
+                          <option value="movement_path">Đường đi (movement path)</option>
+                          <option value="exit_line">Vạch xác nhận đầu ra</option>
+                          <option value="exit_zone">Vùng xác nhận đầu ra</option>
+                        </optgroup>
+                      </select>
+                    </label>
+                  </div>
+                </section>
 
-                <div className="checkbox-group">
-                  {MANEUVERS.map((maneuver) => {
-                    const checked = (selectedLane.allowed_maneuvers || []).includes(maneuver);
-                    return (
-                      <label key={maneuver} className="checkbox-pill">
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={(event) =>
-                            updateLane(selectedLane.lane_id, (lane) => ({
-                              ...lane,
-                              allowed_maneuvers: event.target.checked
-                                ? [...new Set([...(lane.allowed_maneuvers || []), maneuver])]
-                                : (lane.allowed_maneuvers || []).filter((value) => value !== maneuver),
-                            }))
-                          }
-                        />
-                        <span>{getManeuverLabel(maneuver)}</span>
-                      </label>
-                    );
-                  })}
-                </div>
-
-                <div className="editor-toolbar-row">
-                  <div className="editor-action-toolbar compact-toolbar">
-                    <div className="editor-action-toolbar-label">Ảnh nền camera</div>
-                    <div className="editor-actions tight-actions">
-                      <label className={`button secondary compact-button smaller-button${isNewCamera || backgroundBusy ? " disabled" : ""}`}>
-                        <input
-                          type="file"
-                          accept=".jpg,.png,image/jpeg,image/png"
-                          hidden
-                          disabled={isNewCamera || backgroundBusy}
-                          onChange={handleBackgroundUpload}
-                        />
-                        <ActionIcon type="image-upload" />
-                        {backgroundBusy ? "Đang xử lý" : "Tải ảnh"}
-                      </label>
-                      <button
-                        className="button ghost compact-button smaller-button"
-                        onClick={handleBackgroundClear}
-                        disabled={isNewCamera || backgroundBusy || !hasBackgroundImage}
+                <section className="management-subcard">
+                  <div className="management-subcard-title">Hành vi và chính sách cho phép</div>
+                  <div className="inline-fields lane-maneuver-inline">
+                    <label className="field">
+                      <span>Hành vi đang cấu hình</span>
+                      <select value={selectedManeuver} onChange={(event) => setSelectedManeuver(event.target.value)}>
+                        {MANEUVERS.map((maneuver) => (
+                          <option key={maneuver} value={maneuver}>
+                            {getManeuverLabel(maneuver)}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="field">
+                      <span>Độ rộng corridor</span>
+                      <select
+                        value={selectedManeuverConfig?.corridor_preset || (selectedManeuver === "u_turn" ? "wide" : "normal")}
+                        onChange={(event) =>
+                          updateSelectedManeuverConfig((cfg) => ({
+                            ...cfg,
+                            corridor_preset: event.target.value,
+                          }))
+                        }
                       >
-                        <ActionIcon type="image-delete" />
-                        Xóa ảnh
-                      </button>
-                      <div className={hasBackgroundImage ? "badge success toolbar-badge" : "badge subtle toolbar-badge"}>
-                        {hasBackgroundImage ? "Có ảnh nền" : "Chưa có ảnh"}
+                        {CORRIDOR_PRESET_OPTIONS.map((preset) => (
+                          <option key={preset} value={preset}>
+                            {CORRIDOR_PRESET_LABELS[preset]}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+
+                  <div className="checkbox-group">
+                    <label className="checkbox-pill">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(selectedManeuverConfig?.enabled ?? true)}
+                        onChange={(event) =>
+                          updateSelectedManeuverConfig((cfg) => ({
+                            ...cfg,
+                            enabled: event.target.checked,
+                          }))
+                        }
+                      />
+                      <span>Bật nhận diện {getManeuverLabel(selectedManeuver)}</span>
+                    </label>
+                    <label className="checkbox-pill">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(selectedManeuverConfig?.allowed ?? false)}
+                        onChange={(event) =>
+                          updateSelectedManeuverConfig((cfg) => ({
+                            ...cfg,
+                            allowed: event.target.checked,
+                          }))
+                        }
+                      />
+                      <span>Cho phép {getManeuverLabel(selectedManeuver)} ở làn này</span>
+                    </label>
+                  </div>
+                </section>
+
+                <section className="management-subcard">
+                  <div className="management-subcard-title">Công cụ chỉnh sửa</div>
+                  <div className="editor-toolbar-row">
+                    <div className="editor-action-toolbar compact-toolbar">
+                      <div className="editor-action-toolbar-label">Ảnh nền camera</div>
+                      <div className="editor-actions tight-actions">
+                        <label className={`button secondary compact-button smaller-button${isNewCamera || backgroundBusy ? " disabled" : ""}`}>
+                          <input
+                            type="file"
+                            accept=".jpg,.png,image/jpeg,image/png"
+                            hidden
+                            disabled={isNewCamera || backgroundBusy}
+                            onChange={handleBackgroundUpload}
+                          />
+                          <ActionIcon type="image-upload" />
+                          {backgroundBusy ? "Đang xử lý" : "Tải ảnh"}
+                        </label>
+                        <button
+                          className="button ghost compact-button smaller-button"
+                          onClick={handleBackgroundClear}
+                          disabled={isNewCamera || backgroundBusy || !hasBackgroundImage}
+                        >
+                          <ActionIcon type="image-delete" />
+                          Xóa ảnh
+                        </button>
+                        <div className={hasBackgroundImage ? "badge success toolbar-badge" : "badge subtle toolbar-badge"}>
+                          {hasBackgroundImage ? "Có ảnh nền" : "Chưa có ảnh"}
+                        </div>
+                      </div>
+                      {isNewCamera ? (
+                        <div className="toolbar-note">Lưu camera trước để gắn ảnh nền theo `camera_id` cố định.</div>
+                      ) : null}
+                    </div>
+
+                    <div className="editor-action-toolbar compact-toolbar">
+                      <div className="editor-action-toolbar-label">Thao tác polygon</div>
+                      <div className="editor-actions tight-actions">
+                        <button
+                          className={`${polygonLocked ? "button secondary" : "button ghost"} compact-button smaller-button`}
+                          onClick={() => {
+                            setPolygonLocked((value) => {
+                              const nextValue = !value;
+                              setMessage(nextValue ? "Đã khóa polygon để tránh chỉnh nhầm." : "Đã mở khóa polygon để tiếp tục chỉnh.");
+                              return nextValue;
+                            });
+                          }}
+                        >
+                          <ActionIcon type={polygonLocked ? "unlock" : "lock"} />
+                          {polygonLocked ? "Mở khóa" : "Khóa"}
+                        </button>
+                        <button className="button secondary compact-button smaller-button" onClick={undoPoint}>
+                          <ActionIcon type="undo" />
+                          Xóa điểm
+                        </button>
+                        <button className="button ghost compact-button smaller-button" onClick={deleteSelectedVertex} disabled={selectedVertexIndex == null}>
+                          <ActionIcon type="vertex-delete" />
+                          Xóa vertex
+                        </button>
+                        <button className="button ghost compact-button smaller-button" onClick={clearPolygon}>
+                          <ActionIcon type="polygon-delete" />
+                          Xóa đa giác
+                        </button>
                       </div>
                     </div>
-                    {isNewCamera ? (
-                      <div className="toolbar-note">Lưu camera trước để gắn ảnh nền theo `camera_id` cố định.</div>
-                    ) : null}
                   </div>
-
-                  <div className="editor-action-toolbar compact-toolbar">
-                    <div className="editor-action-toolbar-label">Thao tác polygon</div>
-                    <div className="editor-actions tight-actions">
-                    <button
-                      className={`${polygonLocked ? "button secondary" : "button ghost"} compact-button smaller-button`}
-                      onClick={() => {
-                        setPolygonLocked((value) => {
-                          const nextValue = !value;
-                          setMessage(nextValue ? "Đã khóa polygon để tránh chỉnh nhầm." : "Đã mở khóa polygon để tiếp tục chỉnh.");
-                          return nextValue;
-                        });
-                      }}
-                    >
-                      <ActionIcon type={polygonLocked ? "unlock" : "lock"} />
-                      {polygonLocked ? "Mở khóa" : "Khóa"}
-                    </button>
-                    <button className="button secondary compact-button smaller-button" onClick={undoPoint}>
-                      <ActionIcon type="undo" />
-                      Xóa điểm
-                    </button>
-                    <button className="button ghost compact-button smaller-button" onClick={deleteSelectedVertex} disabled={selectedVertexIndex == null}>
-                      <ActionIcon type="vertex-delete" />
-                      Xóa vertex
-                    </button>
-                    <button className="button ghost compact-button smaller-button" onClick={clearPolygon}>
-                      <ActionIcon type="polygon-delete" />
-                      Xóa đa giác
-                    </button>
-                  </div>
-                </div>
-                </div>
+                </section>
 
                 {polygonStatus.warnings.length > 0 ? (
                   <div className="message-bar warning">
@@ -941,20 +1086,56 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
                     ))}
                   </div>
                 ) : null}
+
+                <section className="management-subcard">
+                  <div className="management-subcard-title">Trajectory Overlay</div>
+                  <div className="inline-fields lane-overlay-inline">
+                    <label className="field">
+                      <span>Số quỹ đạo hiển thị</span>
+                      <input
+                        type="number"
+                        min={10}
+                        max={80}
+                        value={trajectoryLimit}
+                        onChange={(event) => setTrajectoryLimit(Math.min(Math.max(Number(event.target.value) || 30, 10), 80))}
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Lọc theo làn</span>
+                      <select value={trajectoryLaneFilter} onChange={(event) => setTrajectoryLaneFilter(event.target.value)}>
+                        <option value="all">Tất cả</option>
+                        {draft.lane_config.lanes.map((laneOption) => (
+                          <option key={laneOption.lane_id} value={laneOption.lane_id}>
+                            Làn {laneOption.lane_id}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="field">
+                      <span>Lọc theo phương tiện</span>
+                      <select value={trajectoryVehicleFilter} onChange={(event) => setTrajectoryVehicleFilter(event.target.value)}>
+                        <option value="all">Tất cả</option>
+                        {VEHICLE_TYPES.map((vehicleType) => (
+                          <option key={vehicleType} value={vehicleType}>
+                            {getVehicleTypeLabel(vehicleType)}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                </section>
               </div>
             ) : (
               <div className="empty-state slim">Tạo làn đầu tiên để bắt đầu cấu hình.</div>
             )}
           </div>
 
-          <div className="editor-canvas-wrap">
+          <div className="editor-canvas-wrap management-canvas-wrap">
             <CameraCanvas
               frameWidth={draft.camera.frame_width}
               frameHeight={draft.camera.frame_height}
               lanes={draft.lane_config.lanes}
-              turnCorridors={draft.lane_config.turn_corridors}
-              exitZones={draft.lane_config.exit_zones}
-              exitLines={draft.lane_config.exit_lines}
+              trajectoryOverlays={trajectoryRows}
               vehicles={[]}
               backgroundImageUrl={
                 !isNewCamera && hasBackgroundImage && draft.camera.camera_id
@@ -968,6 +1149,7 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
               onPolygonReplace={replaceTargetPolygon}
               onVertexSelect={setSelectedVertexIndex}
               editTarget={editTarget}
+              selectedManeuver={selectedManeuver}
             />
           </div>
         </section>
