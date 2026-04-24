@@ -17,7 +17,8 @@
     "tracker_config": "bytetrack.yaml",
     "vehicle_type_history": {
       "window_ms": 5000,
-      "size": 12
+      "size": 12,
+      "recency_weight_bias": 0.15
     },
     "stable_track": {
       "max_idle_ms": 1500,
@@ -30,6 +31,10 @@
       "observation_window_ms": 1200,
       "min_majority_hits": 3,
       "switch_min_duration_ms": 700
+    },
+    "overlap_preference": {
+      "preferred_lane_overlap_ratio": 0.8,
+      "preferred_lane_overlap_margin_px": 6.0
     }
   },
   "wrong_lane": {
@@ -38,7 +43,30 @@
   "turn_detection": {
     "turn_region_min_hits": 3,
     "turn_state_timeout_ms": 3000,
-    "trajectory_history_window_ms": 2000
+    "trajectory_history_window_ms": 2000,
+    "heading": {
+      "straight_max_deg": 32.0,
+      "turn_min_deg": 18.0,
+      "turn_max_deg": 155.0,
+      "u_turn_min_change_deg": 110.0,
+      "side_sign_tolerance": 0.000001,
+      "value_sign_tolerance": 0.00001,
+      "straight_curvature_max_for_heading_support": 0.28
+    },
+    "curvature": {
+      "u_turn_min": 0.2,
+      "straight_max": 0.24,
+      "turn_min": 0.04,
+      "fallback_min": 0.02
+    },
+    "opposite_direction": {
+      "cos_threshold": -0.3
+    },
+    "trajectory": {
+      "sample_inside_polygon_min_hits": 2,
+      "entry_heading_lookback_points": 4,
+      "heading_local_window_points": 3
+    }
   },
   "evidence_fusion": {
     "line_crossing": {
@@ -51,7 +79,27 @@
       "cooldown_ms": 1200
     },
     "evidence_expire_ms": 1600,
-    "motion_window_samples": 8
+    "motion_window_samples": 8,
+    "turn_scoring": {
+      "decay_per_frame": 0.18,
+      "score_cap": 30.0,
+      "corridor_hit_weight": 2.1,
+      "exit_zone_hit_weight": 4.1,
+      "exit_line_hit_weight": 5.2,
+      "heading_support_weight": 1.3,
+      "curvature_support_weight": 0.7,
+      "opposite_direction_weight": 2.0,
+      "temporal_continuity_bonus": 0.4,
+      "no_signal_penalty": 0.35,
+      "temporal_hits_min": 2,
+      "strong_exit_min_temporal_hits": 2,
+      "strong_exit_min_corridor_hits": 2,
+      "threshold_turn": 4.2,
+      "threshold_turn_with_exit": 4.2,
+      "threshold_u_turn": 7.2,
+      "threshold_u_turn_with_exit": 5.0,
+      "threshold_straight": 4.5
+    }
   },
   "event_lifecycle": {
     "violation_rearm_window_ms": 3500,
@@ -78,7 +126,28 @@
     }
   },
   "websocket": {
-    "track_push_interval_ms": 200
+    "track_push_interval_ms": 200,
+    "listener_queue_maxsize": 200
+  },
+  "ui": {
+    "monitoring": {
+      "trajectory": {
+        "default_limit": 30,
+        "min_limit": 10,
+        "max_limit": 80,
+        "max_points_per_vehicle": 48,
+        "stale_ms": 1500,
+        "min_point_distance_px": 1.5
+      },
+      "violation": {
+        "list_max_rows": 80,
+        "highlight_duration_ms": 15000
+      },
+      "processing_fps": {
+        "stale_after_ms": 1000,
+        "poll_interval_ms": 500
+      }
+    }
   },
   "analytics": {
     "chart": {

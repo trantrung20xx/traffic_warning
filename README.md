@@ -193,17 +193,20 @@ Toàn bộ tọa độ lưu theo chuẩn hóa `[0, 1]`.
 | `tracking.tracker_config` | File cấu hình ByteTrack. |
 | `tracking.vehicle_type_history.window_ms` | Cửa sổ thời gian để làm mượt nhãn loại xe. |
 | `tracking.vehicle_type_history.size` | Số mẫu tối đa lưu cho làm mượt loại xe. |
+| `tracking.vehicle_type_history.recency_weight_bias` | Độ ưu tiên mẫu loại xe mới hơn khi vote nhãn ổn định. |
 | `tracking.stable_track.max_idle_ms` | Thời gian track có thể mất trước khi coi là hết hiệu lực rebind. |
 | `tracking.stable_track.min_iou_for_rebind` | IoU tối thiểu để nối lại track ổn định. |
 | `tracking.stable_track.max_normalized_distance` | Khoảng cách chuẩn hóa tối đa để nối lại track ổn định. |
 
-### `lane_assignment.temporal`
+### `lane_assignment`
 
 | Key | Giải thích |
 |---|---|
 | `lane_assignment.temporal.observation_window_ms` | Cửa sổ quan sát lane raw để tạo lane ổn định. |
 | `lane_assignment.temporal.min_majority_hits` | Số hit tối thiểu để chốt lane theo majority. |
 | `lane_assignment.temporal.switch_min_duration_ms` | Thời gian tối thiểu trước khi chấp nhận chuyển lane ổn định. |
+| `lane_assignment.overlap_preference.preferred_lane_overlap_ratio` | Tỷ lệ overlap để ưu tiên lane đã ổn định khi bbox nằm trên nhiều lane. |
+| `lane_assignment.overlap_preference.preferred_lane_overlap_margin_px` | Biên pixel hỗ trợ giữ lane ổn định khi overlap gần bằng nhau. |
 
 ### `wrong_lane`
 
@@ -218,6 +221,10 @@ Toàn bộ tọa độ lưu theo chuẩn hóa `[0, 1]`.
 | `turn_detection.turn_region_min_hits` | Số lần xe phải xuất hiện trong corridor/zone khi chưa có bằng chứng đầu ra đủ mạnh. |
 | `turn_detection.turn_state_timeout_ms` | Timeout reset turn state machine nếu không còn hoạt động. |
 | `turn_detection.trajectory_history_window_ms` | Cửa sổ trajectory dùng cho heading/curvature và evidence. |
+| `turn_detection.heading.*` | Ngưỡng heading/delta heading để hỗ trợ phân loại đi thẳng, rẽ và quay đầu. |
+| `turn_detection.curvature.*` | Ngưỡng curvature hỗ trợ phân biệt đi thẳng, rẽ và quay đầu. |
+| `turn_detection.opposite_direction.cos_threshold` | Ngưỡng cosine để nhận biết chuyển động ngược hướng khi xét quay đầu. |
+| `turn_detection.trajectory.*` | Số mẫu trajectory dùng cho heading cục bộ, entry heading và hit trong polygon. |
 
 ### `evidence_fusion.line_crossing`
 
@@ -237,6 +244,7 @@ Toàn bộ tọa độ lưu theo chuẩn hóa `[0, 1]`.
 |---|---|
 | `evidence_fusion.evidence_expire_ms` | Thời gian evidence turn bị coi là stale và decay/xóa. |
 | `evidence_fusion.motion_window_samples` | Số mẫu trajectory dùng để tính motion feature ngắn hạn. |
+| `evidence_fusion.turn_scoring.*` | Weight, penalty, bonus và threshold score dùng để xác nhận maneuver. |
 
 ### `event_lifecycle`
 
@@ -250,6 +258,7 @@ Toàn bộ tọa độ lưu theo chuẩn hóa `[0, 1]`.
 | Key | Giải thích |
 |---|---|
 | `websocket.track_push_interval_ms` | Chu kỳ tối thiểu đẩy track message realtime. |
+| `websocket.listener_queue_maxsize` | Kích thước queue listener track/violation để tránh backlog realtime. |
 
 ### `performance`
 
@@ -268,6 +277,14 @@ Toàn bộ tọa độ lưu theo chuẩn hóa `[0, 1]`.
 | `geometry.evidence_crop.expand_y_bottom_ratio` | Tỷ lệ nới xuống dưới bbox khi cắt ảnh bằng chứng. |
 | `geometry.evidence_crop.min_size_px` | Kích thước crop tối thiểu; nhỏ hơn sẽ fallback dùng full frame. |
 | `geometry.evidence_image.jpeg_quality` | Chất lượng JPEG của ảnh bằng chứng lưu đĩa. |
+
+### `ui.monitoring`
+
+| Key | Giải thích |
+|---|---|
+| `ui.monitoring.trajectory.*` | Giới hạn số quỹ đạo, số điểm, thời gian stale và khoảng cách điểm tối thiểu khi vẽ trajectory trên màn hình giám sát. |
+| `ui.monitoring.violation.*` | Số dòng vi phạm realtime và thời gian highlight sự kiện mới. |
+| `ui.monitoring.processing_fps.*` | Thời gian stale và chu kỳ poll FPS xử lý hiển thị trên UI. |
 
 ### `analytics.chart`
 
@@ -325,7 +342,7 @@ Ghi chú: 2 key trên hiện là key cấu hình dự phòng, chưa được bac
 ```powershell
 cd backend
 .\.venv\Scripts\Activate.ps1
-python -m pytest backend/tests -q
+python -m pytest tests -q
 ```
 
 ## Tài liệu theo module

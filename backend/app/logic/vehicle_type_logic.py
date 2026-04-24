@@ -19,9 +19,16 @@ class TemporalVehicleTypeAssigner:
     đồng thời ưu tiên nhẹ cho các quan sát mới hơn.
     """
 
-    def __init__(self, *, history_window_ms: int = 4000, history_size: int = 12):
+    def __init__(
+        self,
+        *,
+        history_window_ms: int = 4000,
+        history_size: int = 12,
+        recency_weight_bias: float = 0.15,
+    ):
         self._history_window = timedelta(milliseconds=int(history_window_ms))
         self._history_size = max(int(history_size), 1)
+        self._recency_weight_bias = float(recency_weight_bias)
         self._vehicle_states: dict[int, VehicleTypeState] = {}
 
     def resolve_type(self, *, vehicle_id: int, predicted_type: str, confidence: float, ts: datetime) -> str:
@@ -43,7 +50,7 @@ class TemporalVehicleTypeAssigner:
         total = len(state.recent_observations)
         for index, (_, observed_type, observed_confidence) in enumerate(state.recent_observations):
             # Quan sát mới được cộng điểm nhỉnh hơn để nhãn đổi nhanh khi tracker đã ổn định.
-            recency_weight = 1.0 + (index / max(total - 1, 1)) * 0.15
+            recency_weight = 1.0 + (index / max(total - 1, 1)) * self._recency_weight_bias
             scores[observed_type] = scores.get(observed_type, 0.0) + observed_confidence * recency_weight
 
         return max(scores.items(), key=lambda item: item[1])[0] if scores else predicted_type

@@ -143,6 +143,39 @@ class ViolationLogic:
         violation_rearm_window_ms: int = 3500,
         evidence_expire_ms: int = 1600,
         motion_window_samples: int = 8,
+        heading_straight_max_deg: float = 32.0,
+        heading_turn_min_deg: float = 18.0,
+        heading_turn_max_deg: float = 155.0,
+        heading_u_turn_min_change_deg: float = 110.0,
+        heading_side_sign_tolerance: float = 1e-6,
+        heading_value_sign_tolerance: float = 1e-5,
+        heading_straight_curvature_max: float = 0.28,
+        curvature_u_turn_min: float = 0.2,
+        curvature_straight_max: float = 0.24,
+        curvature_turn_min: float = 0.04,
+        curvature_fallback_min: float = 0.02,
+        opposite_direction_cos_threshold: float = -0.3,
+        evidence_decay_per_frame: float = 0.18,
+        evidence_score_cap: float = 30.0,
+        evidence_weight_corridor: float = 2.1,
+        evidence_weight_exit_zone: float = 4.1,
+        evidence_weight_exit_line: float = 5.2,
+        evidence_weight_heading_support: float = 1.3,
+        evidence_weight_curvature_support: float = 0.7,
+        evidence_weight_opposite_direction: float = 2.0,
+        evidence_weight_temporal_bonus: float = 0.4,
+        evidence_penalty_no_signal: float = 0.35,
+        evidence_temporal_hits_min: int = 2,
+        evidence_strong_exit_min_temporal_hits: int = 2,
+        evidence_strong_exit_min_corridor_hits: int = 2,
+        threshold_turn_score: float = 4.2,
+        threshold_turn_score_with_exit: float = 4.2,
+        threshold_u_turn_score: float = 7.2,
+        threshold_u_turn_score_with_exit: float = 5.0,
+        threshold_straight_score: float = 4.5,
+        trajectory_sample_inside_min_hits: int = 2,
+        trajectory_entry_heading_lookback_points: int = 4,
+        trajectory_heading_local_window_points: int = 3,
     ):
         if not lane_polygons:
             raise ValueError("lane_polygons must be non-empty")
@@ -189,19 +222,40 @@ class ViolationLogic:
         self._violation_rearm_window_ms = int(violation_rearm_window_ms)
         self._evidence_expire_ms = int(evidence_expire_ms)
         self._motion_window_samples = max(int(motion_window_samples), 3)
+        self._trajectory_sample_inside_min_hits = max(int(trajectory_sample_inside_min_hits), 1)
+        self._trajectory_entry_heading_lookback_points = max(int(trajectory_entry_heading_lookback_points), 2)
+        self._trajectory_heading_local_window_points = max(int(trajectory_heading_local_window_points), 2)
 
-        # Ngưỡng nội bộ để tách left/right/straight/u-turn mà không cần expose frontend.
-        self._straight_heading_max_deg = 32.0
-        self._turn_heading_min_deg = 18.0
-        self._turn_heading_max_deg = 155.0
-        self._u_turn_min_heading_change_deg = 110.0
-        self._u_turn_min_curvature = 0.2
-        self._opposite_direction_cos_threshold = -0.3
-        self._turn_score_threshold = 4.2
-        self._turn_score_threshold_with_exit = 4.2
-        self._u_turn_score_threshold = 7.2
-        self._u_turn_score_threshold_with_exit = 5.0
-        self._straight_score_threshold = 4.5
+        self._straight_heading_max_deg = float(heading_straight_max_deg)
+        self._turn_heading_min_deg = float(heading_turn_min_deg)
+        self._turn_heading_max_deg = float(heading_turn_max_deg)
+        self._u_turn_min_heading_change_deg = float(heading_u_turn_min_change_deg)
+        self._heading_side_sign_tolerance = abs(float(heading_side_sign_tolerance))
+        self._heading_value_sign_tolerance = abs(float(heading_value_sign_tolerance))
+        self._straight_curvature_max_for_heading_support = float(heading_straight_curvature_max)
+        self._u_turn_min_curvature = float(curvature_u_turn_min)
+        self._straight_curvature_max = float(curvature_straight_max)
+        self._turn_curvature_min = float(curvature_turn_min)
+        self._fallback_curvature_min = float(curvature_fallback_min)
+        self._opposite_direction_cos_threshold = float(opposite_direction_cos_threshold)
+        self._evidence_decay_per_frame = float(evidence_decay_per_frame)
+        self._evidence_score_cap = max(float(evidence_score_cap), 0.0)
+        self._evidence_weight_corridor = float(evidence_weight_corridor)
+        self._evidence_weight_exit_zone = float(evidence_weight_exit_zone)
+        self._evidence_weight_exit_line = float(evidence_weight_exit_line)
+        self._evidence_weight_heading_support = float(evidence_weight_heading_support)
+        self._evidence_weight_curvature_support = float(evidence_weight_curvature_support)
+        self._evidence_weight_opposite_direction = float(evidence_weight_opposite_direction)
+        self._evidence_weight_temporal_bonus = float(evidence_weight_temporal_bonus)
+        self._evidence_penalty_no_signal = float(evidence_penalty_no_signal)
+        self._evidence_temporal_hits_min = max(int(evidence_temporal_hits_min), 1)
+        self._evidence_strong_exit_min_temporal_hits = max(int(evidence_strong_exit_min_temporal_hits), 1)
+        self._evidence_strong_exit_min_corridor_hits = max(int(evidence_strong_exit_min_corridor_hits), 1)
+        self._turn_score_threshold = float(threshold_turn_score)
+        self._turn_score_threshold_with_exit = float(threshold_turn_score_with_exit)
+        self._u_turn_score_threshold = float(threshold_u_turn_score)
+        self._u_turn_score_threshold_with_exit = float(threshold_u_turn_score_with_exit)
+        self._straight_score_threshold = float(threshold_straight_score)
 
         self._lane_commit_points = {
             lp.lane_id: self._lane_commit_point(lp)
@@ -599,7 +653,7 @@ class ViolationLogic:
                 if elapsed_ms > self._evidence_expire_ms:
                     stale.append(maneuver)
                     continue
-            evidence.score = max(evidence.score - 0.18, 0.0)
+            evidence.score = max(evidence.score - self._evidence_decay_per_frame, 0.0)
         for maneuver in stale:
             del turn_state.evidences[maneuver]
             if turn_state.last_scored_maneuver == maneuver:
@@ -624,15 +678,15 @@ class ViolationLogic:
         if maneuver in corridor_matches:
             evidence.corridor_hits += 1
             signal_hit = True
-            frame_score += 2.1
+            frame_score += self._evidence_weight_corridor
         if maneuver in exit_zone_matches:
             evidence.exit_zone_hits += 1
             signal_hit = True
-            frame_score += 4.1
+            frame_score += self._evidence_weight_exit_zone
         if maneuver in exit_line_matches:
             evidence.exit_line_hits += 1
             signal_hit = True
-            frame_score += 5.2
+            frame_score += self._evidence_weight_exit_line
 
         heading_support = self._heading_support_for_maneuver(
             maneuver=maneuver,
@@ -641,17 +695,17 @@ class ViolationLogic:
         )
         if heading_support:
             evidence.heading_support_hits += 1
-            frame_score += 1.3
+            frame_score += self._evidence_weight_heading_support
 
         curvature_support = self._curvature_support_for_maneuver(maneuver=maneuver, motion=motion)
         if curvature_support:
             evidence.curvature_support_hits += 1
-            frame_score += 0.7
+            frame_score += self._evidence_weight_curvature_support
 
         opposite_support = maneuver == "u_turn" and motion.opposite_direction
         if opposite_support:
             evidence.opposite_direction_hits += 1
-            frame_score += 2.0
+            frame_score += self._evidence_weight_opposite_direction
 
         if signal_hit or heading_support:
             if evidence.first_seen_ts is None:
@@ -659,13 +713,13 @@ class ViolationLogic:
             evidence.last_seen_ts = ts
             if turn_state.last_scored_maneuver == maneuver:
                 evidence.temporal_hits += 1
-                frame_score += 0.4
+                frame_score += self._evidence_weight_temporal_bonus
             else:
                 evidence.temporal_hits = max(evidence.temporal_hits, 1)
         else:
-            frame_score -= 0.35
+            frame_score -= self._evidence_penalty_no_signal
 
-        evidence.score = min(max(evidence.score + frame_score, 0.0), 30.0)
+        evidence.score = min(max(evidence.score + frame_score, 0.0), self._evidence_score_cap)
         return frame_score
 
     def _evidence_confirms_maneuver(
@@ -689,7 +743,7 @@ class ViolationLogic:
             )
 
         strong_exit = evidence.exit_line_hits > 0 or evidence.exit_zone_hits > 0
-        temporal_ok = evidence.temporal_hits >= 2 or strong_exit
+        temporal_ok = evidence.temporal_hits >= self._evidence_temporal_hits_min or strong_exit
 
         if maneuver == "u_turn":
             if motion.heading_change_deg < self._u_turn_min_heading_change_deg:
@@ -759,7 +813,11 @@ class ViolationLogic:
                     evidence=evidence,
                     reason=f"{maneuver}_looks_like_u_turn",
                 )
-            if strong_exit and evidence.temporal_hits < 2 and evidence.corridor_hits < 2:
+            if (
+                strong_exit
+                and evidence.temporal_hits < self._evidence_strong_exit_min_temporal_hits
+                and evidence.corridor_hits < self._evidence_strong_exit_min_corridor_hits
+            ):
                 return self._reject_evidence(
                     evidence=evidence,
                     reason=f"{maneuver}_weak_exit_without_temporal_support",
@@ -854,7 +912,7 @@ class ViolationLogic:
     ) -> Optional[tuple[float, float]]:
         points = [sample.center for sample in st.trajectory]
         if len(points) >= 2:
-            start_idx = max(len(points) - 4, 0)
+            start_idx = max(len(points) - self._trajectory_entry_heading_lookback_points, 0)
             start = points[start_idx]
             end = points[-1]
             vec = self._normalize_vector((end[0] - start[0], end[1] - start[1]))
@@ -884,7 +942,7 @@ class ViolationLogic:
         dx = end[0] - start[0]
         dy = end[1] - start[1]
         displacement = hypot(dx, dy)
-        local_start = recent[max(len(recent) - 3, 0)].center
+        local_start = recent[max(len(recent) - self._trajectory_heading_local_window_points, 0)].center
         heading_vector = self._normalize_vector((end[0] - local_start[0], end[1] - local_start[1]))
         if heading_vector is None:
             heading_vector = self._normalize_vector((dx, dy))
@@ -925,7 +983,10 @@ class ViolationLogic:
 
         angle = motion.heading_change_deg
         if maneuver == "straight":
-            return angle <= self._straight_heading_max_deg and motion.curvature <= 0.28
+            return (
+                angle <= self._straight_heading_max_deg
+                and motion.curvature <= self._straight_curvature_max_for_heading_support
+            )
 
         if maneuver == "u_turn":
             return angle >= self._u_turn_min_heading_change_deg and motion.opposite_direction
@@ -936,7 +997,10 @@ class ViolationLogic:
         if not (self._turn_heading_min_deg <= angle <= self._turn_heading_max_deg):
             return False
 
-        observed_sign = self._sign_of_value(motion.signed_heading_change_deg)
+        observed_sign = self._sign_of_value(
+            motion.signed_heading_change_deg,
+            tolerance=self._heading_value_sign_tolerance,
+        )
         expected_sign = self._expected_turn_side_sign(source_lane_id=source_lane_id, maneuver=maneuver)
         if expected_sign is None or expected_sign == 0:
             return observed_sign != 0
@@ -944,12 +1008,12 @@ class ViolationLogic:
 
     def _curvature_support_for_maneuver(self, *, maneuver: str, motion: MotionFeatures) -> bool:
         if maneuver == "straight":
-            return motion.curvature <= 0.24
+            return motion.curvature <= self._straight_curvature_max
         if maneuver == "u_turn":
             return motion.curvature >= self._u_turn_min_curvature
         if maneuver in {"left", "right"}:
-            return motion.curvature >= 0.04
-        return motion.curvature >= 0.02
+            return motion.curvature >= self._turn_curvature_min
+        return motion.curvature >= self._fallback_curvature_min
 
     def _expected_turn_side_sign(self, *, source_lane_id: int, maneuver: str) -> Optional[int]:
         lane_dir = self._lane_direction_vectors.get(source_lane_id)
@@ -959,7 +1023,7 @@ class ViolationLogic:
             return None
         rel_vec = (anchor_point[0] - commit_point[0], anchor_point[1] - commit_point[1])
         side_metric = (lane_dir[0] * rel_vec[1]) - (lane_dir[1] * rel_vec[0])
-        return self._sign_of_value(side_metric, tolerance=1e-6)
+        return self._sign_of_value(side_metric, tolerance=self._heading_side_sign_tolerance)
 
     def _expire_turn_state(self, *, turn_state: TurnState, ts: datetime) -> None:
         if turn_state.last_activity_ts is None:
@@ -1030,7 +1094,7 @@ class ViolationLogic:
         for point_x, point_y in sample.contacts:
             if polygon.contains_xy(point_x, point_y):
                 hits += 1
-        return hits >= 2
+        return hits >= self._trajectory_sample_inside_min_hits
 
     def _update_line_crossing_events(
         self,

@@ -32,17 +32,28 @@ def test_load_app_config_reads_grouped_settings_schema(tmp_path: Path) -> None:
         },
         "tracking": {
             "tracker_config": "bytetrack.yaml",
-            "vehicle_type_history": {"window_ms": 4200, "size": 10},
+            "vehicle_type_history": {"window_ms": 4200, "size": 10, "recency_weight_bias": 0.2},
             "stable_track": {
                 "max_idle_ms": 1300,
                 "min_iou_for_rebind": 0.17,
                 "max_normalized_distance": 1.4,
             },
         },
-        "lane_assignment": {"temporal": {"observation_window_ms": 900, "min_majority_hits": 2, "switch_min_duration_ms": 600}},
-        "websocket": {"track_push_interval_ms": 150},
+        "lane_assignment": {
+            "temporal": {"observation_window_ms": 900, "min_majority_hits": 2, "switch_min_duration_ms": 600},
+            "overlap_preference": {"preferred_lane_overlap_ratio": 0.85, "preferred_lane_overlap_margin_px": 5.0},
+        },
+        "websocket": {"track_push_interval_ms": 150, "listener_queue_maxsize": 120},
         "wrong_lane": {"min_duration_ms": 1000},
-        "turn_detection": {"turn_region_min_hits": 2, "turn_state_timeout_ms": 2800, "trajectory_history_window_ms": 1800},
+        "turn_detection": {
+            "turn_region_min_hits": 2,
+            "turn_state_timeout_ms": 2800,
+            "trajectory_history_window_ms": 1800,
+            "heading": {"straight_max_deg": 30.0},
+            "curvature": {"u_turn_min": 0.22},
+            "opposite_direction": {"cos_threshold": -0.25},
+            "trajectory": {"sample_inside_polygon_min_hits": 3},
+        },
         "evidence_fusion": {
             "line_crossing": {
                 "side_tolerance_px": 1.5,
@@ -55,6 +66,7 @@ def test_load_app_config_reads_grouped_settings_schema(tmp_path: Path) -> None:
             },
             "evidence_expire_ms": 1400,
             "motion_window_samples": 7,
+            "turn_scoring": {"threshold_u_turn_with_exit": 5.4},
         },
         "event_lifecycle": {"violation_rearm_window_ms": 2600, "state_prune_max_age_s": 45.0},
         "performance": {
@@ -70,6 +82,13 @@ def test_load_app_config_reads_grouped_settings_schema(tmp_path: Path) -> None:
             },
             "evidence_image": {"jpeg_quality": 88},
         },
+        "ui": {
+            "monitoring": {
+                "trajectory": {"default_limit": 40, "max_points_per_vehicle": 55},
+                "violation": {"list_max_rows": 120},
+                "processing_fps": {"stale_after_ms": 1200},
+            }
+        },
     }
     (config_dir / "settings.json").write_text(json.dumps(settings, ensure_ascii=False), encoding="utf-8")
 
@@ -79,8 +98,19 @@ def test_load_app_config_reads_grouped_settings_schema(tmp_path: Path) -> None:
     assert cfg.detector_device == "cpu"
     assert cfg.detector_conf_threshold == 0.22
     assert cfg.track_push_interval_ms == 150
+    assert cfg.websocket_listener_queue_maxsize == 120
     assert cfg.line_crossing_max_gap_ms == 350
+    assert cfg.vehicle_type_history_recency_weight_bias == 0.2
+    assert cfg.lane_assignment_overlap.preferred_lane_overlap_ratio == 0.85
     assert cfg.rtsp_reconnect_delay_s == 1.25
     assert cfg.preview_max_fps == 12.0
     assert cfg.processing_fps_window_s == 2.0
+    assert cfg.turn_detection_heading.straight_max_deg == 30.0
+    assert cfg.turn_detection_curvature.u_turn_min == 0.22
+    assert cfg.turn_detection_opposite_direction.cos_threshold == -0.25
+    assert cfg.turn_detection_trajectory.sample_inside_polygon_min_hits == 3
+    assert cfg.evidence_fusion_turn_scoring.threshold_u_turn_with_exit == 5.4
+    assert cfg.ui.monitoring.trajectory.default_limit == 40
+    assert cfg.ui.monitoring.violation.list_max_rows == 120
+    assert cfg.ui.monitoring.processing_fps.stale_after_ms == 1200
     assert cfg.evidence_jpeg_quality == 88

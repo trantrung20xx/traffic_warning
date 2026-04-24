@@ -164,6 +164,88 @@ class AnalyticsChartConfig(BaseModel):
         return int(value)
 
 
+class LaneAssignmentOverlapConfig(BaseModel):
+    preferred_lane_overlap_ratio: float = 0.8
+    preferred_lane_overlap_margin_px: float = 6.0
+
+
+class TurnDetectionHeadingConfig(BaseModel):
+    straight_max_deg: float = 32.0
+    turn_min_deg: float = 18.0
+    turn_max_deg: float = 155.0
+    u_turn_min_change_deg: float = 110.0
+    side_sign_tolerance: float = 1e-6
+    value_sign_tolerance: float = 1e-5
+    straight_curvature_max_for_heading_support: float = 0.28
+
+
+class TurnDetectionCurvatureConfig(BaseModel):
+    u_turn_min: float = 0.2
+    straight_max: float = 0.24
+    turn_min: float = 0.04
+    fallback_min: float = 0.02
+
+
+class TurnDetectionOppositeDirectionConfig(BaseModel):
+    cos_threshold: float = -0.3
+
+
+class TurnDetectionTrajectoryConfig(BaseModel):
+    sample_inside_polygon_min_hits: int = 2
+    entry_heading_lookback_points: int = 4
+    heading_local_window_points: int = 3
+
+
+class EvidenceFusionTurnScoringConfig(BaseModel):
+    decay_per_frame: float = 0.18
+    score_cap: float = 30.0
+    corridor_hit_weight: float = 2.1
+    exit_zone_hit_weight: float = 4.1
+    exit_line_hit_weight: float = 5.2
+    heading_support_weight: float = 1.3
+    curvature_support_weight: float = 0.7
+    opposite_direction_weight: float = 2.0
+    temporal_continuity_bonus: float = 0.4
+    no_signal_penalty: float = 0.35
+    temporal_hits_min: int = 2
+    strong_exit_min_temporal_hits: int = 2
+    strong_exit_min_corridor_hits: int = 2
+    threshold_turn: float = 4.2
+    threshold_turn_with_exit: float = 4.2
+    threshold_u_turn: float = 7.2
+    threshold_u_turn_with_exit: float = 5.0
+    threshold_straight: float = 4.5
+
+
+class MonitoringTrajectoryUiConfig(BaseModel):
+    default_limit: int = 30
+    min_limit: int = 10
+    max_limit: int = 80
+    max_points_per_vehicle: int = 48
+    stale_ms: int = 1500
+    min_point_distance_px: float = 1.5
+
+
+class MonitoringViolationUiConfig(BaseModel):
+    list_max_rows: int = 80
+    highlight_duration_ms: int = 15000
+
+
+class MonitoringProcessingFpsUiConfig(BaseModel):
+    stale_after_ms: int = 1000
+    poll_interval_ms: int = 500
+
+
+class MonitoringUiConfig(BaseModel):
+    trajectory: MonitoringTrajectoryUiConfig = MonitoringTrajectoryUiConfig()
+    violation: MonitoringViolationUiConfig = MonitoringViolationUiConfig()
+    processing_fps: MonitoringProcessingFpsUiConfig = MonitoringProcessingFpsUiConfig()
+
+
+class UiConfig(BaseModel):
+    monitoring: MonitoringUiConfig = MonitoringUiConfig()
+
+
 class ManeuverConfig(BaseModel):
     enabled: bool = True
     allowed: bool = False
@@ -383,13 +465,20 @@ class AppConfig(BaseModel):
     temporal_lane_observation_window_ms: int = 1200
     temporal_lane_min_majority_hits: int = 3
     temporal_lane_switch_min_duration_ms: int = 700
+    lane_assignment_overlap: LaneAssignmentOverlapConfig = LaneAssignmentOverlapConfig()
+    vehicle_type_history_recency_weight_bias: float = 0.15
 
     # Ngưỡng cho luồng realtime, phát hiện vi phạm và ảnh bằng chứng.
     track_push_interval_ms: int = 200
+    websocket_listener_queue_maxsize: int = 200
     wrong_lane_min_duration_ms: int = 1200
     turn_region_min_hits: int = 3
     turn_state_timeout_ms: int = 3000
     trajectory_history_window_ms: int = 2000
+    turn_detection_heading: TurnDetectionHeadingConfig = TurnDetectionHeadingConfig()
+    turn_detection_curvature: TurnDetectionCurvatureConfig = TurnDetectionCurvatureConfig()
+    turn_detection_opposite_direction: TurnDetectionOppositeDirectionConfig = TurnDetectionOppositeDirectionConfig()
+    turn_detection_trajectory: TurnDetectionTrajectoryConfig = TurnDetectionTrajectoryConfig()
     line_crossing_side_tolerance_px: float = 2.0
     line_crossing_min_pre_frames: int = 2
     line_crossing_min_post_frames: int = 2
@@ -400,6 +489,7 @@ class AppConfig(BaseModel):
     violation_rearm_window_ms: int = 3500
     evidence_expire_ms: int = 1600
     motion_window_samples: int = 8
+    evidence_fusion_turn_scoring: EvidenceFusionTurnScoringConfig = EvidenceFusionTurnScoringConfig()
     state_prune_max_age_s: float = 60.0
     rtsp_reconnect_delay_s: float = 2.0
     preview_max_fps: float = 15.0
@@ -411,6 +501,7 @@ class AppConfig(BaseModel):
     evidence_crop_min_size_px: int = 24
     evidence_jpeg_quality: int = 92
     analytics_chart: AnalyticsChartConfig = AnalyticsChartConfig()
+    ui: UiConfig = UiConfig()
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -761,11 +852,32 @@ def load_app_config(repo_root: Path) -> AppConfig:
         temporal_lane_switch_min_duration_ms=int(
             _setting(settings, ("lane_assignment", "temporal", "switch_min_duration_ms"), 700)
         ),
+        lane_assignment_overlap=LaneAssignmentOverlapConfig.model_validate(
+            _setting(settings, ("lane_assignment", "overlap_preference"), {}) or {}
+        ),
+        vehicle_type_history_recency_weight_bias=float(
+            _setting(settings, ("tracking", "vehicle_type_history", "recency_weight_bias"), 0.15)
+        ),
         track_push_interval_ms=int(_setting(settings, ("websocket", "track_push_interval_ms"), 200)),
+        websocket_listener_queue_maxsize=int(
+            _setting(settings, ("websocket", "listener_queue_maxsize"), 200)
+        ),
         wrong_lane_min_duration_ms=int(_setting(settings, ("wrong_lane", "min_duration_ms"), 1200)),
         turn_region_min_hits=int(_setting(settings, ("turn_detection", "turn_region_min_hits"), 3)),
         turn_state_timeout_ms=int(_setting(settings, ("turn_detection", "turn_state_timeout_ms"), 3000)),
         trajectory_history_window_ms=int(_setting(settings, ("turn_detection", "trajectory_history_window_ms"), 2000)),
+        turn_detection_heading=TurnDetectionHeadingConfig.model_validate(
+            _setting(settings, ("turn_detection", "heading"), {}) or {}
+        ),
+        turn_detection_curvature=TurnDetectionCurvatureConfig.model_validate(
+            _setting(settings, ("turn_detection", "curvature"), {}) or {}
+        ),
+        turn_detection_opposite_direction=TurnDetectionOppositeDirectionConfig.model_validate(
+            _setting(settings, ("turn_detection", "opposite_direction"), {}) or {}
+        ),
+        turn_detection_trajectory=TurnDetectionTrajectoryConfig.model_validate(
+            _setting(settings, ("turn_detection", "trajectory"), {}) or {}
+        ),
         line_crossing_side_tolerance_px=float(
             _setting(settings, ("evidence_fusion", "line_crossing", "side_tolerance_px"), 2.0)
         ),
@@ -796,6 +908,9 @@ def load_app_config(repo_root: Path) -> AppConfig:
         motion_window_samples=int(
             _setting(settings, ("evidence_fusion", "motion_window_samples"), 8)
         ),
+        evidence_fusion_turn_scoring=EvidenceFusionTurnScoringConfig.model_validate(
+            _setting(settings, ("evidence_fusion", "turn_scoring"), {}) or {}
+        ),
         state_prune_max_age_s=float(_setting(settings, ("event_lifecycle", "state_prune_max_age_s"), 60.0)),
         rtsp_reconnect_delay_s=float(_setting(settings, ("camera", "stream", "rtsp_reconnect_delay_s"), 2.0)),
         preview_max_fps=float(_setting(settings, ("performance", "preview", "max_fps"), 15.0)),
@@ -813,6 +928,7 @@ def load_app_config(repo_root: Path) -> AppConfig:
         analytics_chart=AnalyticsChartConfig.model_validate(
             _setting(settings, ("analytics", "chart"), {}) or {}
         ),
+        ui=UiConfig.model_validate(_setting(settings, ("ui",), {}) or {}),
     )
 
 

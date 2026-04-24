@@ -1,16 +1,88 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import CameraCanvas from "../components/CameraCanvas";
 import StatPill from "../components/StatPill";
 import ViolationDetailModal from "../components/ViolationDetailModal";
 import { connectTracks, connectViolations, fetchCameraDetail, getCameraPreviewUrl } from "../api";
 import { formatTimestamp, getCameraTypeLabel, getVehicleTypeLabel, getViolationLabel } from "../utils";
 
-const MAX_TRAJECTORY_POINTS_PER_VEHICLE = 48;
-const TRAJECTORY_STALE_MS = 1500;
-const MIN_TRAJECTORY_POINT_DISTANCE_PX = 1.5;
+const DEFAULT_MONITORING_UI_CONFIG = {
+  trajectory: {
+    default_limit: 30,
+    min_limit: 10,
+    max_limit: 80,
+    max_points_per_vehicle: 48,
+    stale_ms: 1500,
+    min_point_distance_px: 1.5,
+  },
+  violation: {
+    list_max_rows: 80,
+    highlight_duration_ms: 15000,
+  },
+  processing_fps: {
+    stale_after_ms: 1000,
+    poll_interval_ms: 500,
+  },
+};
 
-function clampTrajectoryLimit(value) {
-  return Math.min(Math.max(Number(value) || 30, 10), 80);
+function toFiniteNumber(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function normalizeMonitoringUiConfig(rawConfig) {
+  const fallback = DEFAULT_MONITORING_UI_CONFIG;
+  const rawTrajectory = rawConfig?.trajectory || {};
+  const rawViolation = rawConfig?.violation || {};
+  const rawProcessingFps = rawConfig?.processing_fps || {};
+
+  const trajectoryMinLimit = Math.max(1, Math.round(toFiniteNumber(rawTrajectory.min_limit, fallback.trajectory.min_limit)));
+  const trajectoryMaxLimit = Math.max(
+    trajectoryMinLimit,
+    Math.round(toFiniteNumber(rawTrajectory.max_limit, fallback.trajectory.max_limit)),
+  );
+  const trajectoryDefaultLimit = Math.min(
+    Math.max(Math.round(toFiniteNumber(rawTrajectory.default_limit, fallback.trajectory.default_limit)), trajectoryMinLimit),
+    trajectoryMaxLimit,
+  );
+
+  return {
+    trajectory: {
+      default_limit: trajectoryDefaultLimit,
+      min_limit: trajectoryMinLimit,
+      max_limit: trajectoryMaxLimit,
+      max_points_per_vehicle: Math.max(
+        2,
+        Math.round(toFiniteNumber(rawTrajectory.max_points_per_vehicle, fallback.trajectory.max_points_per_vehicle)),
+      ),
+      stale_ms: Math.max(0, Math.round(toFiniteNumber(rawTrajectory.stale_ms, fallback.trajectory.stale_ms))),
+      min_point_distance_px: Math.max(
+        0,
+        toFiniteNumber(rawTrajectory.min_point_distance_px, fallback.trajectory.min_point_distance_px),
+      ),
+    },
+    violation: {
+      list_max_rows: Math.max(1, Math.round(toFiniteNumber(rawViolation.list_max_rows, fallback.violation.list_max_rows))),
+      highlight_duration_ms: Math.max(
+        0,
+        Math.round(toFiniteNumber(rawViolation.highlight_duration_ms, fallback.violation.highlight_duration_ms)),
+      ),
+    },
+    processing_fps: {
+      stale_after_ms: Math.max(
+        0,
+        Math.round(toFiniteNumber(rawProcessingFps.stale_after_ms, fallback.processing_fps.stale_after_ms)),
+      ),
+      poll_interval_ms: Math.max(
+        100,
+        Math.round(toFiniteNumber(rawProcessingFps.poll_interval_ms, fallback.processing_fps.poll_interval_ms)),
+      ),
+    },
+  };
+}
+
+function clampTrajectoryLimit(value, trajectoryConfig) {
+  const next = Math.round(toFiniteNumber(value, trajectoryConfig.default_limit));
+  return Math.min(Math.max(next, trajectoryConfig.min_limit), trajectoryConfig.max_limit);
 }
 
 function getVehicleTrajectoryPoint(vehicle) {
@@ -36,29 +108,45 @@ export default function MonitoringView({ cameras, selectedCameraId, onSelectCame
   const [violations, setViolations] = useState([]);
   const [processingFps, setProcessingFps] = useState(null);
   const [selectedViolation, setSelectedViolation] = useState(null);
-  const [trajectoryLimit, setTrajectoryLimit] = useState(30);
+  const [trajectoryLimit, setTrajectoryLimit] = useState(DEFAULT_MONITORING_UI_CONFIG.trajectory.default_limit);
   const [trajectoryRows, setTrajectoryRows] = useState([]);
   const vehicleSeenOrderRef = useRef(new Map());
   const nextVehicleOrderRef = useRef(0);
   const violatingVehicleIdsRef = useRef(new Map());
   const lastTrackUpdateRef = useRef(0);
   const liveTrajectoriesRef = useRef(new Map());
-  const trajectoryLimitRef = useRef(30);
+  const trajectoryLimitRef = useRef(DEFAULT_MONITORING_UI_CONFIG.trajectory.default_limit);
+  const monitoringUiConfig = useMemo(() => normalizeMonitoringUiConfig(detail?.ui?.monitoring), [detail]);
 
   useEffect(() => {
-    trajectoryLimitRef.current = trajectoryLimit;
-    setTrajectoryRows((rows) => rows.slice(0, trajectoryLimit));
-  }, [trajectoryLimit]);
+    const normalizedLimit = clampTrajectoryLimit(trajectoryLimit, monitoringUiConfig.trajectory);
+    if (normalizedLimit !== trajectoryLimit) {
+      setTrajectoryLimit(normalizedLimit);
+      return;
+    }
+    trajectoryLimitRef.current = normalizedLimit;
+    setTrajectoryRows((rows) => rows.slice(0, normalizedLimit));
+  }, [monitoringUiConfig.trajectory, trajectoryLimit]);
 
   useEffect(() => {
     if (!selectedCameraId) {
       setDetail(null);
       setSelectedViolation(null);
       setTrajectoryRows([]);
+      setTrajectoryLimit(DEFAULT_MONITORING_UI_CONFIG.trajectory.default_limit);
       liveTrajectoriesRef.current = new Map();
       return;
     }
-    fetchCameraDetail(selectedCameraId).then(setDetail).catch(() => setDetail(null));
+    fetchCameraDetail(selectedCameraId)
+      .then((nextDetail) => {
+        setDetail(nextDetail);
+        const uiConfig = normalizeMonitoringUiConfig(nextDetail?.ui?.monitoring);
+        setTrajectoryLimit(uiConfig.trajectory.default_limit);
+      })
+      .catch(() => {
+        setDetail(null);
+        setTrajectoryLimit(DEFAULT_MONITORING_UI_CONFIG.trajectory.default_limit);
+      });
     setVehicles([]);
     setViolations([]);
     setProcessingFps(null);
@@ -74,6 +162,7 @@ export default function MonitoringView({ cameras, selectedCameraId, onSelectCame
   const updateLiveTrajectories = (nextVehicles) => {
     const now = Date.now();
     const nextMap = new Map(liveTrajectoriesRef.current);
+    const trajectoryUi = monitoringUiConfig.trajectory;
 
     nextVehicles.forEach((vehicle) => {
       const vehicleId = vehicle.vehicle_id;
@@ -93,7 +182,7 @@ export default function MonitoringView({ cameras, selectedCameraId, onSelectCame
       const lastPoint = points[points.length - 1];
       if (!lastPoint) {
         points.push(point);
-      } else if (pointDistance(lastPoint, point) >= MIN_TRAJECTORY_POINT_DISTANCE_PX) {
+      } else if (pointDistance(lastPoint, point) >= trajectoryUi.min_point_distance_px) {
         points.push(point);
       } else {
         points[points.length - 1] = point;
@@ -103,13 +192,13 @@ export default function MonitoringView({ cameras, selectedCameraId, onSelectCame
         ...current,
         vehicle_type: vehicle.vehicle_type,
         lane_id: vehicle.lane_id,
-        points: points.slice(-MAX_TRAJECTORY_POINTS_PER_VEHICLE),
+        points: points.slice(-trajectoryUi.max_points_per_vehicle),
         lastSeenMs: now,
       });
     });
 
     nextMap.forEach((row, vehicleId) => {
-      if (now - row.lastSeenMs > TRAJECTORY_STALE_MS) {
+      if (now - row.lastSeenMs > trajectoryUi.stale_ms) {
         nextMap.delete(vehicleId);
       }
     });
@@ -126,6 +215,7 @@ export default function MonitoringView({ cameras, selectedCameraId, onSelectCame
 
   useEffect(() => {
     if (!selectedCameraId) return undefined;
+    const violationUi = monitoringUiConfig.violation;
     const trackWs = connectTracks(selectedCameraId, (message) => {
       lastTrackUpdateRef.current = Date.now();
       const now = Date.now();
@@ -144,25 +234,26 @@ export default function MonitoringView({ cameras, selectedCameraId, onSelectCame
       setProcessingFps(Number.isFinite(message.processing_fps) ? message.processing_fps : null);
     });
     const violationWs = connectViolations(selectedCameraId, (event) => {
-      violatingVehicleIdsRef.current.set(event.vehicle_id, Date.now() + 15000);
-      setViolations((prev) => [event, ...prev].slice(0, 80));
+      violatingVehicleIdsRef.current.set(event.vehicle_id, Date.now() + violationUi.highlight_duration_ms);
+      setViolations((prev) => [event, ...prev].slice(0, violationUi.list_max_rows));
     });
     return () => {
       trackWs.close();
       violationWs.close();
     };
-  }, [selectedCameraId]);
+  }, [monitoringUiConfig.violation, selectedCameraId]);
 
   useEffect(() => {
     if (!selectedCameraId) return undefined;
+    const processingFpsUi = monitoringUiConfig.processing_fps;
     const timer = window.setInterval(() => {
       const lastUpdate = lastTrackUpdateRef.current;
-      if (lastUpdate && Date.now() - lastUpdate > 1000) {
+      if (lastUpdate && Date.now() - lastUpdate > processingFpsUi.stale_after_ms) {
         setProcessingFps(null);
       }
-    }, 500);
+    }, processingFpsUi.poll_interval_ms);
     return () => window.clearInterval(timer);
-  }, [selectedCameraId]);
+  }, [monitoringUiConfig.processing_fps, selectedCameraId]);
 
   const camera = detail?.camera || null;
   const laneConfig = detail?.lane_config || null;
@@ -237,10 +328,10 @@ export default function MonitoringView({ cameras, selectedCameraId, onSelectCame
                   <span>Số quỹ đạo hiển thị</span>
                   <input
                     type="number"
-                    min={10}
-                    max={80}
+                    min={monitoringUiConfig.trajectory.min_limit}
+                    max={monitoringUiConfig.trajectory.max_limit}
                     value={trajectoryLimit}
-                    onChange={(event) => setTrajectoryLimit(clampTrajectoryLimit(event.target.value))}
+                    onChange={(event) => setTrajectoryLimit(clampTrajectoryLimit(event.target.value, monitoringUiConfig.trajectory))}
                   />
                 </label>
                 <div className="badge success">Quỹ đạo xanh lá · {trajectoryRows.length}</div>

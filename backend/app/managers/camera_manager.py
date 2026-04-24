@@ -105,6 +105,7 @@ class CameraManager:
             "runtime_applied": camera_id in self._contexts,
             "has_background_image": self.has_background_image(camera_id),
             "config_validation": validation,
+            "ui": self._ui_payload(),
         }
 
     def upsert_camera(self, camera_config: CameraConfig, lane_config: CameraLaneConfig) -> dict:
@@ -186,13 +187,15 @@ class CameraManager:
         for q in dead:
             self._violation_listeners.discard(q)
 
-    def create_track_listener(self, *, maxsize: int = 200) -> asyncio.Queue[TrackMessage | None]:
-        q: asyncio.Queue[TrackMessage | None] = asyncio.Queue(maxsize=maxsize)
+    def create_track_listener(self, *, maxsize: Optional[int] = None) -> asyncio.Queue[TrackMessage | None]:
+        queue_size = int(maxsize) if maxsize is not None else int(self.cfg.websocket_listener_queue_maxsize)
+        q: asyncio.Queue[TrackMessage | None] = asyncio.Queue(maxsize=max(queue_size, 1))
         self._track_listeners.add(q)
         return q
 
-    def create_violation_listener(self, *, maxsize: int = 200) -> asyncio.Queue[ViolationEvent | None]:
-        q: asyncio.Queue[ViolationEvent | None] = asyncio.Queue(maxsize=maxsize)
+    def create_violation_listener(self, *, maxsize: Optional[int] = None) -> asyncio.Queue[ViolationEvent | None]:
+        queue_size = int(maxsize) if maxsize is not None else int(self.cfg.websocket_listener_queue_maxsize)
+        q: asyncio.Queue[ViolationEvent | None] = asyncio.Queue(maxsize=max(queue_size, 1))
         self._violation_listeners.add(q)
         return q
 
@@ -363,17 +366,32 @@ class CameraManager:
             tracker_config=self.cfg.tracker_config,
             vehicle_type_history_window_ms=self.cfg.vehicle_type_history_window_ms,
             vehicle_type_history_size=self.cfg.vehicle_type_history_size,
+            vehicle_type_history_recency_weight_bias=self.cfg.vehicle_type_history_recency_weight_bias,
             stable_track_max_idle_ms=self.cfg.stable_track_max_idle_ms,
             stable_track_min_iou_for_rebind=self.cfg.stable_track_min_iou_for_rebind,
             stable_track_max_normalized_distance=self.cfg.stable_track_max_normalized_distance,
             temporal_lane_observation_window_ms=self.cfg.temporal_lane_observation_window_ms,
             temporal_lane_min_majority_hits=self.cfg.temporal_lane_min_majority_hits,
             temporal_lane_switch_min_duration_ms=self.cfg.temporal_lane_switch_min_duration_ms,
+            lane_assignment_preferred_overlap_ratio=self.cfg.lane_assignment_overlap.preferred_lane_overlap_ratio,
+            lane_assignment_preferred_overlap_margin_px=self.cfg.lane_assignment_overlap.preferred_lane_overlap_margin_px,
             track_push_interval_ms=self.cfg.track_push_interval_ms,
             wrong_lane_min_duration_ms=self.cfg.wrong_lane_min_duration_ms,
             turn_region_min_hits=self.cfg.turn_region_min_hits,
             turn_state_timeout_ms=self.cfg.turn_state_timeout_ms,
             trajectory_history_window_ms=self.cfg.trajectory_history_window_ms,
+            heading_straight_max_deg=self.cfg.turn_detection_heading.straight_max_deg,
+            heading_turn_min_deg=self.cfg.turn_detection_heading.turn_min_deg,
+            heading_turn_max_deg=self.cfg.turn_detection_heading.turn_max_deg,
+            heading_u_turn_min_change_deg=self.cfg.turn_detection_heading.u_turn_min_change_deg,
+            heading_side_sign_tolerance=self.cfg.turn_detection_heading.side_sign_tolerance,
+            heading_value_sign_tolerance=self.cfg.turn_detection_heading.value_sign_tolerance,
+            heading_straight_curvature_max_for_support=self.cfg.turn_detection_heading.straight_curvature_max_for_heading_support,
+            curvature_u_turn_min=self.cfg.turn_detection_curvature.u_turn_min,
+            curvature_straight_max=self.cfg.turn_detection_curvature.straight_max,
+            curvature_turn_min=self.cfg.turn_detection_curvature.turn_min,
+            curvature_fallback_min=self.cfg.turn_detection_curvature.fallback_min,
+            opposite_direction_cos_threshold=self.cfg.turn_detection_opposite_direction.cos_threshold,
             line_crossing_side_tolerance_px=self.cfg.line_crossing_side_tolerance_px,
             line_crossing_min_pre_frames=self.cfg.line_crossing_min_pre_frames,
             line_crossing_min_post_frames=self.cfg.line_crossing_min_post_frames,
@@ -384,6 +402,27 @@ class CameraManager:
             violation_rearm_window_ms=self.cfg.violation_rearm_window_ms,
             evidence_expire_ms=self.cfg.evidence_expire_ms,
             motion_window_samples=self.cfg.motion_window_samples,
+            turn_evidence_decay_per_frame=self.cfg.evidence_fusion_turn_scoring.decay_per_frame,
+            turn_evidence_score_cap=self.cfg.evidence_fusion_turn_scoring.score_cap,
+            turn_evidence_corridor_hit_weight=self.cfg.evidence_fusion_turn_scoring.corridor_hit_weight,
+            turn_evidence_exit_zone_hit_weight=self.cfg.evidence_fusion_turn_scoring.exit_zone_hit_weight,
+            turn_evidence_exit_line_hit_weight=self.cfg.evidence_fusion_turn_scoring.exit_line_hit_weight,
+            turn_evidence_heading_support_weight=self.cfg.evidence_fusion_turn_scoring.heading_support_weight,
+            turn_evidence_curvature_support_weight=self.cfg.evidence_fusion_turn_scoring.curvature_support_weight,
+            turn_evidence_opposite_direction_weight=self.cfg.evidence_fusion_turn_scoring.opposite_direction_weight,
+            turn_evidence_temporal_bonus_weight=self.cfg.evidence_fusion_turn_scoring.temporal_continuity_bonus,
+            turn_evidence_no_signal_penalty=self.cfg.evidence_fusion_turn_scoring.no_signal_penalty,
+            turn_evidence_temporal_hits_min=self.cfg.evidence_fusion_turn_scoring.temporal_hits_min,
+            turn_evidence_strong_exit_min_temporal_hits=self.cfg.evidence_fusion_turn_scoring.strong_exit_min_temporal_hits,
+            turn_evidence_strong_exit_min_corridor_hits=self.cfg.evidence_fusion_turn_scoring.strong_exit_min_corridor_hits,
+            turn_score_threshold=self.cfg.evidence_fusion_turn_scoring.threshold_turn,
+            turn_score_threshold_with_exit=self.cfg.evidence_fusion_turn_scoring.threshold_turn_with_exit,
+            u_turn_score_threshold=self.cfg.evidence_fusion_turn_scoring.threshold_u_turn,
+            u_turn_score_threshold_with_exit=self.cfg.evidence_fusion_turn_scoring.threshold_u_turn_with_exit,
+            straight_score_threshold=self.cfg.evidence_fusion_turn_scoring.threshold_straight,
+            trajectory_sample_inside_polygon_min_hits=self.cfg.turn_detection_trajectory.sample_inside_polygon_min_hits,
+            trajectory_entry_heading_lookback_points=self.cfg.turn_detection_trajectory.entry_heading_lookback_points,
+            trajectory_heading_local_window_points=self.cfg.turn_detection_trajectory.heading_local_window_points,
             state_prune_max_age_s=self.cfg.state_prune_max_age_s,
             rtsp_reconnect_delay_s=self.cfg.rtsp_reconnect_delay_s,
             preview_max_fps=self.cfg.preview_max_fps,
@@ -395,6 +434,9 @@ class CameraManager:
             evidence_crop_min_size_px=self.cfg.evidence_crop_min_size_px,
             evidence_jpeg_quality=self.cfg.evidence_jpeg_quality,
         )
+
+    def _ui_payload(self) -> dict:
+        return self.cfg.ui.model_dump(mode="json")
 
     def _start_context(self, camera_id: str) -> None:
         ctx = self._build_context(camera_id)
