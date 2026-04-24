@@ -98,11 +98,11 @@ Nếu thiếu model hoặc sai đường dẫn `weights_path`, backend sẽ báo
 
 ## Mô hình cấu hình hiện tại
 
-Hệ thống dùng mô hình tập trung theo làn đường và hướng di chuyển:
+Hệ thống dùng mô hình `lane-centric + maneuver-centric`:
 
 - Mỗi camera có nhiều làn đường.
-- Mỗi làn có quy tắc đổi làn, loại xe được phép và các hướng đi.
-- Mỗi hướng đi có bằng chứng hình học riêng (`movement_path`, `exit_line`, `exit_zone`, `turn_corridor`).
+- Mỗi lane có quy tắc đổi làn, loại xe được phép và các maneuver.
+- Mỗi maneuver có evidence hình học riêng (`movement_path`, `exit_line`, `exit_zone`, `turn_corridor`).
 - Backend tự suy luận heading/curvature/opposite-direction từ trajectory, frontend không nhập tay các ngưỡng này.
 
 ## 1) `config/cameras.json` (metadata camera)
@@ -147,21 +147,21 @@ Toàn bộ tọa độ lưu theo chuẩn hóa `[0, 1]`.
 | `commit_line` | Vạch xác nhận xe bắt đầu thực hiện hướng đi (tùy chọn). |
 | `allowed_lane_changes` | Danh sách lane xe được phép chuyển sang; dùng cho `wrong_lane`. |
 | `allowed_vehicle_types` | Loại xe được phép chạy trong lane (`motorcycle`, `car`, `truck`, `bus`). |
-| `allowed_maneuvers` | Danh sách hướng đi hợp lệ theo luật ở làn này; thường được suy ra từ `maneuvers.*.allowed`. |
-| `maneuvers` | Nhóm cấu hình theo từng hướng đi: `straight`, `left`, `right`, `u_turn`. |
+| `allowed_maneuvers` | Danh sách maneuver hợp lệ theo luật ở lane này; thường được suy ra từ `maneuvers.*.allowed`. |
+| `maneuvers` | Maneuver configuration cho `straight`, `left`, `right`, `u_turn`. |
 
-### Nhóm cấu hình theo hướng di chuyển (`lanes[].maneuvers.<maneuver>`)
+### Maneuver configuration (`lanes[].maneuvers.<maneuver>`)
 
 | Trường | Giải thích |
 |---|---|
-| `enabled` | Bật/tắt nhận diện hướng di chuyển này. |
-| `allowed` | Cho phép hoặc cấm hướng di chuyển này theo luật. |
-| `movement_path` | Đường đi kỳ vọng của xe khi thực hiện hướng này (polyline). |
+| `enabled` | Bật/tắt nhận diện maneuver này. |
+| `allowed` | Cho phép hoặc cấm maneuver này theo luật. |
+| `movement_path` | Quỹ đạo kỳ vọng của xe khi thực hiện maneuver này (polyline). |
 | `corridor_preset` | Preset độ rộng corridor (`narrow`, `normal`, `wide`). |
 | `corridor_width_px` | Độ rộng corridor theo pixel; có thể tự suy ra từ preset. |
 | `turn_corridor` | Polygon corridor. Nếu không cung cấp và có `movement_path`, hệ thống tự sinh. |
-| `exit_line` | Vạch xác nhận xe đã đi ra đúng nhánh của hướng này. |
-| `exit_zone` | Vùng xác nhận xe đã đi ra đúng nhánh của hướng này. |
+| `exit_line` | Vạch xác nhận xe đã đi ra đúng nhánh của maneuver này. |
+| `exit_zone` | Vùng xác nhận xe đã đi ra đúng nhánh của maneuver này. |
 
 ## 3) `config/settings.json` (tham số runtime)
 
@@ -242,8 +242,8 @@ Toàn bộ tọa độ lưu theo chuẩn hóa `[0, 1]`.
 
 | Key | Giải thích |
 |---|---|
-| `event_lifecycle.violation_rearm_window_ms` | Thời gian chờ để mở lại chu kỳ ghi nhận, cho phép phát lại vi phạm mới sau chu kỳ cũ. |
-| `event_lifecycle.state_prune_max_age_s` | Tuổi tối đa của state theo vehicle trước khi dọn. |
+| `event_lifecycle.violation_rearm_window_ms` | Thời gian `re-arm` trước khi cho phép `emit` vi phạm mới trong lifecycle kế tiếp. |
+| `event_lifecycle.state_prune_max_age_s` | Tuổi tối đa của vehicle state trước khi prune. |
 
 ### `websocket`
 
