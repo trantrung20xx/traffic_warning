@@ -2,7 +2,7 @@
 
 Hệ thống giám sát và cảnh báo vi phạm giao thông thời gian thực gồm:
 
-- `backend`: FastAPI + YOLOv8 + ByteTrack + rule engine vi phạm.
+- `backend`: FastAPI + YOLOv8 + ByteTrack + bộ luật nhận diện vi phạm.
 - `frontend`: React cho giám sát realtime, thống kê, quản lý cấu hình camera.
 - `config`: dữ liệu cấu hình camera/làn, ảnh nền, ảnh bằng chứng, SQLite.
 
@@ -98,11 +98,11 @@ Nếu thiếu model hoặc sai đường dẫn `weights_path`, backend sẽ báo
 
 ## Mô hình cấu hình hiện tại
 
-Hệ thống dùng mô hình lane-centric + maneuver-centric:
+Hệ thống dùng mô hình tập trung theo làn đường và hướng di chuyển:
 
-- Mỗi camera có nhiều lane.
-- Mỗi lane có policy đổi làn, loại xe và nhóm maneuver.
-- Mỗi maneuver có bằng chứng hình học riêng (`movement_path`, `exit_line`, `exit_zone`, `turn_corridor`).
+- Mỗi camera có nhiều làn đường.
+- Mỗi làn có quy tắc đổi làn, loại xe được phép và các hướng đi.
+- Mỗi hướng đi có bằng chứng hình học riêng (`movement_path`, `exit_line`, `exit_zone`, `turn_corridor`).
 - Backend tự suy luận heading/curvature/opposite-direction từ trajectory, frontend không nhập tay các ngưỡng này.
 
 ## 1) `config/cameras.json` (metadata camera)
@@ -127,7 +127,7 @@ Mỗi phần tử trong `cameras`:
 
 Toàn bộ tọa độ lưu theo chuẩn hóa `[0, 1]`.
 
-### Cấp camera
+### Nhóm thông tin camera
 
 | Trường | Giải thích |
 |---|---|
@@ -136,32 +136,32 @@ Toàn bộ tọa độ lưu theo chuẩn hóa `[0, 1]`.
 | `frame_height` | Kích thước tham chiếu khi chuẩn hóa/giải chuẩn hóa polygon. |
 | `lanes` | Danh sách lane của camera. |
 
-### Cấp lane
+### Nhóm thông tin từng làn
 
 | Trường | Giải thích |
 |---|---|
 | `lane_id` | ID làn duy nhất trong camera. |
 | `polygon` | Biên làn dùng để gán lane. |
-| `approach_zone` | Vùng tiếp cận để khóa lane nguồn cho logic turn (optional). |
-| `commit_gate` | Vùng commit cho maneuver (optional). |
-| `commit_line` | Vạch commit cho directed line crossing (optional). |
+| `approach_zone` | Vùng xe đi vào trước khi rẽ, dùng để khóa làn nguồn (tùy chọn). |
+| `commit_gate` | Vùng xác nhận xe bắt đầu thực hiện hướng đi (tùy chọn). |
+| `commit_line` | Vạch xác nhận xe bắt đầu thực hiện hướng đi (tùy chọn). |
 | `allowed_lane_changes` | Danh sách lane xe được phép chuyển sang; dùng cho `wrong_lane`. |
 | `allowed_vehicle_types` | Loại xe được phép chạy trong lane (`motorcycle`, `car`, `truck`, `bus`). |
-| `allowed_maneuvers` | Danh sách maneuver hợp lệ theo luật ở lane này; thường được suy ra từ `maneuvers.*.allowed`. |
-| `maneuvers` | Nhóm cấu hình theo từng maneuver: `straight`, `left`, `right`, `u_turn`. |
+| `allowed_maneuvers` | Danh sách hướng đi hợp lệ theo luật ở làn này; thường được suy ra từ `maneuvers.*.allowed`. |
+| `maneuvers` | Nhóm cấu hình theo từng hướng đi: `straight`, `left`, `right`, `u_turn`. |
 
-### Cấp maneuver (`lanes[].maneuvers.<maneuver>`)
+### Nhóm cấu hình theo hướng di chuyển (`lanes[].maneuvers.<maneuver>`)
 
 | Trường | Giải thích |
 |---|---|
-| `enabled` | Bật/tắt theo dõi maneuver này. |
-| `allowed` | Cho phép hay cấm maneuver này theo luật. |
-| `movement_path` | Polyline đường đi kỳ vọng của maneuver. |
+| `enabled` | Bật/tắt nhận diện hướng di chuyển này. |
+| `allowed` | Cho phép hoặc cấm hướng di chuyển này theo luật. |
+| `movement_path` | Đường đi kỳ vọng của xe khi thực hiện hướng này (polyline). |
 | `corridor_preset` | Preset độ rộng corridor (`narrow`, `normal`, `wide`). |
 | `corridor_width_px` | Độ rộng corridor theo pixel; có thể tự suy ra từ preset. |
 | `turn_corridor` | Polygon corridor. Nếu không cung cấp và có `movement_path`, hệ thống tự sinh. |
-| `exit_line` | Vạch xác nhận thoát nhánh cho maneuver. |
-| `exit_zone` | Vùng xác nhận thoát nhánh cho maneuver. |
+| `exit_line` | Vạch xác nhận xe đã đi ra đúng nhánh của hướng này. |
+| `exit_zone` | Vùng xác nhận xe đã đi ra đúng nhánh của hướng này. |
 
 ## 3) `config/settings.json` (tham số runtime)
 
@@ -209,13 +209,13 @@ Toàn bộ tọa độ lưu theo chuẩn hóa `[0, 1]`.
 
 | Key | Giải thích |
 |---|---|
-| `wrong_lane.min_duration_ms` | Thời gian vi phạm tối thiểu trước khi emit `wrong_lane`. |
+| `wrong_lane.min_duration_ms` | Thời gian vi phạm tối thiểu trước khi hệ thống phát lỗi `wrong_lane`. |
 
 ### `turn_detection`
 
 | Key | Giải thích |
 |---|---|
-| `turn_detection.turn_region_min_hits` | Số hit tối thiểu của corridor/zone khi chưa có bằng chứng exit mạnh. |
+| `turn_detection.turn_region_min_hits` | Số lần xe phải xuất hiện trong corridor/zone khi chưa có bằng chứng đầu ra đủ mạnh. |
 | `turn_detection.turn_state_timeout_ms` | Timeout reset turn state machine nếu không còn hoạt động. |
 | `turn_detection.trajectory_history_window_ms` | Cửa sổ trajectory dùng cho heading/curvature và evidence. |
 
@@ -242,7 +242,7 @@ Toàn bộ tọa độ lưu theo chuẩn hóa `[0, 1]`.
 
 | Key | Giải thích |
 |---|---|
-| `event_lifecycle.violation_rearm_window_ms` | Cửa sổ re-arm để cho phép emit lại vi phạm sau lifecycle cũ. |
+| `event_lifecycle.violation_rearm_window_ms` | Thời gian chờ để mở lại chu kỳ ghi nhận, cho phép phát lại vi phạm mới sau chu kỳ cũ. |
 | `event_lifecycle.state_prune_max_age_s` | Tuổi tối đa của state theo vehicle trước khi dọn. |
 
 ### `websocket`
