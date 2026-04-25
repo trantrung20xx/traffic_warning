@@ -498,7 +498,6 @@ def _lane_direction_vector_for_validation(lane) -> Optional[tuple[float, float]]
     lane_shape = Polygon([(float(x), float(y)) for x, y in lane.polygon])
     if lane_shape.is_empty:
         return None
-    center = lane_shape.centroid
     min_y = min(float(point[1]) for point in lane.polygon)
     max_y = max(float(point[1]) for point in lane.polygon)
     return _normalize_vector((0.0, max_y - min_y))

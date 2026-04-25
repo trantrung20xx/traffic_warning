@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime
-
 from sqlalchemy import DateTime, Float, Integer, String, Column
 from sqlalchemy.orm import DeclarativeBase
 

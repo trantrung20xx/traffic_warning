@@ -551,7 +551,7 @@ export function getEditTargetMinimumPoints(target) {
   return isLineEditTarget(target) ? 2 : 3;
 }
 
-export function getTargetPoints({ lane, laneConfig, editTarget, selectedManeuver = null }) {
+export function getTargetPoints({ lane, editTarget, selectedManeuver = null }) {
   const parsed = parseEditTarget(editTarget);
   if (parsed.scope === "lane") {
     if (!lane) return [];
@@ -593,7 +593,7 @@ export function createDefaultLaneManeuvers({ allowedManeuvers = [] } = {}) {
   );
 }
 
-export function normalizeLaneManeuvers(lane = {}, laneConfig = {}) {
+export function normalizeLaneManeuvers(lane = {}) {
   const source = lane.maneuvers || {};
   const allowedSet = new Set(Array.isArray(lane.allowed_maneuvers) ? lane.allowed_maneuvers : []);
 
@@ -684,7 +684,7 @@ export function normalizeCameraDetail(detail) {
     frame_width: draft.lane_config?.frame_width || camera.frame_width || 1280,
     frame_height: draft.lane_config?.frame_height || camera.frame_height || 720,
     lanes: (draft.lane_config?.lanes || []).map((lane) => {
-      const maneuvers = normalizeLaneManeuvers(lane, draft.lane_config || {});
+      const maneuvers = normalizeLaneManeuvers(lane);
       const derivedAllowedManeuvers = MANEUVERS.filter((maneuver) => {
         const cfg = maneuvers[maneuver];
         return Boolean(cfg?.enabled && cfg?.allowed);

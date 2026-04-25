@@ -7,7 +7,6 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from starlette.websockets import WebSocketState
 
 from app.managers.camera_manager import CameraManager
-from app.schemas.events import TrackMessage, ViolationEvent
 
 
 def _is_client_connection_reset(exc: BaseException) -> bool:
