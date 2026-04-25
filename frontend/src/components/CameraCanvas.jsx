@@ -269,6 +269,7 @@ export default function CameraCanvas({
 
     ctx.clearRect(0, 0, frameWidth, frameHeight);
     drawBackgroundImage(ctx, backgroundImage, frameWidth, frameHeight);
+    const isMonitoringOverlay = Boolean(overlay && !editable);
 
     renderedLanes.forEach((lane) => {
       const pts = lane.polygon;
@@ -278,13 +279,18 @@ export default function CameraCanvas({
       drawPolygon(ctx, pts, {
         fillStyle: pts.length >= 3 ? laneColors.get(lane.lane_id) || "rgba(200,200,200,0.15)" : null,
         strokeStyle: lane.lane_id === selectedLaneId ? "rgba(255,255,255,1)" : "rgba(255,255,255,0.85)",
-        lineWidth: lane.lane_id === selectedLaneId ? 3 : 2,
+        lineWidth: lane.lane_id === selectedLaneId ? 2.2 : 1.4,
+        showStroke: !isMonitoringOverlay,
+        showVertices: isEditableLane,
         isEditableTarget: isEditableLane,
+        vertexRadius: 3.5,
+        activeVertexRadius: 5,
+        vertexStrokeWidth: 1.2,
         hoverVertexIndex,
         selectedVertexIndex,
       });
 
-      if (pts.length >= 3) {
+      if (pts.length >= 3 && !isMonitoringOverlay) {
         const cx = pts.reduce((s, p) => s + p[0], 0) / pts.length;
         const cy = pts.reduce((s, p) => s + p[1], 0) / pts.length;
         ctx.fillStyle = "rgba(255,255,255,0.98)";
@@ -297,6 +303,7 @@ export default function CameraCanvas({
           key: "approach_zone",
           points: lane.approach_zone || [],
           strokeStyle: "rgba(46, 204, 113, 0.95)",
+          fillStyle: "rgba(46, 204, 113, 0.15)",
           label: "chuẩn bị rẽ",
           dashed: true,
         },
@@ -304,6 +311,7 @@ export default function CameraCanvas({
           key: "commit_gate",
           points: lane.commit_gate || [],
           strokeStyle: "rgba(230, 126, 34, 0.95)",
+          fillStyle: "rgba(230, 126, 34, 0.15)",
           label: "bắt đầu rẽ",
           dashed: true,
         },
@@ -318,17 +326,24 @@ export default function CameraCanvas({
       ].forEach((geometry) => {
         if (geometry.points.length < 2) return;
         const isEditableGeometry = editable && lane.lane_id === selectedLaneId && editTarget === geometry.key;
+        const isLineGeometry = geometry.geometryType === "line";
         const drawGeometry = geometry.geometryType === "line" ? drawPolyline : drawPolygon;
         drawGeometry(ctx, geometry.points, {
+          fillStyle: isMonitoringOverlay ? geometry.fillStyle : null,
           dashed: geometry.dashed,
           strokeStyle: isEditableGeometry ? "rgba(255, 209, 102, 1)" : geometry.strokeStyle,
-          lineWidth: isEditableGeometry ? 3 : 2,
+          lineWidth: isEditableGeometry ? 2 : 1.4,
+          showStroke: isLineGeometry || !isMonitoringOverlay,
+          showVertices: isEditableGeometry,
           isEditableTarget: isEditableGeometry,
+          vertexRadius: 3.5,
+          activeVertexRadius: 5,
+          vertexStrokeWidth: 1.2,
           hoverVertexIndex,
           selectedVertexIndex,
         });
         const anchor = geometry.points[0];
-        if (anchor) {
+        if (anchor && !isMonitoringOverlay) {
           ctx.fillStyle = "rgba(255,255,255,0.88)";
           ctx.font = "12px sans-serif";
           ctx.fillText(`${geometry.label} · làn ${lane.lane_id}`, anchor[0] + 6, anchor[1] - 6);
@@ -348,18 +363,24 @@ export default function CameraCanvas({
           drawCorridorPreview(ctx, movementPath, getPreviewCorridorWidthPx(maneuver, cfg), {
             strokeStyle: isEditablePath ? "rgba(255, 209, 102, 0.18)" : "rgba(52, 152, 219, 0.18)",
           });
-          drawPolyline(ctx, movementPath, {
-            dashed: true,
-            strokeStyle: isEditablePath ? "rgba(255, 209, 102, 1)" : "rgba(52, 152, 219, 0.95)",
-            lineWidth: isEditablePath ? 3 : 2,
-            isEditableTarget: isEditablePath,
-            hoverVertexIndex,
-            selectedVertexIndex,
-            showDirection: true,
-            arrowSize: isEditablePath ? 15 : 12,
-          });
+          if (!isMonitoringOverlay) {
+            drawPolyline(ctx, movementPath, {
+              dashed: true,
+              strokeStyle: isEditablePath ? "rgba(255, 209, 102, 1)" : "rgba(52, 152, 219, 0.95)",
+              lineWidth: isEditablePath ? 2 : 1.4,
+              showVertices: isEditablePath,
+              isEditableTarget: isEditablePath,
+              vertexRadius: 3.5,
+              activeVertexRadius: 5,
+              vertexStrokeWidth: 1.2,
+              hoverVertexIndex,
+              selectedVertexIndex,
+              showDirection: true,
+              arrowSize: isEditablePath ? 14 : 11,
+            });
+          }
           const anchor = movementPath[0];
-          if (anchor) {
+          if (anchor && !isMonitoringOverlay) {
             ctx.fillStyle = "rgba(255,255,255,0.88)";
             ctx.font = "12px sans-serif";
             ctx.fillText(`${maneuverLabel} · lane ${lane.lane_id}`, anchor[0] + 6, anchor[1] - 6);
@@ -371,8 +392,14 @@ export default function CameraCanvas({
           drawPolygon(ctx, exitZone, {
             dashed: true,
             strokeStyle: isEditableExitZone ? "rgba(255, 209, 102, 1)" : "rgba(155, 89, 182, 0.95)",
-            lineWidth: isEditableExitZone ? 3 : 2,
+            lineWidth: isEditableExitZone ? 2 : 1.4,
+            fillStyle: isMonitoringOverlay ? "rgba(155, 89, 182, 0.18)" : null,
+            showStroke: !isMonitoringOverlay,
+            showVertices: isEditableExitZone,
             isEditableTarget: isEditableExitZone,
+            vertexRadius: 3.5,
+            activeVertexRadius: 5,
+            vertexStrokeWidth: 1.2,
             hoverVertexIndex,
             selectedVertexIndex,
           });
@@ -383,8 +410,13 @@ export default function CameraCanvas({
           drawPolyline(ctx, exitLine, {
             dashed: false,
             strokeStyle: isEditableExitLine ? "rgba(255, 209, 102, 1)" : "rgba(230, 126, 34, 0.95)",
-            lineWidth: isEditableExitLine ? 3 : 2,
+            lineWidth: isEditableExitLine ? 2 : 1.4,
+            showStroke: true,
+            showVertices: isEditableExitLine,
             isEditableTarget: isEditableExitLine,
+            vertexRadius: 3.5,
+            activeVertexRadius: 5,
+            vertexStrokeWidth: 1.2,
             hoverVertexIndex,
             selectedVertexIndex,
           });
@@ -395,10 +427,10 @@ export default function CameraCanvas({
     if (editable && (isPolygonEditTarget(editTarget) || isPolylineEditTarget(editTarget)) && hoverEdge?.point) {
       const [hx, hy] = hoverEdge.point;
       ctx.beginPath();
-      ctx.arc(hx, hy, 6, 0, Math.PI * 2);
+      ctx.arc(hx, hy, 4.2, 0, Math.PI * 2);
       ctx.fillStyle = "rgba(255, 209, 102, 0.95)";
       ctx.fill();
-      ctx.lineWidth = 2;
+      ctx.lineWidth = 1.2;
       ctx.strokeStyle = "rgba(7, 19, 31, 0.9)";
       ctx.stroke();
     }
@@ -485,6 +517,7 @@ export default function CameraCanvas({
     frameWidth,
     frameHeight,
     backgroundImage,
+    overlay,
     hoverEdge,
     hoverVertexIndex,
     laneColors,

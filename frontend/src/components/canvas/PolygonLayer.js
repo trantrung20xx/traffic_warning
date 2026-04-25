@@ -1,10 +1,14 @@
 function drawVertices(ctx, points, options = {}) {
+  if (options.showVertices === false) return;
   const basePointColor = options.pointColor || options.strokeStyle || ctx.strokeStyle;
+  const normalRadius = Number(options.vertexRadius) > 0 ? Number(options.vertexRadius) : 4;
+  const activeRadius = Number(options.activeVertexRadius) > 0 ? Number(options.activeVertexRadius) : 5.5;
+  const vertexStrokeWidth = Number(options.vertexStrokeWidth) > 0 ? Number(options.vertexStrokeWidth) : 1.3;
   points.forEach(([x, y], index) => {
     const hovered = options.isEditableTarget && index === options.hoverVertexIndex;
     const selected = options.isEditableTarget && index === options.selectedVertexIndex;
     ctx.beginPath();
-    ctx.arc(x, y, hovered || selected ? 7 : 5, 0, Math.PI * 2);
+    ctx.arc(x, y, hovered || selected ? activeRadius : normalRadius, 0, Math.PI * 2);
     ctx.fillStyle = selected
       ? "rgba(0, 214, 143, 0.96)"
       : hovered
@@ -12,7 +16,7 @@ function drawVertices(ctx, points, options = {}) {
         : basePointColor;
     ctx.fill();
     if (options.isEditableTarget) {
-      ctx.lineWidth = 2;
+      ctx.lineWidth = vertexStrokeWidth;
       ctx.strokeStyle = "rgba(7, 19, 31, 0.9)";
       ctx.stroke();
     }
@@ -54,14 +58,18 @@ export function drawPolyline(ctx, points, options = {}) {
   for (let i = 1; i < points.length; i += 1) {
     ctx.lineTo(points[i][0], points[i][1]);
   }
-  ctx.strokeStyle = options.strokeStyle || "rgba(255,255,255,0.9)";
-  ctx.lineWidth = options.lineWidth || 2;
-  if (options.dashed) ctx.setLineDash([8, 6]);
-  ctx.lineCap = options.lineCap || "round";
-  ctx.lineJoin = options.lineJoin || "round";
-  ctx.stroke();
-  ctx.setLineDash([]);
-  drawDirectionArrow(ctx, points, options);
+  if (options.showStroke !== false) {
+    ctx.strokeStyle = options.strokeStyle || "rgba(255,255,255,0.9)";
+    ctx.lineWidth = options.lineWidth || 2;
+    if (options.dashed) ctx.setLineDash([8, 6]);
+    ctx.lineCap = options.lineCap || "round";
+    ctx.lineJoin = options.lineJoin || "round";
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  if (options.showDirection !== false) {
+    drawDirectionArrow(ctx, points, options);
+  }
   drawVertices(ctx, points, options);
   ctx.restore();
 }
@@ -95,15 +103,17 @@ export function drawPolygon(ctx, points, options = {}) {
   if (points.length >= 3) {
     ctx.closePath();
   }
-  ctx.strokeStyle = options.strokeStyle || "rgba(255,255,255,0.9)";
-  ctx.lineWidth = options.lineWidth || 2;
-  if (options.dashed) ctx.setLineDash([8, 6]);
   if (options.fillStyle && points.length >= 3) {
     ctx.fillStyle = options.fillStyle;
     ctx.fill();
   }
-  ctx.stroke();
-  ctx.setLineDash([]);
+  if (options.showStroke !== false) {
+    ctx.strokeStyle = options.strokeStyle || "rgba(255,255,255,0.9)";
+    ctx.lineWidth = options.lineWidth || 2;
+    if (options.dashed) ctx.setLineDash([8, 6]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
   drawVertices(ctx, points, options);
   ctx.restore();
 }
