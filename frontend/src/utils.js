@@ -1,10 +1,19 @@
 export const MANEUVERS = ["left", "straight", "right", "u_turn"];
 export const LANE_EDIT_TARGETS = ["lane_polygon", "approach_zone", "commit_gate", "commit_line"];
 export const MANEUVER_EDIT_TARGETS = ["movement_path", "exit_line", "exit_zone"];
-export const CORRIDOR_PRESET_OPTIONS = ["narrow", "normal", "wide"];
-const POLYGON_GEOMETRY_TARGETS = ["lane_polygon", "approach_zone", "commit_gate", "exit_zone", "turn_corridor"];
+const POLYGON_GEOMETRY_TARGETS = ["lane_polygon", "approach_zone", "commit_gate", "exit_zone"];
 const LINE_GEOMETRY_TARGETS = ["commit_line", "exit_line"];
 const POLYLINE_GEOMETRY_TARGETS = ["movement_path"];
+export const CORRIDOR_WIDTH_MIN_PX = 16;
+export const CORRIDOR_WIDTH_MAX_PX = 512;
+export const CORRIDOR_WIDTH_STEP_PX = 1;
+
+const CORRIDOR_DEFAULT_WIDTH_BY_MANEUVER = {
+  straight: 72,
+  left: 82,
+  right: 82,
+  u_turn: 104,
+};
 
 export const MANEUVER_LABELS = {
   left: "Rẽ trái",
@@ -24,12 +33,6 @@ export const MANEUVER_TARGET_LABELS = {
   movement_path: "Đường đi",
   exit_line: "Vạch xác nhận đầu ra",
   exit_zone: "Vùng xác nhận đầu ra",
-};
-
-export const CORRIDOR_PRESET_LABELS = {
-  narrow: "Hẹp",
-  normal: "Tiêu chuẩn",
-  wide: "Rộng",
 };
 
 export const VEHICLE_TYPES = ["motorcycle", "car", "truck", "bus"];
@@ -90,6 +93,19 @@ const VIETNAM_TIMESTAMP_FORMATTER = new Intl.DateTimeFormat("vi-VN", {
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
+}
+
+export function getDefaultCorridorWidthPx(maneuver = "straight") {
+  return CORRIDOR_DEFAULT_WIDTH_BY_MANEUVER[maneuver] || CORRIDOR_DEFAULT_WIDTH_BY_MANEUVER.straight;
+}
+
+export function normalizeCorridorWidthPx(value, maneuver = "straight") {
+  const fallback = getDefaultCorridorWidthPx(maneuver);
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return clamp(Math.round(parsed), CORRIDOR_WIDTH_MIN_PX, CORRIDOR_WIDTH_MAX_PX);
 }
 
 function pad2(value) {
@@ -560,14 +576,11 @@ export function getCameraTypeLabel(value) {
 }
 
 function createDefaultManeuverConfig(maneuver, { allowed = false } = {}) {
-  const preset = maneuver === "u_turn" ? "wide" : "normal";
   return {
     enabled: true,
     allowed,
     movement_path: [],
-    corridor_preset: preset,
-    corridor_width_px: null,
-    turn_corridor: [],
+    corridor_width_px: getDefaultCorridorWidthPx(maneuver),
     exit_line: [],
     exit_zone: [],
   };
@@ -594,9 +607,7 @@ export function normalizeLaneManeuvers(lane = {}, laneConfig = {}) {
       enabled,
       allowed: enabled ? raw.allowed ?? allowedSet.has(maneuver) : false,
       movement_path: raw.movement_path || [],
-      corridor_preset: raw.corridor_preset || base.corridor_preset,
-      corridor_width_px: raw.corridor_width_px ?? null,
-      turn_corridor: raw.turn_corridor || [],
+      corridor_width_px: normalizeCorridorWidthPx(raw.corridor_width_px, maneuver),
       exit_line: raw.exit_line || [],
       exit_zone: raw.exit_zone || [],
     };
@@ -719,9 +730,7 @@ export function buildPayload(draft) {
             enabled,
             allowed: enabled && Boolean(cfg.allowed ?? false),
             movement_path: normalizeManeuverGeometry(cfg.movement_path, 2),
-            corridor_preset: cfg.corridor_preset || (maneuver === "u_turn" ? "wide" : "normal"),
-            corridor_width_px: cfg.corridor_width_px == null ? null : Number(cfg.corridor_width_px),
-            turn_corridor: normalizeManeuverGeometry(cfg.turn_corridor, 3),
+            corridor_width_px: normalizeCorridorWidthPx(cfg.corridor_width_px, maneuver),
             exit_line: normalizeManeuverGeometry(cfg.exit_line, 2),
             exit_zone: normalizeManeuverGeometry(cfg.exit_zone, 3),
           },
@@ -865,7 +874,6 @@ export function validatePolygonDraft(draft) {
       const movementPath = cfg.movement_path || [];
       const exitZone = cfg.exit_zone || [];
       const exitLine = cfg.exit_line || [];
-      const turnCorridor = cfg.turn_corridor || [];
       const isEnabled = Boolean(cfg.enabled ?? true);
       const isAllowed = isEnabled && Boolean(cfg.allowed ?? false);
 
@@ -878,16 +886,13 @@ export function validatePolygonDraft(draft) {
       if (exitLine.length > 0 && exitLine.length !== 2) {
         errors.push(`Vạch xác nhận đầu ra "${getManeuverLabel(maneuver)}" của làn ${lane.lane_id} phải có đúng 2 điểm.`);
       }
-      if (turnCorridor.length > 0 && turnCorridor.length < 3) {
-        errors.push(`Hành lang rẽ "${getManeuverLabel(maneuver)}" của làn ${lane.lane_id} phải có ít nhất 3 điểm.`);
-      }
       if (isAllowed && !isEnabled) {
         warnings.push(`Làn ${lane.lane_id}: ${getManeuverLabel(maneuver)} đang cho phép nhưng trạng thái đang tắt.`);
       }
-      if (isEnabled && !movementPath.length && !turnCorridor.length && !exitZone.length && !exitLine.length) {
+      if (isEnabled && !movementPath.length && !exitZone.length && !exitLine.length) {
         warnings.push(`Làn ${lane.lane_id}: ${getManeuverLabel(maneuver)} chưa có hình học xác nhận (đường đi/exit).`);
       }
-      if (!isEnabled && (movementPath.length || turnCorridor.length || exitZone.length || exitLine.length)) {
+      if (!isEnabled && (movementPath.length || exitZone.length || exitLine.length)) {
         warnings.push(`Làn ${lane.lane_id}: ${getManeuverLabel(maneuver)} đang tắt nhưng vẫn có geometry cấu hình.`);
       }
     });

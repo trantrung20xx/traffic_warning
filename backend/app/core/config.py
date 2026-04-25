@@ -588,12 +588,8 @@ def _normalize_maneuver_config_payload(
         frame_width,
         frame_height,
     )
-    turn_corridor = normalize_optional_polygon(
-        raw_config.get("turn_corridor"),
-        frame_width,
-        frame_height,
-    )
-    if turn_corridor is None and movement_path:
+    turn_corridor = None
+    if movement_path:
         turn_corridor = _build_turn_corridor_from_movement_path(
             movement_path=movement_path,
             corridor_width_px=corridor_width_px,
@@ -771,11 +767,6 @@ def _compact_lane_config_for_storage(lane_config: CameraLaneConfig) -> dict[str,
                 compact["movement_path"] = cfg.movement_path
             if cfg.corridor_width_px is not None:
                 compact["corridor_width_px"] = int(cfg.corridor_width_px)
-            if cfg.corridor_preset != "normal":
-                compact["corridor_preset"] = cfg.corridor_preset
-            # Chỉ lưu turn_corridor khi không có movement_path để tránh lưu dữ liệu dẫn xuất dư thừa.
-            if cfg.turn_corridor and not cfg.movement_path:
-                compact["turn_corridor"] = cfg.turn_corridor
             if cfg.exit_line:
                 compact["exit_line"] = cfg.exit_line
             if cfg.exit_zone:

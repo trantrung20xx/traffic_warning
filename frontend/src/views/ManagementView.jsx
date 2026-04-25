@@ -10,13 +10,15 @@ import {
   updateCamera,
 } from "../api";
 import {
-  CORRIDOR_PRESET_LABELS,
-  CORRIDOR_PRESET_OPTIONS,
+  CORRIDOR_WIDTH_MAX_PX,
+  CORRIDOR_WIDTH_MIN_PX,
+  CORRIDOR_WIDTH_STEP_PX,
   MANEUVERS,
   VEHICLE_TYPES,
   buildPayload,
   createCameraDraft,
   createEmptyLane,
+  getDefaultCorridorWidthPx,
   getEditTargetGeometryNoun,
   getEditTargetLabel,
   getEditTargetMinimumPoints,
@@ -25,6 +27,7 @@ import {
   getVehicleTypeLabel,
   isLineEditTarget,
   isPolygonEditTarget,
+  normalizeCorridorWidthPx,
   normalizeCameraDetail,
   polygonSelfIntersects,
   validatePolygonDraft,
@@ -542,6 +545,7 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
   }, [selectedLane, selectedManeuver]);
   const selectedManeuverEnabled = Boolean(selectedManeuverConfig?.enabled ?? true);
   const selectedManeuverAllowed = selectedManeuverEnabled && Boolean(selectedManeuverConfig?.allowed ?? false);
+  const selectedCorridorWidthPx = normalizeCorridorWidthPx(selectedManeuverConfig?.corridor_width_px, selectedManeuver);
 
   const selectedPoints = useMemo(() => {
     return getTargetPoints({
@@ -618,9 +622,7 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
         enabled: true,
         allowed: false,
         movement_path: [],
-        corridor_preset: selectedManeuver === "u_turn" ? "wide" : "normal",
-        corridor_width_px: null,
-        turn_corridor: [],
+        corridor_width_px: getDefaultCorridorWidthPx(selectedManeuver),
         exit_line: [],
         exit_zone: [],
       };
@@ -680,9 +682,7 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
           enabled: true,
           allowed: false,
           movement_path: [],
-          corridor_preset: selectedManeuver === "u_turn" ? "wide" : "normal",
-          corridor_width_px: null,
-          turn_corridor: [],
+          corridor_width_px: getDefaultCorridorWidthPx(selectedManeuver),
           exit_line: [],
           exit_zone: [],
         };
@@ -1211,23 +1211,56 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
                         ))}
                       </select>
                     </label>
-                    <label className="field">
-                      <span>Độ rộng corridor</span>
-                      <select
-                        value={selectedManeuverConfig?.corridor_preset || (selectedManeuver === "u_turn" ? "wide" : "normal")}
-                        onChange={(event) =>
-                          updateSelectedManeuverConfig((cfg) => ({
-                            ...cfg,
-                            corridor_preset: event.target.value,
-                          }))
-                        }
-                      >
-                        {CORRIDOR_PRESET_OPTIONS.map((preset) => (
-                          <option key={preset} value={preset}>
-                            {CORRIDOR_PRESET_LABELS[preset]}
-                          </option>
-                        ))}
-                      </select>
+                    <label className="field corridor-width-field">
+                      <span>Độ rộng corridor: {selectedCorridorWidthPx} px</span>
+                      <div className="corridor-width-control">
+                        <button
+                          type="button"
+                          className="corridor-stepper-button"
+                          onClick={() =>
+                            updateSelectedManeuverConfig((cfg) => ({
+                              ...cfg,
+                              corridor_width_px: normalizeCorridorWidthPx(
+                                normalizeCorridorWidthPx(cfg.corridor_width_px, selectedManeuver) - CORRIDOR_WIDTH_STEP_PX,
+                                selectedManeuver,
+                              ),
+                            }))
+                          }
+                          aria-label="Giảm độ rộng corridor"
+                        >
+                          -
+                        </button>
+                        <input
+                          type="number"
+                          min={CORRIDOR_WIDTH_MIN_PX}
+                          max={CORRIDOR_WIDTH_MAX_PX}
+                          step={CORRIDOR_WIDTH_STEP_PX}
+                          value={selectedCorridorWidthPx}
+                          onChange={(event) =>
+                            updateSelectedManeuverConfig((cfg) => ({
+                              ...cfg,
+                              corridor_width_px: normalizeCorridorWidthPx(event.target.value, selectedManeuver),
+                            }))
+                          }
+                        />
+                        <span className="corridor-width-unit">px</span>
+                        <button
+                          type="button"
+                          className="corridor-stepper-button"
+                          onClick={() =>
+                            updateSelectedManeuverConfig((cfg) => ({
+                              ...cfg,
+                              corridor_width_px: normalizeCorridorWidthPx(
+                                normalizeCorridorWidthPx(cfg.corridor_width_px, selectedManeuver) + CORRIDOR_WIDTH_STEP_PX,
+                                selectedManeuver,
+                              ),
+                            }))
+                          }
+                          aria-label="Tăng độ rộng corridor"
+                        >
+                          +
+                        </button>
+                      </div>
                     </label>
                   </div>
 

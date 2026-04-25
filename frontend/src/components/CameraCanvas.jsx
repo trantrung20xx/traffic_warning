@@ -23,11 +23,6 @@ const CORRIDOR_BASE_WIDTH_BY_MANEUVER = {
   right: 82,
   u_turn: 104,
 };
-const CORRIDOR_PRESET_FACTOR = {
-  narrow: 0.78,
-  normal: 1,
-  wide: 1.32,
-};
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
@@ -108,10 +103,7 @@ function getPreviewCorridorWidthPx(maneuver, cfg) {
   if (Number.isFinite(configuredWidth) && configuredWidth > 0) {
     return configuredWidth;
   }
-  const preset = cfg?.corridor_preset || (maneuver === "u_turn" ? "wide" : "normal");
-  const base = CORRIDOR_BASE_WIDTH_BY_MANEUVER[maneuver] || 82;
-  const factor = CORRIDOR_PRESET_FACTOR[preset] || 1;
-  return Math.max(Math.round(base * factor), 16);
+  return CORRIDOR_BASE_WIDTH_BY_MANEUVER[maneuver] || 82;
 }
 
 function drawTrajectory(ctx, points) {
@@ -346,7 +338,6 @@ export default function CameraCanvas({
       Object.entries(lane.maneuvers || {}).forEach(([maneuver, cfg]) => {
         const maneuverLabel = getManeuverLabel(maneuver);
         const movementPath = cfg.movement_path || [];
-        const turnCorridor = cfg.turn_corridor || [];
         const exitZone = cfg.exit_zone || [];
         const exitLine = cfg.exit_line || [];
 
@@ -373,12 +364,6 @@ export default function CameraCanvas({
             ctx.font = "12px sans-serif";
             ctx.fillText(`${maneuverLabel} · lane ${lane.lane_id}`, anchor[0] + 6, anchor[1] - 6);
           }
-        } else if (turnCorridor.length >= 3) {
-          drawPolygon(ctx, turnCorridor, {
-            dashed: true,
-            strokeStyle: "rgba(52, 152, 219, 0.65)",
-            lineWidth: 1.5,
-          });
         }
 
         if (exitZone.length >= 3) {

@@ -273,7 +273,7 @@ def validate_lane_geometry(lane_config: CameraLaneConfig) -> list[dict[str, Any]
                             message=f"Làn {lane.lane_id} - {maneuver}: turn corridor rỗng hoặc quá nhỏ.",
                             lane_id=lane.lane_id,
                             maneuver=maneuver,
-                            suggestion="Tăng độ dài movement path hoặc corridor width preset.",
+                            suggestion="Tăng độ dài movement path hoặc tăng corridor_width_px.",
                         )
                     )
                 elif lane_shape is not None and not lane_shape.is_empty and corridor_shape.distance(lane_shape) > 0.15:
