@@ -1329,6 +1329,8 @@ class ViolationLogic:
                 continue
             lane_map: dict[str, PreparedPolygon] = {}
             for maneuver, maneuver_cfg in maneuvers.items():
+                if not self._maneuver_is_enabled(maneuver_cfg):
+                    continue
                 points = self._extract_maneuver_points(maneuver_cfg=maneuver_cfg, field=geometry_field)
                 if not points:
                     continue
@@ -1350,6 +1352,8 @@ class ViolationLogic:
                 continue
             lane_map: dict[str, PreparedLine] = {}
             for maneuver, maneuver_cfg in maneuvers.items():
+                if not self._maneuver_is_enabled(maneuver_cfg):
+                    continue
                 points = self._extract_maneuver_points(maneuver_cfg=maneuver_cfg, field=geometry_field)
                 if not points:
                     continue
@@ -1547,11 +1551,14 @@ class ViolationLogic:
                 for maneuver, cfg in maneuvers.items():
                     if not maneuver:
                         continue
+                    if not self._maneuver_is_enabled(cfg):
+                        continue
                     lane_set.add(maneuver)
-                    if bool(getattr(cfg, "enabled", True)) and bool(getattr(cfg, "allowed", False)):
-                        lane_set.add(maneuver)
             if lane.allowed_maneuvers:
-                lane_set.update(maneuver for maneuver in lane.allowed_maneuvers if maneuver)
+                for maneuver in lane.allowed_maneuvers:
+                    cfg = maneuvers.get(maneuver) if isinstance(maneuvers, dict) else None
+                    if maneuver and (cfg is None or self._maneuver_is_enabled(cfg)):
+                        lane_set.add(maneuver)
             if lane_set:
                 by_lane[lane.lane_id] = lane_set
         return by_lane
@@ -1567,6 +1574,8 @@ class ViolationLogic:
                 continue
             lane_anchors: dict[str, tuple[float, float]] = {}
             for maneuver, maneuver_cfg in maneuvers.items():
+                if not self._maneuver_is_enabled(maneuver_cfg):
+                    continue
                 exit_line = self._extract_maneuver_points(maneuver_cfg=maneuver_cfg, field="exit_line")
                 if exit_line:
                     lane_anchors[maneuver] = self._line_midpoint(exit_line)
@@ -1585,6 +1594,14 @@ class ViolationLogic:
             if lane_anchors:
                 anchors_by_lane[lane.lane_id] = lane_anchors
         return anchors_by_lane
+
+    @staticmethod
+    def _maneuver_is_enabled(maneuver_cfg) -> bool:
+        if maneuver_cfg is None:
+            return True
+        if isinstance(maneuver_cfg, dict):
+            return bool(maneuver_cfg.get("enabled", True))
+        return bool(getattr(maneuver_cfg, "enabled", True))
 
     @staticmethod
     def _centroid_of_points(points: list[list[float]]) -> tuple[float, float]:

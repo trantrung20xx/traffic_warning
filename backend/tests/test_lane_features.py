@@ -161,6 +161,76 @@ class LaneFeatureTests(unittest.TestCase):
                 }
             )
 
+    def test_disabled_maneuver_forces_allowed_false(self) -> None:
+        lane_config = CameraLaneConfig.model_validate(
+            {
+                "camera_id": "cam_test",
+                "frame_width": 100,
+                "frame_height": 100,
+                "lanes": [
+                    self._lane_payload(
+                        maneuvers={
+                            "straight": {"enabled": True, "allowed": True},
+                            "right": {"enabled": False, "allowed": True},
+                        }
+                    )
+                ],
+            }
+        )
+
+        self.assertFalse(lane_config.lanes[0].maneuvers["right"].enabled)
+        self.assertFalse(lane_config.lanes[0].maneuvers["right"].allowed)
+
+    def test_disabled_maneuver_geometry_is_not_scored(self) -> None:
+        logic = self._build_hybrid_logic(
+            {
+                "camera_id": "cam_test",
+                "frame_width": 100,
+                "frame_height": 100,
+                "lanes": [
+                    {
+                        "lane_id": 1,
+                        "polygon": [[0.0, 0.0], [0.49, 0.0], [0.49, 1.0], [0.0, 1.0]],
+                        "approach_zone": [[0.10, 0.45], [0.45, 0.45], [0.45, 0.70], [0.10, 0.70]],
+                        "commit_gate": [[0.20, 0.68], [0.45, 0.68], [0.45, 0.82], [0.20, 0.82]],
+                        "allowed_maneuvers": ["straight"],
+                        "allowed_lane_changes": [1],
+                        "allowed_vehicle_types": ["car"],
+                        "maneuvers": {
+                            "straight": {"enabled": True, "allowed": True},
+                            "right": {
+                                "enabled": False,
+                                "allowed": False,
+                                "turn_corridor": [[0.20, 0.72], [0.45, 0.72], [0.45, 0.95], [0.20, 0.95]],
+                            },
+                        },
+                    }
+                ],
+            },
+            turn_region_min_hits=2,
+        )
+        ts = datetime(2026, 4, 9, 8, 0, 0, tzinfo=timezone.utc)
+
+        for offset_ms, bbox in (
+            (0, [20, 50, 30, 70]),
+            (100, [25, 60, 35, 80]),
+            (200, [28, 62, 38, 82]),
+        ):
+            self.assertEqual(
+                logic.update_and_maybe_generate_violation(
+                    vehicle_id=402,
+                    vehicle_type="car",
+                    lane_id=1,
+                    bbox_xyxy=bbox,
+                    ts=ts + timedelta(milliseconds=offset_ms),
+                ),
+                [],
+            )
+
+        turn_state = logic._vehicle_states[402].turn_state
+        self.assertIsNone(turn_state.confirmed_maneuver)
+        self.assertNotIn("right", turn_state.evidences)
+
     def test_vehicle_type_violation_fires_for_disallowed_type(self) -> None:
         lane_config = CameraLaneConfig.model_validate(
             {

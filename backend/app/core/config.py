@@ -402,7 +402,10 @@ class LanePolygon(BaseModel):
             width = cfg.corridor_width_px
             if width is None:
                 width = _default_corridor_width_px(maneuver=maneuver, preset=cfg.corridor_preset)
-            normalized[maneuver] = cfg.model_copy(update={"corridor_width_px": int(width)})
+            updates = {"corridor_width_px": int(width)}
+            if not bool(cfg.enabled):
+                updates["allowed"] = False
+            normalized[maneuver] = cfg.model_copy(update=updates)
         if normalized:
             self.maneuvers = normalized
 
@@ -603,10 +606,7 @@ def _normalize_maneuver_config_payload(
     exit_line = normalize_optional_polygon(raw_config.get("exit_line"), frame_width, frame_height)
 
     enabled = bool(raw_config.get("enabled", True))
-    allowed = bool(raw_config.get("allowed", False))
-    has_geometry = bool(movement_path or turn_corridor or exit_zone or exit_line)
-    if not enabled and not allowed and not has_geometry:
-        return {}
+    allowed = enabled and bool(raw_config.get("allowed", False))
 
     return {
         "enabled": enabled,

@@ -588,10 +588,11 @@ export function normalizeLaneManeuvers(lane = {}, laneConfig = {}) {
   MANEUVERS.forEach((maneuver) => {
     const raw = source[maneuver] || {};
     const base = createDefaultManeuverConfig(maneuver, { allowed: false });
+    const enabled = raw.enabled ?? base.enabled;
     maneuvers[maneuver] = {
       ...base,
-      enabled: raw.enabled ?? base.enabled,
-      allowed: raw.allowed ?? allowedSet.has(maneuver),
+      enabled,
+      allowed: enabled ? raw.allowed ?? allowedSet.has(maneuver) : false,
       movement_path: raw.movement_path || [],
       corridor_preset: raw.corridor_preset || base.corridor_preset,
       corridor_width_px: raw.corridor_width_px ?? null,
@@ -707,6 +708,7 @@ export function buildPayload(draft) {
     maneuvers: Object.fromEntries(
       MANEUVERS.map((maneuver) => {
         const cfg = lane.maneuvers?.[maneuver] || {};
+        const enabled = Boolean(cfg.enabled ?? true);
         const normalizeManeuverGeometry = (points, minimumPoints) => {
           const normalized = (points || []).map(([x, y]) => [Number(x), Number(y)]);
           return normalized.length >= minimumPoints ? normalized : null;
@@ -714,8 +716,8 @@ export function buildPayload(draft) {
         return [
           maneuver,
           {
-            enabled: Boolean(cfg.enabled ?? true),
-            allowed: Boolean(cfg.allowed ?? false),
+            enabled,
+            allowed: enabled && Boolean(cfg.allowed ?? false),
             movement_path: normalizeManeuverGeometry(cfg.movement_path, 2),
             corridor_preset: cfg.corridor_preset || (maneuver === "u_turn" ? "wide" : "normal"),
             corridor_width_px: cfg.corridor_width_px == null ? null : Number(cfg.corridor_width_px),
@@ -865,7 +867,7 @@ export function validatePolygonDraft(draft) {
       const exitLine = cfg.exit_line || [];
       const turnCorridor = cfg.turn_corridor || [];
       const isEnabled = Boolean(cfg.enabled ?? true);
-      const isAllowed = Boolean(cfg.allowed ?? false);
+      const isAllowed = isEnabled && Boolean(cfg.allowed ?? false);
 
       if (movementPath.length > 0 && movementPath.length < 2) {
         errors.push(`Đường đi "${getManeuverLabel(maneuver)}" của làn ${lane.lane_id} phải có ít nhất 2 điểm.`);
