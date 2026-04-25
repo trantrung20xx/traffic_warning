@@ -42,25 +42,34 @@
       ],
       "maneuvers": {
         "straight": {
-          "enabled": false,
-          "allowed": true,
-          "corridor_width_px": 72
-        },
-        "right": {
           "enabled": true,
           "allowed": true,
+          "corridor_width_px": 72,
+          "exit_line": [
+            [
+              0.4765625,
+              0.35694444444444445
+            ],
+            [
+              0.52265625,
+              0.3458333333333333
+            ]
+          ]
+        },
+        "right": {
+          "enabled": false,
+          "allowed": false,
           "corridor_width_px": 82
         },
         "left": {
-          "enabled": true,
+          "enabled": false,
           "allowed": false,
           "corridor_width_px": 82
         },
         "u_turn": {
-          "enabled": true,
+          "enabled": false,
           "allowed": false,
-          "corridor_width_px": 137,
-          "corridor_preset": "wide"
+          "corridor_width_px": 137
         }
       }
     },
@@ -88,6 +97,16 @@
           0.9986111111111111
         ]
       ],
+      "commit_line": [
+        [
+          0.4859375,
+          0.7805555555555556
+        ],
+        [
+          0.61328125,
+          0.7847222222222222
+        ]
+      ],
       "allowed_lane_changes": [
         2
       ],
@@ -99,24 +118,37 @@
       "maneuvers": {
         "straight": {
           "enabled": true,
-          "allowed": true,
+          "allowed": false,
+          "movement_path": [
+            [
+              0.56875,
+              0.9972222222222222
+            ],
+            [
+              0.56796875,
+              0.9402777777777778
+            ],
+            [
+              0.50234375,
+              0.3611111111111111
+            ]
+          ],
           "corridor_width_px": 72
         },
         "right": {
           "enabled": true,
-          "allowed": false,
-          "corridor_width_px": 82
-        },
-        "left": {
-          "enabled": true,
           "allowed": true,
           "corridor_width_px": 82
         },
-        "u_turn": {
-          "enabled": true,
+        "left": {
+          "enabled": false,
           "allowed": false,
-          "corridor_width_px": 137,
-          "corridor_preset": "wide"
+          "corridor_width_px": 82
+        },
+        "u_turn": {
+          "enabled": false,
+          "allowed": false,
+          "corridor_width_px": 137
         }
       }
     },
@@ -180,8 +212,7 @@
         "u_turn": {
           "enabled": true,
           "allowed": true,
-          "corridor_width_px": 137,
-          "corridor_preset": "wide"
+          "corridor_width_px": 137
         }
       }
     }
