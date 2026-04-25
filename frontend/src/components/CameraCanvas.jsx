@@ -114,7 +114,18 @@ function drawTrajectory(ctx, points) {
       Number.isFinite(Number(point[0])) &&
       Number.isFinite(Number(point[1])),
   );
-  if (pathPoints.length < 2) return;
+  if (pathPoints.length < 1) return;
+
+  if (pathPoints.length === 1) {
+    const [x, y] = pathPoints[0];
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(Number(x), Number(y), 2.8, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(0, 255, 128, 0.9)";
+    ctx.fill();
+    ctx.restore();
+    return;
+  }
 
   ctx.save();
   ctx.beginPath();

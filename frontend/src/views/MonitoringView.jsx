@@ -261,10 +261,12 @@ export default function MonitoringView({
 		const now = Date.now();
 		const nextMap = new Map(liveTrajectoriesRef.current);
 		const trajectoryUi = monitoringUiConfig.trajectory;
+		const activeVehicleIds = new Set();
 
 		nextVehicles.forEach((vehicle) => {
 			const vehicleId = vehicle.vehicle_id;
 			if (vehicleId == null) return;
+			activeVehicleIds.add(vehicleId);
 
 			const point = getVehicleTrajectoryPoint(vehicle);
 			if (!point) return;
@@ -306,7 +308,8 @@ export default function MonitoringView({
 		liveTrajectoriesRef.current = nextMap;
 		setTrajectoryRows(
 			[...nextMap.values()]
-				.filter((row) => row.points.length >= 2)
+				.filter((row) => activeVehicleIds.has(row.vehicle_id))
+				.filter((row) => row.points.length >= 1)
 				.sort((left, right) => right.lastSeenMs - left.lastSeenMs)
 				.slice(0, trajectoryLimitRef.current)
 				.map(({ lastSeenMs, ...row }) => row),
