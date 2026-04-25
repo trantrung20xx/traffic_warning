@@ -473,6 +473,22 @@ class ViolationLogic:
                 self._enter_approach(turn_state=turn_state, source_lane_id=commit_lane_id, ts=ts)
             self._enter_committed(st=st, turn_state=turn_state, ts=ts)
 
+        # Fallback: cho phép vào pha committed nếu lane chưa cấu hình commit gate/line,
+        # nhưng đã có bằng chứng turn theo corridor/exit ngay trong lane hiện tại.
+        if (
+            turn_state.phase != "committed"
+            and current_lane_id is not None
+            and not self._lane_has_commit_signal(lane_id=current_lane_id)
+            and self._lane_has_turn_evidence(
+                lane_id=current_lane_id,
+                sample=sample,
+                line_events=line_events,
+            )
+        ):
+            if turn_state.phase != "approach" or turn_state.source_lane_id != current_lane_id:
+                self._enter_approach(turn_state=turn_state, source_lane_id=current_lane_id, ts=ts)
+            self._enter_committed(st=st, turn_state=turn_state, ts=ts)
+
         if turn_state.phase != "committed" or turn_state.source_lane_id is None:
             return
 
@@ -1081,6 +1097,24 @@ class ViolationLogic:
             if self._commit_line_shapes.get(lane_id) and f"commit:{lane_id}" in line_events:
                 return lane_id
         return None
+
+    def _lane_has_commit_signal(self, *, lane_id: int) -> bool:
+        return self._commit_gate_shapes.get(lane_id) is not None or self._commit_line_shapes.get(lane_id) is not None
+
+    def _lane_has_turn_evidence(
+        self,
+        *,
+        lane_id: int,
+        sample: TrajectorySample,
+        line_events: set[str],
+    ) -> bool:
+        if self._extract_exit_line_matches(line_events=line_events, source_lane_id=lane_id):
+            return True
+        if self._match_lane_zone_collection(self._lane_exit_zones, lane_id=lane_id, sample=sample):
+            return True
+        if self._match_lane_zone_collection(self._lane_turn_corridors, lane_id=lane_id, sample=sample):
+            return True
+        return False
 
     def _sample_inside_polygon(
         self,

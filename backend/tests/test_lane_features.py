@@ -664,6 +664,61 @@ class LaneFeatureTests(unittest.TestCase):
             [{"lane_id": 1, "violation": "turn_right_not_allowed"}],
         )
 
+    def test_illegal_turn_still_detects_when_commit_geometry_missing(self) -> None:
+        logic = self._build_hybrid_logic(
+            {
+                "camera_id": "cam_test",
+                "frame_width": 100,
+                "frame_height": 100,
+                "turn_corridors": {
+                    "right": [[0.20, 0.72], [0.45, 0.72], [0.45, 0.95], [0.20, 0.95]]
+                },
+                "lanes": [
+                    {
+                        "lane_id": 1,
+                        "polygon": [[0.0, 0.0], [0.49, 0.0], [0.49, 1.0], [0.0, 1.0]],
+                        # Không có approach_zone/commit_gate/commit_line.
+                        "allowed_maneuvers": ["straight"],
+                        "allowed_lane_changes": [1],
+                        "allowed_vehicle_types": ["car"],
+                    }
+                ],
+            },
+            turn_region_min_hits=2,
+        )
+        ts = datetime(2026, 4, 9, 8, 0, 0, tzinfo=timezone.utc)
+
+        self.assertEqual(
+            logic.update_and_maybe_generate_violation(
+                vehicle_id=411,
+                vehicle_type="car",
+                lane_id=1,
+                bbox_xyxy=[20, 50, 30, 70],
+                ts=ts,
+            ),
+            [],
+        )
+        self.assertEqual(
+            logic.update_and_maybe_generate_violation(
+                vehicle_id=411,
+                vehicle_type="car",
+                lane_id=1,
+                bbox_xyxy=[25, 60, 35, 80],
+                ts=ts + timedelta(milliseconds=100),
+            ),
+            [],
+        )
+        self.assertViolationsEqual(
+            logic.update_and_maybe_generate_violation(
+                vehicle_id=411,
+                vehicle_type="car",
+                lane_id=1,
+                bbox_xyxy=[28, 62, 38, 82],
+                ts=ts + timedelta(milliseconds=200),
+            ),
+            [{"lane_id": 1, "violation": "turn_right_not_allowed"}],
+        )
+
     def test_illegal_turn_dedup_and_rearm_follow_event_lifecycle(self) -> None:
         logic = self._build_hybrid_logic(
             {
