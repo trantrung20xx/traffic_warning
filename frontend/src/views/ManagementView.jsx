@@ -17,12 +17,14 @@ import {
   buildPayload,
   createCameraDraft,
   createEmptyLane,
+  getEditTargetGeometryNoun,
   getEditTargetLabel,
   getEditTargetMinimumPoints,
   getManeuverLabel,
   getTargetPoints,
   getVehicleTypeLabel,
   isLineEditTarget,
+  isPolygonEditTarget,
   normalizeCameraDetail,
   polygonSelfIntersects,
   validatePolygonDraft,
@@ -254,10 +256,11 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
     const targetLabel = getEditTargetLabel(editTarget, selectedLane?.lane_id ?? null, selectedManeuver);
     const warnings = [];
     const minimumPoints = getEditTargetMinimumPoints(editTarget);
+    const geometryNoun = getEditTargetGeometryNoun(editTarget);
     if (selectedPoints.length > 0 && selectedPoints.length < minimumPoints) {
-      warnings.push(`${targetLabel} hiện có dưới ${minimumPoints} điểm, chưa đủ để tạo vùng hợp lệ.`);
+      warnings.push(`${targetLabel} hiện có dưới ${minimumPoints} điểm, chưa đủ để tạo ${geometryNoun} hợp lệ.`);
     }
-    if (!isLineEditTarget(editTarget) && selectedPoints.length >= 4 && polygonSelfIntersects(selectedPoints)) {
+    if (isPolygonEditTarget(editTarget) && selectedPoints.length >= 4 && polygonSelfIntersects(selectedPoints)) {
       warnings.push(`${targetLabel} đang tự cắt nhau, nên chỉnh lại để tránh vùng hình học khó kiểm soát.`);
     }
     return { warnings };
@@ -408,7 +411,7 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
     }
     updateTargetGeometry((points) => [...points, point]);
     setSelectedVertexIndex(selectedPoints.length);
-    setMessage("Đã thêm điểm mới vào polygon.");
+    setMessage(`Đã thêm điểm mới vào ${getEditTargetGeometryNoun(editTarget)}.`);
   };
 
   const replaceTargetPolygon = (nextPoints) => {

@@ -2,6 +2,9 @@ export const MANEUVERS = ["left", "straight", "right", "u_turn"];
 export const LANE_EDIT_TARGETS = ["lane_polygon", "approach_zone", "commit_gate", "commit_line"];
 export const MANEUVER_EDIT_TARGETS = ["movement_path", "exit_line", "exit_zone"];
 export const CORRIDOR_PRESET_OPTIONS = ["narrow", "normal", "wide"];
+const POLYGON_GEOMETRY_TARGETS = ["lane_polygon", "approach_zone", "commit_gate", "exit_zone", "turn_corridor"];
+const LINE_GEOMETRY_TARGETS = ["commit_line", "exit_line"];
+const POLYLINE_GEOMETRY_TARGETS = ["movement_path"];
 
 export const MANEUVER_LABELS = {
   left: "Rẽ trái",
@@ -474,8 +477,30 @@ export function getVehicleTypeLabel(value) {
   return VEHICLE_TYPE_LABELS[value] || value;
 }
 
+export function getEditTargetGeometryType(target) {
+  if (LINE_GEOMETRY_TARGETS.includes(target)) return "line";
+  if (POLYLINE_GEOMETRY_TARGETS.includes(target)) return "polyline";
+  if (POLYGON_GEOMETRY_TARGETS.includes(target)) return "polygon";
+  return "polygon";
+}
+
 export function isLineEditTarget(target) {
-  return target === "commit_line" || target === "exit_line";
+  return getEditTargetGeometryType(target) === "line";
+}
+
+export function isPolylineEditTarget(target) {
+  return getEditTargetGeometryType(target) === "polyline";
+}
+
+export function isPolygonEditTarget(target) {
+  return getEditTargetGeometryType(target) === "polygon";
+}
+
+export function getEditTargetGeometryNoun(target) {
+  const geometryType = getEditTargetGeometryType(target);
+  if (geometryType === "line") return "đường";
+  if (geometryType === "polyline") return "đường đi";
+  return "vùng";
 }
 
 export function parseEditTarget(target) {

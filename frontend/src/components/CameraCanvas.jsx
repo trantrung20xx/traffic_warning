@@ -1,19 +1,33 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { drawBackgroundImage, useBackgroundImage } from "./canvas/BackgroundImageLayer";
-import { drawPolygon } from "./canvas/PolygonLayer";
+import { drawCorridorPreview, drawPolygon, drawPolyline } from "./canvas/PolygonLayer";
 import {
   denormalizeLane,
+  getEditTargetGeometryNoun,
   getEditTargetLabel,
   getManeuverLabel,
   getTargetPoints,
   getVehicleTypeLabel,
   isLineEditTarget,
+  isPolygonEditTarget,
+  isPolylineEditTarget,
   normalizePoint,
   parseEditTarget,
 } from "../utils";
 
 const VERTEX_HIT_RADIUS = 12;
 const EDGE_HIT_DISTANCE = 10;
+const CORRIDOR_BASE_WIDTH_BY_MANEUVER = {
+  straight: 72,
+  left: 82,
+  right: 82,
+  u_turn: 104,
+};
+const CORRIDOR_PRESET_FACTOR = {
+  narrow: 0.78,
+  normal: 1,
+  wide: 1.32,
+};
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
@@ -71,14 +85,15 @@ function findClosestVertex(points, point) {
   return best;
 }
 
-function findClosestEdge(points, point) {
+function findClosestEdge(points, point, options = {}) {
   if (!points || points.length < 2) return null;
-  const edgeCount = points.length >= 3 ? points.length : points.length - 1;
+  const closed = Boolean(options.closed && points.length >= 3);
+  const edgeCount = closed ? points.length : points.length - 1;
   let best = null;
 
   for (let index = 0; index < edgeCount; index += 1) {
     const start = points[index];
-    const end = points[(index + 1) % points.length];
+    const end = closed ? points[(index + 1) % points.length] : points[index + 1];
     const projection = projectPointToSegment(point, start, end);
     if (projection.distance <= EDGE_HIT_DISTANCE && (!best || projection.distance < best.distance)) {
       best = { index, distance: projection.distance, point: projection.point };
@@ -86,6 +101,17 @@ function findClosestEdge(points, point) {
   }
 
   return best;
+}
+
+function getPreviewCorridorWidthPx(maneuver, cfg) {
+  const configuredWidth = Number(cfg?.corridor_width_px);
+  if (Number.isFinite(configuredWidth) && configuredWidth > 0) {
+    return configuredWidth;
+  }
+  const preset = cfg?.corridor_preset || (maneuver === "u_turn" ? "wide" : "normal");
+  const base = CORRIDOR_BASE_WIDTH_BY_MANEUVER[maneuver] || 82;
+  const factor = CORRIDOR_PRESET_FACTOR[preset] || 1;
+  return Math.max(Math.round(base * factor), 16);
 }
 
 function drawTrajectory(ctx, points) {
@@ -200,7 +226,7 @@ export default function CameraCanvas({
     setHoverVertexIndex(null);
   }, [editTarget, selectedLaneId, editable]);
 
-  const replaceEditablePolygon = (points) => {
+  const replaceEditableGeometry = (points) => {
     if (!onPolygonReplace) return;
     onPolygonReplace(points.map((point) => normalizePoint(clampPoint(point, frameWidth, frameHeight), frameWidth, frameHeight)));
   };
@@ -233,11 +259,11 @@ export default function CameraCanvas({
     }
 
     setHoverVertexIndex(null);
-    if (isLineEditTarget(editTarget)) {
+    if (!isPolygonEditTarget(editTarget) && !isPolylineEditTarget(editTarget)) {
       setHoverEdge(null);
       return;
     }
-    setHoverEdge(findClosestEdge(editablePointsRef.current, point));
+    setHoverEdge(findClosestEdge(editablePointsRef.current, point, { closed: isPolygonEditTarget(editTarget) }));
   };
 
   useEffect(() => {
@@ -295,11 +321,13 @@ export default function CameraCanvas({
           strokeStyle: "rgba(230, 126, 34, 0.95)",
           label: "vạch bắt đầu rẽ",
           dashed: false,
+          geometryType: "line",
         },
       ].forEach((geometry) => {
         if (geometry.points.length < 2) return;
         const isEditableGeometry = editable && lane.lane_id === selectedLaneId && editTarget === geometry.key;
-        drawPolygon(ctx, geometry.points, {
+        const drawGeometry = geometry.geometryType === "line" ? drawPolyline : drawPolygon;
+        drawGeometry(ctx, geometry.points, {
           dashed: geometry.dashed,
           strokeStyle: isEditableGeometry ? "rgba(255, 209, 102, 1)" : geometry.strokeStyle,
           lineWidth: isEditableGeometry ? 3 : 2,
@@ -326,13 +354,18 @@ export default function CameraCanvas({
 
         if (movementPath.length >= 2) {
           const isEditablePath = editable && isSelectedManeuver && editTarget === "movement_path";
-          drawPolygon(ctx, movementPath, {
+          drawCorridorPreview(ctx, movementPath, getPreviewCorridorWidthPx(maneuver, cfg), {
+            strokeStyle: isEditablePath ? "rgba(255, 209, 102, 0.18)" : "rgba(52, 152, 219, 0.18)",
+          });
+          drawPolyline(ctx, movementPath, {
             dashed: true,
             strokeStyle: isEditablePath ? "rgba(255, 209, 102, 1)" : "rgba(52, 152, 219, 0.95)",
             lineWidth: isEditablePath ? 3 : 2,
             isEditableTarget: isEditablePath,
             hoverVertexIndex,
             selectedVertexIndex,
+            showDirection: true,
+            arrowSize: isEditablePath ? 15 : 12,
           });
           const anchor = movementPath[0];
           if (anchor) {
@@ -340,7 +373,7 @@ export default function CameraCanvas({
             ctx.font = "12px sans-serif";
             ctx.fillText(`${maneuverLabel} · lane ${lane.lane_id}`, anchor[0] + 6, anchor[1] - 6);
           }
-        } else if (turnCorridor.length >= 2) {
+        } else if (turnCorridor.length >= 3) {
           drawPolygon(ctx, turnCorridor, {
             dashed: true,
             strokeStyle: "rgba(52, 152, 219, 0.65)",
@@ -362,7 +395,7 @@ export default function CameraCanvas({
 
         if (exitLine.length >= 2) {
           const isEditableExitLine = editable && isSelectedManeuver && editTarget === "exit_line";
-          drawPolygon(ctx, exitLine, {
+          drawPolyline(ctx, exitLine, {
             dashed: false,
             strokeStyle: isEditableExitLine ? "rgba(255, 209, 102, 1)" : "rgba(230, 126, 34, 0.95)",
             lineWidth: isEditableExitLine ? 3 : 2,
@@ -374,7 +407,7 @@ export default function CameraCanvas({
       });
     });
 
-    if (editable && !isLineEditTarget(editTarget) && hoverEdge?.point) {
+    if (editable && (isPolygonEditTarget(editTarget) || isPolylineEditTarget(editTarget)) && hoverEdge?.point) {
       const [hx, hy] = hoverEdge.point;
       ctx.beginPath();
       ctx.arc(hx, hy, 6, 0, Math.PI * 2);
@@ -441,12 +474,22 @@ export default function CameraCanvas({
     }
 
     if (editable) {
-      // Cách chỉnh này giống công cụ cấu hình camera giao thông thực tế: kéo từng đỉnh
-      // hoặc kéo cả vùng. Không hỗ trợ scale/rotate vì camera cố định và luật phụ thuộc pixel chính xác.
+      // Camera cố định nên chỉ hỗ trợ kéo điểm/đoạn/vùng, không scale/rotate.
+      const editTargetLabel = getEditTargetLabel(
+        editTarget,
+        parsedEditTarget.scope === "lane" || parsedEditTarget.scope === "lane_maneuver" ? selectedLaneId : null,
+        selectedManeuver,
+      );
+      const geometryNoun = getEditTargetGeometryNoun(editTarget);
+      const editHint = isPolygonEditTarget(editTarget)
+        ? "kéo điểm để chỉnh, kéo trong vùng để di chuyển, click cạnh để chèn điểm."
+        : isPolylineEditTarget(editTarget)
+          ? "kéo điểm để chỉnh, click đoạn để chèn điểm."
+          : "kéo điểm hoặc kéo đường để di chuyển.";
       ctx.fillStyle = "rgba(255,255,255,0.78)";
       ctx.font = "12px sans-serif";
       ctx.fillText(
-        `${getEditTargetLabel(editTarget, parsedEditTarget.scope === "lane" || parsedEditTarget.scope === "lane_maneuver" ? selectedLaneId : null, selectedManeuver)}: keo diem de chinh, keo trong vung de di chuyen, click canh de chen diem.`,
+        `${editTargetLabel} (${geometryNoun}): ${editHint}`,
         14,
         22,
       );
@@ -475,6 +518,9 @@ export default function CameraCanvas({
     const point = getCanvasPoint(event);
     const points = editablePointsRef.current;
     const vertex = findClosestVertex(points, point);
+    const targetIsLine = isLineEditTarget(editTarget);
+    const targetIsPolygon = isPolygonEditTarget(editTarget);
+    const targetIsPolyline = isPolylineEditTarget(editTarget);
 
     if (vertex) {
       onVertexSelect?.(vertex.index);
@@ -483,11 +529,11 @@ export default function CameraCanvas({
       return;
     }
 
-    const edge = findClosestEdge(points, point);
-    if (edge && onPolygonReplace && !isLineEditTarget(editTarget)) {
+    const edge = findClosestEdge(points, point, { closed: targetIsPolygon });
+    if (edge && onPolygonReplace && (targetIsPolygon || targetIsPolyline)) {
       const nextPoint = clampPoint(edge.point, frameWidth, frameHeight);
       const nextPoints = [...points.slice(0, edge.index + 1), nextPoint, ...points.slice(edge.index + 1)];
-      replaceEditablePolygon(nextPoints);
+      replaceEditableGeometry(nextPoints);
       onVertexSelect?.(edge.index + 1);
       dragStateRef.current = { mode: "vertex", vertexIndex: edge.index + 1 };
       setHoverVertexIndex(edge.index + 1);
@@ -496,9 +542,9 @@ export default function CameraCanvas({
       return;
     }
 
-    if (isLineEditTarget(editTarget) && edge && onPolygonReplace) {
+    if (targetIsLine && edge && onPolygonReplace) {
       dragStateRef.current = {
-        mode: "polygon",
+        mode: "geometry",
         startPoint: point,
         startPoints: points.map(([x, y]) => [x, y]),
       };
@@ -506,9 +552,9 @@ export default function CameraCanvas({
       return;
     }
 
-    if (points.length >= 3 && pointInPolygon(point, points) && onPolygonReplace) {
+    if (targetIsPolygon && points.length >= 3 && pointInPolygon(point, points) && onPolygonReplace) {
       dragStateRef.current = {
-        mode: "polygon",
+        mode: "geometry",
         startPoint: point,
         startPoints: points.map(([x, y]) => [x, y]),
       };
@@ -532,7 +578,7 @@ export default function CameraCanvas({
     }
 
     if (dragState.mode === "vertex") {
-      replaceEditablePolygon(
+      replaceEditableGeometry(
         editablePointsRef.current.map((vertex, index) =>
           index === dragState.vertexIndex ? clampPoint(point, frameWidth, frameHeight) : vertex,
         ),
@@ -540,10 +586,10 @@ export default function CameraCanvas({
       return;
     }
 
-    if (dragState.mode === "polygon") {
+    if (dragState.mode === "geometry") {
       const dx = point[0] - dragState.startPoint[0];
       const dy = point[1] - dragState.startPoint[1];
-      replaceEditablePolygon(
+      replaceEditableGeometry(
         dragState.startPoints.map(([x, y]) => clampPoint([x + dx, y + dy], frameWidth, frameHeight)),
       );
     }
@@ -563,7 +609,7 @@ export default function CameraCanvas({
       if (!dragState) return;
 
       if (dragState.mode === "vertex") {
-        replaceEditablePolygon(
+        replaceEditableGeometry(
           editablePointsRef.current.map((vertex, index) =>
             index === dragState.vertexIndex ? clampPoint(point, frameWidth, frameHeight) : vertex,
           ),
@@ -571,10 +617,10 @@ export default function CameraCanvas({
         return;
       }
 
-      if (dragState.mode === "polygon") {
+      if (dragState.mode === "geometry") {
         const dx = point[0] - dragState.startPoint[0];
         const dy = point[1] - dragState.startPoint[1];
-        replaceEditablePolygon(
+        replaceEditableGeometry(
           dragState.startPoints.map(([x, y]) => clampPoint([x + dx, y + dy], frameWidth, frameHeight)),
         );
       }
