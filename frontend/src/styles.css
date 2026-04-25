@@ -472,8 +472,30 @@ select {
   flex-wrap: wrap;
 }
 
+.monitor-trajectory-controls {
+  display: flex;
+  align-items: end;
+  justify-content: flex-start;
+  gap: 10px;
+  flex-wrap: nowrap;
+}
+
 .monitor-trajectory-limit {
-  width: min(260px, 100%);
+	flex: 0 0 220px;
+	width: 220px;
+	max-width: 220px;
+}
+
+.monitor-trajectory-toggle {
+	flex: 0 0 auto;
+	align-self: end;
+	white-space: nowrap;
+}
+
+.monitor-trajectory-status {
+	align-self: end;
+	margin-left: auto;
+	margin-bottom: 2px;
 }
 
 .video-stage {
