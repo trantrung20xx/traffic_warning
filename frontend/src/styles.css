@@ -39,6 +39,10 @@ select {
   font: inherit;
 }
 
+.app-icon {
+  flex: 0 0 auto;
+}
+
 .app-shell {
   padding: 24px;
 }
@@ -51,10 +55,64 @@ select {
   margin-bottom: 20px;
 }
 
+.topbar-title,
+.title-with-icon,
+.field-label-with-icon,
+.icon-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.title-with-icon {
+  gap: 10px;
+}
+
+.panel-kicker + .title-with-icon {
+  margin-top: 8px;
+}
+
+.topbar-title {
+  gap: 12px;
+}
+
+.topbar-icon,
+.panel-title-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(160, 210, 229, 0.18);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--accent);
+}
+
+.topbar-icon {
+  width: 46px;
+  height: 46px;
+  border-radius: 14px;
+}
+
+.panel-title-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 11px;
+}
+
+.panel-title-icon.danger {
+  color: var(--danger);
+  border-color: rgba(255, 107, 87, 0.24);
+  background: rgba(255, 107, 87, 0.1);
+}
+
 .topbar h1,
 .panel-header h2,
 .panel-header h3 {
   margin: 4px 0 0;
+}
+
+.title-with-icon h2,
+.title-with-icon h3 {
+  margin: 0;
 }
 
 .eyebrow,
@@ -84,6 +142,10 @@ select {
 
 .nav-tab,
 .button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   padding: 11px 16px;
   cursor: pointer;
 }
@@ -120,6 +182,17 @@ select {
   background: rgba(255, 255, 255, 0.02);
 }
 
+.button.dark {
+  background: rgba(3, 14, 24, 0.82);
+  border-color: rgba(160, 210, 229, 0.18);
+  color: #dceaf0;
+}
+
+.button.dark:hover:not(:disabled) {
+  background: rgba(10, 27, 42, 0.96);
+  border-color: rgba(160, 210, 229, 0.28);
+}
+
 .button.export-button {
   background: linear-gradient(135deg, rgba(0, 214, 143, 0.36), rgba(33, 191, 115, 0.3));
   border-color: rgba(70, 214, 154, 0.48);
@@ -136,6 +209,17 @@ select {
 .badge.danger {
   background: rgba(255, 107, 87, 0.16);
   border-color: rgba(255, 107, 87, 0.28);
+}
+
+.button.danger.confirm-danger {
+  background: linear-gradient(135deg, rgba(255, 107, 87, 0.95), rgba(201, 52, 45, 0.9));
+  border-color: rgba(255, 151, 130, 0.68);
+  color: #fff;
+  box-shadow: 0 12px 28px rgba(255, 107, 87, 0.2);
+}
+
+.button.danger.confirm-danger:hover:not(:disabled) {
+  background: linear-gradient(135deg, rgba(255, 126, 107, 1), rgba(219, 61, 53, 0.96));
 }
 
 .workspace,
@@ -373,6 +457,20 @@ select {
   flex-direction: column;
   gap: 8px;
   color: var(--muted);
+}
+
+.field-label-with-icon,
+.management-subcard-title.icon-label,
+.editor-action-toolbar-label.icon-label,
+.panel-kicker.icon-label {
+  color: var(--muted);
+}
+
+.field-label-with-icon .app-icon,
+.management-subcard-title.icon-label .app-icon,
+.editor-action-toolbar-label.icon-label .app-icon,
+.panel-kicker.icon-label .app-icon {
+  color: var(--accent-soft);
 }
 
 .field-inline {
@@ -695,6 +793,19 @@ select {
   font-weight: 700;
 }
 
+.row-title.icon-label,
+.row-meta.icon-label {
+  align-items: center;
+}
+
+.row-title.icon-label .app-icon {
+  color: var(--accent-soft);
+}
+
+.violation-row .row-title.icon-label .app-icon {
+  color: var(--danger);
+}
+
 .row-sub,
 .row-meta,
 .bar-subtitle {
@@ -703,6 +814,9 @@ select {
 }
 
 .badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   padding: 6px 10px;
   border-radius: 999px;
   border: 1px solid var(--border);
@@ -732,11 +846,22 @@ select {
   border: 1px solid rgba(255, 255, 255, 0.05);
 }
 
-.stat-pill span {
+.stat-pill-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.stat-pill-label span {
   display: block;
   color: var(--muted);
   font-size: 13px;
-  margin-bottom: 8px;
+}
+
+.stat-pill-label .app-icon {
+  color: var(--accent-soft);
 }
 
 .stat-pill strong {
@@ -952,6 +1077,158 @@ select {
   box-shadow: var(--shadow);
 }
 
+.toast-viewport {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 1200;
+  width: min(420px, calc(100vw - 32px));
+  pointer-events: none;
+}
+
+.app-toast {
+  pointer-events: auto;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(160, 210, 229, 0.2);
+  background: linear-gradient(180deg, rgba(8, 29, 44, 0.98), rgba(12, 37, 55, 0.96));
+  box-shadow: 0 22px 54px rgba(0, 0, 0, 0.36);
+  animation: toast-slide-up 180ms ease-out;
+}
+
+.app-toast.success {
+  border-color: rgba(0, 214, 143, 0.34);
+}
+
+.app-toast.warning {
+  border-color: rgba(255, 190, 61, 0.36);
+}
+
+.app-toast.danger {
+  border-color: rgba(255, 107, 87, 0.38);
+}
+
+.toast-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 13px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.app-toast.success .toast-icon {
+  color: var(--accent);
+  background: rgba(0, 214, 143, 0.12);
+}
+
+.app-toast.warning .toast-icon {
+  color: var(--warning);
+  background: rgba(255, 190, 61, 0.12);
+}
+
+.app-toast.danger .toast-icon {
+  color: var(--danger);
+  background: rgba(255, 107, 87, 0.12);
+}
+
+.toast-content {
+  min-width: 0;
+  color: var(--text);
+  line-height: 1.45;
+}
+
+.toast-close-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.toast-close-button:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+@keyframes toast-slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.confirm-dialog {
+  width: min(500px, 100%);
+  padding: 20px;
+  border-radius: 22px;
+  border: 1px solid rgba(160, 210, 229, 0.18);
+  background: linear-gradient(180deg, rgba(8, 29, 44, 0.99), rgba(12, 37, 55, 0.97));
+  box-shadow: var(--shadow);
+}
+
+.confirm-dialog-header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 14px;
+}
+
+.confirm-dialog-header h3 {
+  margin: 4px 0 0;
+}
+
+.confirm-dialog-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 46px;
+  border-radius: 15px;
+  border: 1px solid rgba(160, 210, 229, 0.16);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--accent-soft);
+}
+
+.confirm-dialog-icon.danger {
+  color: var(--danger);
+  border-color: rgba(255, 107, 87, 0.3);
+  background: rgba(255, 107, 87, 0.12);
+}
+
+.confirm-dialog-icon.warning {
+  color: var(--warning);
+  border-color: rgba(255, 190, 61, 0.3);
+  background: rgba(255, 190, 61, 0.12);
+}
+
+.confirm-dialog-description {
+  margin: 16px 0 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.confirm-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 20px;
+}
+
 .violation-modal-header,
 .violation-modal-subtitle,
 .violation-info-stack {
@@ -1081,6 +1358,9 @@ select {
 
 .lane-chip-main {
   flex: 1 1 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   border: 0;
   background: transparent;
   color: inherit;
@@ -1299,6 +1579,22 @@ select {
   min-width: max-content;
 }
 
+.polygon-history-buttons {
+  display: inline-flex;
+  align-items: stretch;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.editor-actions .polygon-history-buttons .button,
+.icon-button {
+  flex: 0 0 38px;
+  min-width: 38px;
+  width: 38px;
+  padding-left: 8px;
+  padding-right: 8px;
+}
+
 .editor-actions .button svg {
   flex: 0 0 auto;
 }
@@ -1309,12 +1605,6 @@ select {
   justify-content: center;
   min-width: max-content;
   white-space: nowrap;
-}
-
-.toolbar-note {
-  margin-top: 10px;
-  color: var(--muted);
-  font-size: 13px;
 }
 
 .compact-button {
@@ -1522,6 +1812,10 @@ select {
   color: #ffe0a3;
 }
 
+.lane-editor-message {
+  margin-top: 14px;
+}
+
 .empty-state.slim {
   padding: 8px 0;
   background: transparent;
@@ -1611,9 +1905,29 @@ select {
     padding: 12px;
   }
 
+  .toast-viewport {
+    left: 14px;
+    right: 14px;
+    bottom: 14px;
+    width: auto;
+  }
+
   .violation-modal {
     padding: 16px;
     border-radius: 20px;
+  }
+
+  .confirm-dialog {
+    padding: 16px;
+    border-radius: 20px;
+  }
+
+  .confirm-dialog-actions {
+    flex-direction: column-reverse;
+  }
+
+  .confirm-dialog-actions .button {
+    width: 100%;
   }
 
   .violation-media-frame {

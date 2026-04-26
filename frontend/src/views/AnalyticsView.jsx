@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import AppIcon from "../components/AppIcon";
 import SimpleBarChart from "../components/SimpleBarChart";
 import StatPill from "../components/StatPill";
 import TimeSeriesChart from "../components/TimeSeriesChart";
@@ -199,11 +200,19 @@ export default function AnalyticsView({ cameras, selectedCameraId, onSelectCamer
           <div className="panel-header">
             <div>
               <div className="panel-kicker">Bảng điều khiển phân tích</div>
-              <h2>Thống kê theo camera, địa điểm và toàn hệ thống</h2>
+              <div className="title-with-icon">
+                <span className="panel-title-icon">
+                  <AppIcon name="analytics" size={20} />
+                </span>
+                <h2>Thống kê theo camera, địa điểm và toàn hệ thống</h2>
+              </div>
             </div>
             <div className="filter-row">
               <label className="field">
-                <span>Camera</span>
+                <span className="field-label-with-icon">
+                  <AppIcon name="camera" />
+                  Camera
+                </span>
                 <select
                   value={cameraFilter}
                   onChange={(event) => {
@@ -220,11 +229,17 @@ export default function AnalyticsView({ cameras, selectedCameraId, onSelectCamer
                 </select>
               </label>
               <label className="field">
-                <span>Từ thời điểm</span>
+                <span className="field-label-with-icon">
+                  <AppIcon name="calendar-clock" />
+                  Từ thời điểm
+                </span>
                 <input type="datetime-local" value={fromInput} onChange={(event) => setFromInput(event.target.value)} />
               </label>
               <label className="field">
-                <span>Đến thời điểm</span>
+                <span className="field-label-with-icon">
+                  <AppIcon name="clock" />
+                  Đến thời điểm
+                </span>
                 <input
                   type="datetime-local"
                   value={toInput}
@@ -241,10 +256,10 @@ export default function AnalyticsView({ cameras, selectedCameraId, onSelectCamer
           </div>
 
           <div className="summary-grid">
-            <StatPill label="Tổng vi phạm" value={overview.total_violations ?? 0} />
-            <StatPill label="Camera có vi phạm" value={overview.total_cameras ?? 0} />
-            <StatPill label="Bản ghi lịch sử" value={history.length} />
-            <StatPill label="Trạng thái" value={loading ? "Đang cập nhật" : "Ổn định"} />
+            <StatPill label="Tổng vi phạm" value={overview.total_violations ?? 0} icon="shield-alert" />
+            <StatPill label="Camera có vi phạm" value={overview.total_cameras ?? 0} icon="camera" />
+            <StatPill label="Bản ghi lịch sử" value={history.length} icon="history" />
+            <StatPill label="Trạng thái" value={loading ? "Đang cập nhật" : "Ổn định"} icon={loading ? "activity" : "check-circle"} />
           </div>
 
           <div className="chart-grid">
@@ -259,7 +274,12 @@ export default function AnalyticsView({ cameras, selectedCameraId, onSelectCamer
           <div className="panel-header compact">
             <div>
               <div className="panel-kicker">Theo khung thời gian</div>
-              <h3>Biểu đồ vi phạm theo {getTimeSeriesGranularityLabel(timeSeriesGranularity)}</h3>
+              <div className="title-with-icon">
+                <span className="panel-title-icon">
+                  <AppIcon name="activity" size={18} />
+                </span>
+                <h3>Biểu đồ vi phạm theo {getTimeSeriesGranularityLabel(timeSeriesGranularity)}</h3>
+              </div>
             </div>
           </div>
           <TimeSeriesChart series={chartSeries} granularity={timeSeriesGranularity} chartConfig={chartConfig} />
@@ -269,7 +289,12 @@ export default function AnalyticsView({ cameras, selectedCameraId, onSelectCamer
           <div className="panel-header compact">
             <div>
               <div className="panel-kicker">Lịch sử</div>
-              <h3>Lịch sử xe vi phạm</h3>
+              <div className="title-with-icon">
+                <span className="panel-title-icon danger">
+                  <AppIcon name="history" size={18} />
+                </span>
+                <h3>Lịch sử xe vi phạm</h3>
+              </div>
             </div>
             <div className="history-header-actions">
               <button
@@ -278,6 +303,7 @@ export default function AnalyticsView({ cameras, selectedCameraId, onSelectCamer
                 onClick={() => handleExport("csv")}
                 disabled={loading || Boolean(exportingFormat)}
               >
+                <AppIcon name="file-down" />
                 {exportingFormat === "csv" ? "Đang xuất CSV..." : "Export CSV"}
               </button>
               <button
@@ -286,9 +312,13 @@ export default function AnalyticsView({ cameras, selectedCameraId, onSelectCamer
                 onClick={() => handleExport("xlsx")}
                 disabled={loading || Boolean(exportingFormat)}
               >
+                <AppIcon name="excel" />
                 {exportingFormat === "xlsx" ? "Đang xuất Excel..." : "Export Excel"}
               </button>
-              <div className="badge">{history.length} vi phạm</div>
+              <div className="badge">
+                <AppIcon name="shield-alert" />
+                {history.length} vi phạm
+              </div>
             </div>
           </div>
           {exportMessage ? <div className="message-bar warning">{exportMessage}</div> : null}

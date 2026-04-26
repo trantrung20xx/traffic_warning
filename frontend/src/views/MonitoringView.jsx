@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import AppIcon from "../components/AppIcon";
 import CameraCanvas from "../components/CameraCanvas";
 import StatPill from "../components/StatPill";
 import ViolationDetailModal from "../components/ViolationDetailModal";
@@ -406,10 +407,18 @@ export default function MonitoringView({
 							<div className="panel-kicker">
 								Luồng hình và vi phạm thời gian thực
 							</div>
-							<h2>Màn hình giám sát camera</h2>
+							<div className="title-with-icon">
+								<span className="panel-title-icon">
+									<AppIcon name="video" size={20} />
+								</span>
+								<h2>Màn hình giám sát camera</h2>
+							</div>
 						</div>
 						<label className="field field-inline monitor-camera-picker">
-							<span>Camera</span>
+							<span className="field-label-with-icon">
+								<AppIcon name="camera" />
+								Camera
+							</span>
 							<select
 								className="monitor-camera-select"
 								value={selectedCameraId || ""}
@@ -438,24 +447,30 @@ export default function MonitoringView({
 					{selectedCameraId && laneConfig ? (
 						<>
 							<div className="camera-meta-grid">
-								<StatPill label="Camera ID" value={camera.camera_id} />
+								<StatPill label="Camera ID" value={camera.camera_id} icon="camera" />
 								<StatPill
 									label="Loại camera"
 									value={getCameraTypeLabel(camera.camera_type)}
+									icon="video"
 								/>
 								<StatPill
 									label="Hướng quan sát"
 									value={camera.view_direction || "-"}
+									icon="navigation"
 								/>
 								<StatPill
 									label="Vị trí"
 									value={`${camera.location.road_name}${camera.location.intersection_name ? ` · ${camera.location.intersection_name}` : ""}`}
+									icon="map-pin"
 								/>
 							</div>
 							<div className="monitor-overlay-toolbar">
 								<div className="monitor-trajectory-controls">
 									<label className="field monitor-trajectory-limit">
-										<span>Số quỹ đạo hiển thị</span>
+										<span className="field-label-with-icon">
+											<AppIcon name="route" />
+											Số quỹ đạo hiển thị
+										</span>
 										<input
 											type="number"
 											disabled={!showTrajectoryOverlay}
@@ -479,6 +494,7 @@ export default function MonitoringView({
 										onClick={() =>
 											setShowTrajectoryOverlay((value) => !value)
 										}>
+										<AppIcon name={showTrajectoryOverlay ? "eye-off" : "eye"} />
 										{showTrajectoryOverlay
 											? "Ẩn quỹ đạo"
 											: "Hiện quỹ đạo"}
@@ -490,6 +506,7 @@ export default function MonitoringView({
 											? "badge success monitor-trajectory-status"
 											: "badge subtle monitor-trajectory-status"
 									}>
+									<AppIcon name={showTrajectoryOverlay ? "route" : "eye-off"} />
 									{showTrajectoryOverlay
 										? `Quỹ đạo đang theo dõi · ${trajectoryRows.length}`
 										: "Theo dõi quỹ đạo đang tắt"}
@@ -522,9 +539,17 @@ export default function MonitoringView({
 						<div className="panel-header compact">
 							<div>
 								<div className="panel-kicker">Thời gian thực</div>
-								<h3>Xe đang được theo dõi</h3>
+								<div className="title-with-icon">
+									<span className="panel-title-icon">
+										<AppIcon name="car" size={18} />
+									</span>
+									<h3>Xe đang được theo dõi</h3>
+								</div>
 							</div>
-							<div className="badge">{vehicles.length} xe</div>
+							<div className="badge">
+								<AppIcon name="car" />
+								{vehicles.length} xe
+							</div>
 						</div>
 						<div className="entity-list tracked-vehicle-list">
 							{orderedVehicles.length === 0 ? (
@@ -537,7 +562,8 @@ export default function MonitoringView({
 									className="list-row"
 									key={`${vehicle.vehicle_id}-${vehicle.lane_id ?? "na"}`}>
 									<div>
-										<div className="row-title">
+										<div className="row-title icon-label">
+											<AppIcon name="car" />
 											#{vehicle.vehicle_id} ·{" "}
 											{getVehicleTypeLabel(vehicle.vehicle_type)}
 										</div>
@@ -555,6 +581,7 @@ export default function MonitoringView({
 												? "badge success"
 												: "badge subtle"
 										}>
+										<AppIcon name={vehicle.bbox ? "check-circle" : "clock"} />
 										{vehicle.bbox ? "Đang theo dõi" : "Chờ xử lý"}
 									</div>
 								</article>
@@ -567,9 +594,17 @@ export default function MonitoringView({
 					<div className="panel-header compact">
 						<div>
 							<div className="panel-kicker">Luồng vi phạm</div>
-							<h3>Danh sách vi phạm của camera đang xem</h3>
+							<div className="title-with-icon">
+								<span className="panel-title-icon danger">
+									<AppIcon name="shield-alert" size={18} />
+								</span>
+								<h3>Danh sách vi phạm của camera đang xem</h3>
+							</div>
 						</div>
-						<div className="badge danger">{violations.length}</div>
+						<div className="badge danger">
+							<AppIcon name="shield-alert" />
+							{violations.length}
+						</div>
 					</div>
 					<div className="entity-list violation-list">
 						{violations.length === 0 ? (
@@ -588,7 +623,8 @@ export default function MonitoringView({
 								role="button"
 								tabIndex={0}>
 								<div>
-									<div className="row-title">
+									<div className="row-title icon-label">
+										<AppIcon name="alert" />
 										{getViolationLabel(event.violation)} · làn{" "}
 										{event.lane_id}
 									</div>
@@ -597,7 +633,8 @@ export default function MonitoringView({
 										{event.vehicle_id}
 									</div>
 								</div>
-								<div className="row-meta">
+								<div className="row-meta icon-label">
+									<AppIcon name="clock" />
 									{formatTimestamp(event.timestamp)}
 								</div>
 							</article>

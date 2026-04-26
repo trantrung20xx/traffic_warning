@@ -1,5 +1,8 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import AppIcon from "../components/AppIcon";
 import CameraCanvas from "../components/CameraCanvas";
+import ConfirmDialog from "../components/ConfirmDialog";
+import Toast from "../components/Toast";
 import {
   createCamera,
   deleteBackgroundImage,
@@ -33,128 +36,22 @@ import {
   validatePolygonDraft,
 } from "../utils";
 
+const ACTION_ICON_MAP = {
+  lock: "lock",
+  unlock: "unlock",
+  undo: "undo",
+  "vertex-delete": "target",
+  "polygon-delete": "trash",
+  "image-upload": "image",
+  "image-delete": "image-off",
+  "lane-add": "plus",
+  "lane-delete": "minus",
+  "chevron-down": "chevron-down",
+  redo: "redo",
+};
+
 function ActionIcon({ type }) {
-  const commonProps = {
-    viewBox: "0 0 24 24",
-    width: 16,
-    height: 16,
-    fill: "none",
-    stroke: "currentColor",
-    strokeWidth: 1.9,
-    strokeLinecap: "round",
-    strokeLinejoin: "round",
-    "aria-hidden": true,
-  };
-
-  if (type === "lock") {
-    return (
-      <svg {...commonProps}>
-        <path d="M7 10V8a5 5 0 0 1 10 0v2" />
-        <rect x="5" y="10" width="14" height="10" rx="2" />
-        <path d="M12 14v2" />
-      </svg>
-    );
-  }
-
-  if (type === "unlock") {
-    return (
-      <svg {...commonProps}>
-        <path d="M7 10V8a5 5 0 0 1 9-3" />
-        <rect x="5" y="10" width="14" height="10" rx="2" />
-        <path d="M12 14v2" />
-      </svg>
-    );
-  }
-
-  if (type === "undo") {
-    return (
-      <svg {...commonProps}>
-        <path d="M9 7 5 11l4 4" />
-        <path d="M19 17a6 6 0 0 0-6-6H5" />
-      </svg>
-    );
-  }
-
-  if (type === "vertex-delete") {
-    return (
-      <svg {...commonProps}>
-        <circle cx="8" cy="8" r="2" />
-        <circle cx="16" cy="8" r="2" />
-        <circle cx="12" cy="16" r="2" />
-        <path d="M9.8 9.2 10.9 14" />
-        <path d="M14.2 9.2 13.1 14" />
-        <path d="M17.5 17.5 21 21" />
-        <path d="M21 17.5 17.5 21" />
-      </svg>
-    );
-  }
-
-  if (type === "polygon-delete") {
-    return (
-      <svg {...commonProps}>
-        <path d="M6 7h12" />
-        <path d="M9 7V5h6v2" />
-        <path d="M8 7l1 12h6l1-12" />
-        <path d="M10 11v5" />
-        <path d="M14 11v5" />
-      </svg>
-    );
-  }
-
-  if (type === "image-upload") {
-    return (
-      <svg {...commonProps}>
-        <path d="M12 16V8" />
-        <path d="M9 11l3-3 3 3" />
-        <rect x="4" y="16" width="16" height="4" rx="1.5" />
-        <path d="M6 16v-6a2 2 0 0 1 2-2h1" />
-        <path d="M15 8h1a2 2 0 0 1 2 2v6" />
-      </svg>
-    );
-  }
-
-  if (type === "image-delete") {
-    return (
-      <svg {...commonProps}>
-        <rect x="4" y="5" width="12" height="12" rx="2" />
-        <path d="m8 11 2 2 2-3 2 3" />
-        <circle cx="9" cy="9" r="1" />
-        <path d="M17.5 17.5 21 21" />
-        <path d="M21 17.5 17.5 21" />
-      </svg>
-    );
-  }
-
-  if (type === "lane-add") {
-    return (
-      <svg {...commonProps}>
-        <path d="M7 5v14" />
-        <path d="M13 5v14" />
-        <path d="M17 8h4" />
-        <path d="M19 6v4" />
-      </svg>
-    );
-  }
-
-  if (type === "lane-delete") {
-    return (
-      <svg {...commonProps}>
-        <path d="M7 5v14" />
-        <path d="M13 5v14" />
-        <path d="M16 8h5" />
-      </svg>
-    );
-  }
-
-  if (type === "chevron-down") {
-    return (
-      <svg {...commonProps}>
-        <path d="m6 9 6 6 6-6" />
-      </svg>
-    );
-  }
-
-  return null;
+  return <AppIcon name={ACTION_ICON_MAP[type] || type} size={16} strokeWidth={1.9} />;
 }
 
 function MultiSelectDropdown({ summary, placeholder, options, getKey, getLabel, isChecked, onToggle, getNote, isDisabled }) {
@@ -188,6 +85,23 @@ function MultiSelectDropdown({ summary, placeholder, options, getKey, getLabel, 
 const VALIDATION_LEVELS = ["error", "warning", "info"];
 const VALIDATION_LEVEL_ORDER = { error: 0, warning: 1, info: 2 };
 const VALIDATION_LEVEL_ICONS = { error: "❌", warning: "⚠️", info: "ℹ️" };
+const MAX_DRAFT_HISTORY = 80;
+
+function cloneDraftState(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function getToastTone(message) {
+  const normalized = String(message || "").toLowerCase();
+  if (!normalized) return "info";
+  if (normalized.includes("không thể") || normalized.includes("lỗi") || normalized.includes("chưa ")) {
+    return "warning";
+  }
+  if (normalized.startsWith("đã") || normalized.includes("đang được hệ thống sử dụng")) {
+    return "success";
+  }
+  return "info";
+}
 
 const VALIDATION_MESSAGE_BY_CODE = {
   LANE_POLYGON_INVALID: "Biên làn chưa tạo được vùng hợp lệ.",
@@ -493,6 +407,7 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
   const [editTarget, setEditTarget] = useState("lane_polygon");
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
+  const [laneMessage, setLaneMessage] = useState("");
   const [isNewCamera, setIsNewCamera] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
   const [polygonLocked, setPolygonLocked] = useState(false);
@@ -500,6 +415,16 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
   const [backgroundRevision, setBackgroundRevision] = useState("0");
   const [backgroundBusy, setBackgroundBusy] = useState(false);
   const [configValidation, setConfigValidation] = useState([]);
+  const [confirmDialog, setConfirmDialog] = useState(null);
+  const undoStackRef = useRef([]);
+  const redoStackRef = useRef([]);
+  const [historyRevision, setHistoryRevision] = useState(0);
+  const dismissMessage = useCallback(() => setMessage(""), []);
+  const resetDraftHistory = useCallback(() => {
+    undoStackRef.current = [];
+    redoStackRef.current = [];
+    setHistoryRevision((value) => value + 1);
+  }, []);
 
   useEffect(() => {
     if (!selectedCameraId && cameras[0]?.camera_id) {
@@ -522,6 +447,8 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
         setHasBackgroundImage(Boolean(detail.has_background_image));
         setBackgroundRevision(`${Date.now()}`);
         setConfigValidation(detail.config_validation || []);
+        setLaneMessage("");
+        resetDraftHistory();
         setMessage(detail.runtime_applied ? "Cấu hình hiện tại đang được hệ thống sử dụng." : "");
       })
       .catch(() => {
@@ -531,8 +458,10 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
         setIsDirty(false);
         setHasBackgroundImage(false);
         setConfigValidation([]);
+        setLaneMessage("");
+        resetDraftHistory();
       });
-  }, [activeCameraId, selectedCameraId, isNewCamera]);
+  }, [activeCameraId, selectedCameraId, isNewCamera, resetDraftHistory]);
 
   const selectedLane = useMemo(
     () => draft.lane_config.lanes.find((lane) => lane.lane_id === selectedLaneId) || draft.lane_config.lanes[0] || null,
@@ -543,6 +472,8 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
     if (!selectedLane) return null;
     return selectedLane.maneuvers?.[selectedManeuver] || null;
   }, [selectedLane, selectedManeuver]);
+  const canUndoDraft = historyRevision >= 0 && undoStackRef.current.length > 0;
+  const canRedoDraft = historyRevision >= 0 && redoStackRef.current.length > 0;
   const selectedManeuverEnabled = Boolean(selectedManeuverConfig?.enabled ?? true);
   const selectedManeuverAllowed = selectedManeuverEnabled && Boolean(selectedManeuverConfig?.allowed ?? false);
   const selectedCorridorWidthPx = normalizeCorridorWidthPx(selectedManeuverConfig?.corridor_width_px, selectedManeuver);
@@ -600,18 +531,20 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
     });
     if (options.markDirty !== false) {
       setIsDirty(true);
-      setMessage('Đang có thay đổi chưa lưu. Nhấn "Lưu cấu hình làn đường" để áp dụng cấu hình mới.');
+      if (options.showDirtyMessage !== false) {
+        setMessage('Đang có thay đổi chưa lưu. Nhấn "Lưu cấu hình làn đường" để áp dụng cấu hình mới.');
+      }
     }
   };
 
-  const updateLane = (laneId, updater) => {
+  const updateLane = (laneId, updater, options = {}) => {
     updateDraft((current) => ({
       ...current,
       lane_config: {
         ...current.lane_config,
         lanes: current.lane_config.lanes.map((lane) => (lane.lane_id === laneId ? updater(lane) : lane)),
       },
-    }));
+    }), options);
   };
 
   const updateSelectedManeuverConfig = (updater) => {
@@ -696,7 +629,7 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
             },
           },
         };
-      });
+      }, { showDirtyMessage: false });
       return;
     }
 
@@ -705,62 +638,168 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
       [editTarget === "lane_polygon" ? "polygon" : editTarget]: updater(
         lane[editTarget === "lane_polygon" ? "polygon" : editTarget] || [],
       ),
-    }));
+    }), { showDirtyMessage: false });
+  };
+
+  const recordGeometryHistory = (beforePoints, afterPoints) => {
+    if (!selectedLane) return;
+    if (JSON.stringify(beforePoints) === JSON.stringify(afterPoints)) return;
+
+    undoStackRef.current = [
+      ...undoStackRef.current.slice(-(MAX_DRAFT_HISTORY - 1)),
+      {
+        laneId: selectedLane.lane_id,
+        editTarget,
+        selectedManeuver,
+        beforePoints: cloneDraftState(beforePoints),
+        afterPoints: cloneDraftState(afterPoints),
+      },
+    ];
+    redoStackRef.current = [];
+    setHistoryRevision((value) => value + 1);
+  };
+
+  const applyGeometryHistoryEntry = (entry, points, statusMessage) => {
+    updateLane(entry.laneId, (lane) => {
+      if (entry.editTarget === "movement_path" || entry.editTarget === "exit_line" || entry.editTarget === "exit_zone") {
+        const currentManeuvers = lane.maneuvers || {};
+        const currentManeuverCfg = currentManeuvers[entry.selectedManeuver] || {
+          enabled: true,
+          allowed: false,
+          movement_path: [],
+          corridor_width_px: getDefaultCorridorWidthPx(entry.selectedManeuver),
+          exit_line: [],
+          exit_zone: [],
+        };
+        return {
+          ...lane,
+          maneuvers: {
+            ...currentManeuvers,
+            [entry.selectedManeuver]: {
+              ...currentManeuverCfg,
+              [entry.editTarget]: cloneDraftState(points),
+            },
+          },
+        };
+      }
+
+      return {
+        ...lane,
+        [entry.editTarget === "lane_polygon" ? "polygon" : entry.editTarget]: cloneDraftState(points),
+      };
+    }, { showDirtyMessage: false });
+    setSelectedLaneId(entry.laneId);
+    setSelectedManeuver(entry.selectedManeuver);
+    setEditTarget(entry.editTarget);
+    setSelectedVertexIndex(null);
+    setMessage("");
+    setLaneMessage(statusMessage);
   };
 
   const handleCanvasPoint = (point) => {
     if (!selectedLane) return;
     if (isLineEditTarget(editTarget) && selectedPoints.length >= 2) {
-      setMessage("Đối tượng dạng đường chỉ cho phép tối đa 2 điểm.");
+      setLaneMessage("Đối tượng dạng đường chỉ cho phép tối đa 2 điểm.");
       return;
     }
-    updateTargetGeometry((points) => [...points, point]);
+    const nextPoints = [...selectedPoints, point];
+    recordGeometryHistory(selectedPoints, nextPoints);
+    updateTargetGeometry(() => nextPoints);
     setSelectedVertexIndex(selectedPoints.length);
-    setMessage(`Đã thêm điểm mới vào ${getEditTargetGeometryNoun(editTarget)}.`);
+    setMessage("");
+    setLaneMessage(`Đã thêm điểm mới vào ${getEditTargetGeometryNoun(editTarget)}.`);
   };
 
   const replaceTargetPolygon = (nextPoints) => {
     if (!selectedLane) return;
+    recordGeometryHistory(selectedPoints, nextPoints);
     updateTargetGeometry(() => nextPoints);
-    setMessage("Đã cập nhật polygon trên canvas, chưa lưu xuống backend.");
+    setMessage("");
+    setLaneMessage("Đã cập nhật polygon trên canvas, chưa lưu xuống backend.");
   };
 
   const deleteSelectedVertex = () => {
     if (!selectedLane || selectedVertexIndex == null) return;
-    updateTargetGeometry((points) => points.filter((_, index) => index !== selectedVertexIndex));
+    const nextPoints = selectedPoints.filter((_, index) => index !== selectedVertexIndex);
+    recordGeometryHistory(selectedPoints, nextPoints);
+    updateTargetGeometry(() => nextPoints);
     setSelectedVertexIndex(null);
-    setMessage("Đã xóa điểm đang chọn.");
+    setMessage("");
+    setLaneMessage("Đã xóa điểm đang chọn.");
   };
 
-  const undoPoint = () => {
-    if (!selectedLane) return;
-    updateTargetGeometry((points) => points.slice(0, -1));
-    setSelectedVertexIndex(null);
-    setMessage("Đã xóa điểm vừa vẽ.");
+  const undoDraftChange = () => {
+    if (!undoStackRef.current.length) return;
+    const entry = undoStackRef.current[undoStackRef.current.length - 1];
+    undoStackRef.current = undoStackRef.current.slice(0, -1);
+    redoStackRef.current = [...redoStackRef.current.slice(-(MAX_DRAFT_HISTORY - 1)), entry];
+    setHistoryRevision((value) => value + 1);
+    applyGeometryHistoryEntry(entry, entry.beforePoints, "Đã quay lại thao tác polygon trước đó.");
+  };
+
+  const redoDraftChange = () => {
+    if (!redoStackRef.current.length) return;
+    const entry = redoStackRef.current[redoStackRef.current.length - 1];
+    redoStackRef.current = redoStackRef.current.slice(0, -1);
+    undoStackRef.current = [...undoStackRef.current.slice(-(MAX_DRAFT_HISTORY - 1)), entry];
+    setHistoryRevision((value) => value + 1);
+    applyGeometryHistoryEntry(entry, entry.afterPoints, "Đã làm lại thao tác polygon vừa hoàn tác.");
   };
 
   const clearPolygon = () => {
     if (!selectedLane) return;
+    recordGeometryHistory(selectedPoints, []);
     updateTargetGeometry(() => []);
     setSelectedVertexIndex(null);
-    setMessage("Đã xóa toàn bộ polygon hiện tại.");
+    setMessage("");
+    setLaneMessage("Đã xóa toàn bộ polygon hiện tại.");
+  };
+
+  const closeConfirmDialog = () => {
+    if (saving) return;
+    setConfirmDialog(null);
+  };
+
+  const requestDiscardChanges = (description, onConfirm) => {
+    if (!isDirty) {
+      onConfirm();
+      return;
+    }
+
+    setConfirmDialog({
+      tone: "warning",
+      icon: "alert",
+      confirmIcon: "check",
+      title: "Bỏ thay đổi chưa lưu?",
+      description,
+      confirmLabel: "Bỏ thay đổi",
+      cancelLabel: "Tiếp tục chỉnh",
+      onConfirm: () => {
+        setConfirmDialog(null);
+        onConfirm();
+      },
+    });
   };
 
   const startCreateCamera = () => {
-    if (isDirty && !window.confirm("Cấu hình hiện tại chưa lưu. Tạo camera mới và bỏ thay đổi này?")) return;
-    setIsNewCamera(true);
-    setActiveCameraId(null);
-    const draftState = createCameraDraft(`cam_${String(cameras.length + 1).padStart(2, "0")}`);
-    setDraft(draftState);
-    setSelectedLaneId(1);
-    setSelectedManeuver("straight");
-    setSelectedVertexIndex(null);
-    setEditTarget("lane_polygon");
-    setIsDirty(false);
-    setPolygonLocked(false);
-    setHasBackgroundImage(false);
-    setBackgroundRevision("0");
-    setMessage("");
+    requestDiscardChanges("Tạo camera mới sẽ bỏ các chỉnh sửa hiện chưa lưu trên camera đang mở.", () => {
+      setIsNewCamera(true);
+      setActiveCameraId(null);
+      const draftState = createCameraDraft(`cam_${String(cameras.length + 1).padStart(2, "0")}`);
+      setDraft(draftState);
+      setSelectedLaneId(1);
+      setSelectedManeuver("straight");
+      setSelectedVertexIndex(null);
+      setEditTarget("lane_polygon");
+      setIsDirty(false);
+      setPolygonLocked(false);
+      setHasBackgroundImage(false);
+      setBackgroundRevision("0");
+      setConfigValidation([]);
+      setLaneMessage("");
+      resetDraftHistory();
+      setMessage("Lưu camera trước để gắn ảnh nền theo camera_id cố định.");
+    });
   };
 
   const handleBackgroundUpload = async (event) => {
@@ -802,7 +841,7 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
     try {
       const validation = validatePolygonDraft(draft);
       if (validation.errors.length > 0) {
-        setMessage(validation.errors[0]);
+        setLaneMessage(validation.errors[0]);
         return;
       }
       const payload = buildPayload(draft);
@@ -824,6 +863,8 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
       setHasBackgroundImage(Boolean(freshDetail.has_background_image));
       setBackgroundRevision(`${Date.now()}`);
       setConfigValidation(freshDetail.config_validation || []);
+      setLaneMessage("");
+      resetDraftHistory();
       setMessage(
         response.runtime_applied
           ? "Đã lưu cấu hình và áp dụng ngay vào hệ thống."
@@ -836,14 +877,11 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
     }
   };
 
-  const handleDelete = async () => {
-    if (!activeCameraId) return;
-    const confirmed = window.confirm(`Xóa camera ${activeCameraId}?`);
-    if (!confirmed) return;
+  const deleteActiveCamera = async (cameraId) => {
     setSaving(true);
     setMessage("");
     try {
-      await deleteCamera(activeCameraId);
+      await deleteCamera(cameraId);
       await onRefreshCameras();
       setIsNewCamera(false);
       setActiveCameraId(null);
@@ -855,23 +893,60 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
       setHasBackgroundImage(false);
       setBackgroundRevision("0");
       setConfigValidation([]);
-      setMessage(`Đã xóa ${activeCameraId}.`);
+      setLaneMessage("");
+      resetDraftHistory();
+      setConfirmDialog(null);
+      setMessage(`Đã xóa ${cameraId}.`);
     } catch (error) {
+      setConfirmDialog(null);
       setMessage(error.message || "Không thể xóa camera.");
     } finally {
       setSaving(false);
     }
   };
 
+  const handleDelete = () => {
+    if (!activeCameraId) return;
+    const cameraId = activeCameraId;
+    setConfirmDialog({
+      tone: "danger",
+      icon: "trash",
+      confirmIcon: "trash",
+      title: `Xóa camera ${cameraId}?`,
+      description: "Camera, cấu hình làn, ảnh nền và ảnh bằng chứng liên quan sẽ bị xóa khỏi hệ thống.",
+      confirmLabel: "Xóa camera",
+      cancelLabel: "Hủy",
+      onConfirm: () => deleteActiveCamera(cameraId),
+    });
+  };
+
+  const handleSelectCamera = (cameraId) => {
+    requestDiscardChanges("Chuyển sang camera khác sẽ bỏ các chỉnh sửa hiện chưa lưu trên camera đang mở.", () => {
+      setIsNewCamera(false);
+      setActiveCameraId(cameraId);
+      onSelectCamera(cameraId);
+      setSelectedVertexIndex(null);
+      setLaneMessage("");
+      setMessage("");
+    });
+  };
+
   return (
+    <>
     <div className="management-layout">
       <aside className="panel sidebar-panel management-sidebar">
         <div className="panel-header compact management-sidebar-header">
           <div>
             <div className="panel-kicker">Danh mục</div>
-            <h3>Danh sách camera</h3>
+            <div className="title-with-icon">
+              <span className="panel-title-icon">
+                <AppIcon name="camera" size={18} />
+              </span>
+              <h3>Danh sách camera</h3>
+            </div>
           </div>
           <button className="button secondary management-add-camera-button" onClick={startCreateCamera}>
+            <AppIcon name="plus" />
             Thêm camera
           </button>
         </div>
@@ -880,16 +955,12 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
             <button
               key={camera.camera_id}
               className={camera.camera_id === activeCameraId && !isNewCamera ? "camera-card active" : "camera-card"}
-              onClick={() => {
-                if (isDirty && !window.confirm("Cấu hình hiện tại chưa lưu. Chuyển camera và bỏ thay đổi này?")) return;
-                setIsNewCamera(false);
-                setActiveCameraId(camera.camera_id);
-                onSelectCamera(camera.camera_id);
-                setSelectedVertexIndex(null);
-                setMessage("");
-              }}
+              onClick={() => handleSelectCamera(camera.camera_id)}
             >
-              <div className="row-title">{camera.camera_id}</div>
+              <div className="row-title icon-label">
+                <AppIcon name="camera" />
+                {camera.camera_id}
+              </div>
               <div className="row-sub">
                 {camera.location.road_name}
                 {camera.location.intersection ? ` · ${camera.location.intersection}` : ""}
@@ -904,15 +975,22 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
           <div className="panel-header">
             <div>
               <div className="panel-kicker">Thông tin camera</div>
-              <h2>{isNewCamera ? "Thêm camera mới" : `Chỉnh sửa ${draft.camera.camera_id || "camera"}`}</h2>
+              <div className="title-with-icon">
+                <span className="panel-title-icon">
+                  <AppIcon name={isNewCamera ? "plus" : "settings"} size={20} />
+                </span>
+                <h2>{isNewCamera ? "Thêm camera mới" : `Chỉnh sửa ${draft.camera.camera_id || "camera"}`}</h2>
+              </div>
             </div>
             <div className="action-row management-header-actions">
               {!isNewCamera && activeCameraId ? (
                 <button className="button danger" onClick={handleDelete} disabled={saving}>
+                  <AppIcon name="trash" />
                   Xóa camera
                 </button>
               ) : null}
               <button className="button primary" onClick={saveCurrentCamera} disabled={saving || !isDirty}>
+                <AppIcon name="save" />
                 {saving ? "Đang lưu..." : "Lưu cấu hình làn đường"}
               </button>
             </div>
@@ -920,6 +998,7 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
 
           <div className="status-strip management-status-strip">
             <div className={isDirty ? "badge warning" : "badge success"}>
+              <AppIcon name={isDirty ? "alert" : "check-circle"} />
               {isDirty ? "Chưa lưu" : "Đã đồng bộ backend"}
             </div>
             <div className="row-sub">
@@ -931,10 +1010,16 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
 
           <div className="management-form-sections">
             <section className="management-subcard">
-              <div className="management-subcard-title">RTSP / Kết nối</div>
+              <div className="management-subcard-title icon-label">
+                <AppIcon name="video" />
+                RTSP / Kết nối
+              </div>
               <div className="form-grid management-form-grid">
                 <label className="field camera-id-field">
-                  <span>Camera ID</span>
+                  <span className="field-label-with-icon">
+                    <AppIcon name="camera" />
+                    Camera ID
+                  </span>
                   <input
                     className="camera-id-input"
                     value={draft.camera.camera_id}
@@ -949,7 +1034,10 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
                   />
                 </label>
                 <label className="field">
-                  <span>Nguồn RTSP / video</span>
+                  <span className="field-label-with-icon">
+                    <AppIcon name="radio-tower" />
+                    Nguồn RTSP / video
+                  </span>
                   <input
                     value={draft.camera.rtsp_url}
                     onChange={(event) =>
@@ -961,7 +1049,10 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
                   />
                 </label>
                 <label className="field">
-                  <span>Loại camera</span>
+                  <span className="field-label-with-icon">
+                    <AppIcon name="video" />
+                    Loại camera
+                  </span>
                   <select
                     value={draft.camera.camera_type}
                     onChange={(event) =>
@@ -977,7 +1068,10 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
                   </select>
                 </label>
                 <label className="field">
-                  <span>Hướng quan sát</span>
+                  <span className="field-label-with-icon">
+                    <AppIcon name="navigation" />
+                    Hướng quan sát
+                  </span>
                   <input
                     value={draft.camera.view_direction}
                     onChange={(event) =>
@@ -989,7 +1083,10 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
                   />
                 </label>
                 <label className="field">
-                  <span>Frame width</span>
+                  <span className="field-label-with-icon">
+                    <AppIcon name="scan-line" />
+                    Frame width
+                  </span>
                   <input
                     type="number"
                     value={draft.camera.frame_width}
@@ -1002,7 +1099,10 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
                   />
                 </label>
                 <label className="field">
-                  <span>Frame height</span>
+                  <span className="field-label-with-icon">
+                    <AppIcon name="scan-line" />
+                    Frame height
+                  </span>
                   <input
                     type="number"
                     value={draft.camera.frame_height}
@@ -1018,10 +1118,16 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
             </section>
 
             <section className="management-subcard">
-              <div className="management-subcard-title">Vị trí camera</div>
+              <div className="management-subcard-title icon-label">
+                <AppIcon name="map-pin" />
+                Vị trí camera
+              </div>
               <div className="form-grid management-form-grid">
                 <label className="field">
-                  <span>Tuyến đường</span>
+                  <span className="field-label-with-icon">
+                    <AppIcon name="route" />
+                    Tuyến đường
+                  </span>
                   <input
                     value={draft.camera.location.road_name}
                     onChange={(event) =>
@@ -1036,7 +1142,10 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
                   />
                 </label>
                 <label className="field">
-                  <span>Ngã tư / nút giao</span>
+                  <span className="field-label-with-icon">
+                    <AppIcon name="map-pinned" />
+                    Ngã tư / nút giao
+                  </span>
                   <input
                     value={draft.camera.location.intersection_name}
                     onChange={(event) =>
@@ -1051,7 +1160,10 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
                   />
                 </label>
                 <label className="field">
-                  <span>GPS lat</span>
+                  <span className="field-label-with-icon">
+                    <AppIcon name="target" />
+                    GPS lat
+                  </span>
                   <input
                     value={draft.camera.location.gps_lat}
                     onChange={(event) =>
@@ -1066,7 +1178,10 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
                   />
                 </label>
                 <label className="field">
-                  <span>GPS lng</span>
+                  <span className="field-label-with-icon">
+                    <AppIcon name="target" />
+                    GPS lng
+                  </span>
                   <input
                     value={draft.camera.location.gps_lng}
                     onChange={(event) =>
@@ -1083,15 +1198,18 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
               </div>
             </section>
           </div>
-
-          {message ? <div className="message-bar">{message}</div> : null}
         </section>
 
         <section className="panel lane-panel">
           <div className="panel-header">
             <div>
               <div className="panel-kicker">Trình chỉnh sửa làn</div>
-              <h3>Cấu hình làn đường và các vùng phục vụ nhận diện hướng rẽ</h3>
+              <div className="title-with-icon">
+                <span className="panel-title-icon">
+                  <AppIcon name="lanes" size={18} />
+                </span>
+                <h3>Cấu hình làn đường và các vùng phục vụ nhận diện hướng rẽ</h3>
+              </div>
             </div>
           </div>
 
@@ -1104,6 +1222,7 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
                     className={lane.lane_id === selectedLaneId ? "lane-chip lane-chip-row active" : "lane-chip lane-chip-row"}
                   >
                     <button className="lane-chip-main" onClick={() => setSelectedLaneId(lane.lane_id)}>
+                      <AppIcon name="lanes" />
                       Làn {lane.lane_id}
                     </button>
                     <button
@@ -1129,10 +1248,16 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
             {selectedLane ? (
               <div className="lane-settings">
                 <section className="management-subcard">
-                  <div className="management-subcard-title">Quy tắc làn và đối tượng chỉnh sửa</div>
+                  <div className="management-subcard-title icon-label">
+                    <AppIcon name="list-checks" />
+                    Quy tắc làn và đối tượng chỉnh sửa
+                  </div>
                   <div className="inline-fields lane-inline-fields">
                     <label className="field lane-field-changes">
-                      <span>Các làn được phép chuyển</span>
+                      <span className="field-label-with-icon">
+                        <AppIcon name="waypoints" />
+                        Các làn được phép chuyển
+                      </span>
                       <MultiSelectDropdown
                         summary={
                           draft.lane_config.lanes
@@ -1158,7 +1283,10 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
                       />
                     </label>
                     <label className="field lane-field-vehicles">
-                      <span>Loại phương tiện được phép</span>
+                      <span className="field-label-with-icon">
+                        <AppIcon name="car" />
+                        Loại phương tiện được phép
+                      </span>
                       <MultiSelectDropdown
                         summary={
                           VEHICLE_TYPES.filter((vehicleType) => (selectedLane.allowed_vehicle_types || []).includes(vehicleType))
@@ -1181,7 +1309,10 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
                       />
                     </label>
                     <label className="field lane-field-target">
-                      <span>Đối tượng chỉnh sửa</span>
+                      <span className="field-label-with-icon">
+                        <AppIcon name="edit" />
+                        Đối tượng chỉnh sửa
+                      </span>
                       <select value={editTarget} onChange={(event) => setEditTarget(event.target.value)}>
                         <optgroup label="Theo từng làn">
                           <option value="lane_polygon">Biên làn xe</option>
@@ -1199,10 +1330,16 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
                 </section>
 
                 <section className="management-subcard">
-                  <div className="management-subcard-title">Hành vi và chính sách cho phép</div>
+                  <div className="management-subcard-title icon-label">
+                    <AppIcon name="shield-check" />
+                    Hành vi và chính sách cho phép
+                  </div>
                   <div className="inline-fields lane-maneuver-inline">
                     <label className="field">
-                      <span>Hành vi đang cấu hình</span>
+                      <span className="field-label-with-icon">
+                        <AppIcon name="navigation" />
+                        Hành vi đang cấu hình
+                      </span>
                       <select value={selectedManeuver} onChange={(event) => setSelectedManeuver(event.target.value)}>
                         {MANEUVERS.map((maneuver) => (
                           <option key={maneuver} value={maneuver}>
@@ -1212,7 +1349,10 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
                       </select>
                     </label>
                     <label className="field corridor-width-field">
-                      <span>Độ rộng corridor: {selectedCorridorWidthPx} px</span>
+                      <span className="field-label-with-icon">
+                        <AppIcon name="route" />
+                        Độ rộng corridor: {selectedCorridorWidthPx} px
+                      </span>
                       <div className="corridor-width-control">
                         <button
                           type="button"
@@ -1301,10 +1441,16 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
                 </section>
 
                 <section className="management-subcard">
-                  <div className="management-subcard-title">Công cụ chỉnh sửa</div>
+                  <div className="management-subcard-title icon-label">
+                    <AppIcon name="settings" />
+                    Công cụ chỉnh sửa
+                  </div>
                   <div className="editor-toolbar-row">
                     <div className="editor-action-toolbar compact-toolbar">
-                      <div className="editor-action-toolbar-label">Ảnh nền camera</div>
+                      <div className="editor-action-toolbar-label icon-label">
+                        <AppIcon name="image" />
+                        Ảnh nền camera
+                      </div>
                       <div className="editor-actions tight-actions">
                         <label className={`button secondary compact-button smaller-button${isNewCamera || backgroundBusy ? " disabled" : ""}`}>
                           <input
@@ -1326,16 +1472,17 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
                           Xóa ảnh
                         </button>
                         <div className={hasBackgroundImage ? "badge success toolbar-badge" : "badge subtle toolbar-badge"}>
+                          <AppIcon name={hasBackgroundImage ? "check-circle" : "image-off"} />
                           {hasBackgroundImage ? "Có ảnh nền" : "Chưa có ảnh"}
                         </div>
                       </div>
-                      {isNewCamera ? (
-                        <div className="toolbar-note">Lưu camera trước để gắn ảnh nền theo `camera_id` cố định.</div>
-                      ) : null}
                     </div>
 
                     <div className="editor-action-toolbar compact-toolbar">
-                      <div className="editor-action-toolbar-label">Thao tác polygon</div>
+                      <div className="editor-action-toolbar-label icon-label">
+                        <AppIcon name="target" />
+                        Thao tác polygon
+                      </div>
                       <div className="editor-actions tight-actions">
                         <button
                           className={`${polygonLocked ? "button secondary" : "button ghost"} compact-button smaller-button`}
@@ -1350,13 +1497,29 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
                           <ActionIcon type={polygonLocked ? "unlock" : "lock"} />
                           {polygonLocked ? "Mở khóa" : "Khóa"}
                         </button>
-                        <button className="button secondary compact-button smaller-button" onClick={undoPoint}>
-                          <ActionIcon type="undo" />
-                          Xóa điểm
-                        </button>
+                        <div className="polygon-history-buttons" role="group" aria-label="Hoàn tác và làm lại thao tác">
+                          <button
+                            className="button secondary compact-button smaller-button icon-button"
+                            onClick={undoDraftChange}
+                            disabled={!canUndoDraft}
+                            aria-label="Quay lại thao tác trước"
+                            title="Quay lại thao tác trước"
+                          >
+                            <ActionIcon type="undo" />
+                          </button>
+                          <button
+                            className="button secondary compact-button smaller-button icon-button"
+                            onClick={redoDraftChange}
+                            disabled={!canRedoDraft}
+                            aria-label="Làm lại thao tác vừa quay lại"
+                            title="Làm lại thao tác vừa quay lại"
+                          >
+                            <ActionIcon type="redo" />
+                          </button>
+                        </div>
                         <button className="button ghost compact-button smaller-button" onClick={deleteSelectedVertex} disabled={selectedVertexIndex == null}>
                           <ActionIcon type="vertex-delete" />
-                          Xóa vertex
+                          Xóa điểm
                         </button>
                         <button className="button ghost compact-button smaller-button" onClick={clearPolygon}>
                           <ActionIcon type="polygon-delete" />
@@ -1366,14 +1529,6 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
                     </div>
                   </div>
                 </section>
-
-                {polygonStatus.warnings.length > 0 ? (
-                  <div className="message-bar warning">
-                    {polygonStatus.warnings.map((warning) => (
-                      <div key={warning}>{warning}</div>
-                    ))}
-                  </div>
-                ) : null}
 
               </div>
             ) : (
@@ -1404,8 +1559,31 @@ export default function ManagementView({ cameras, selectedCameraId, onSelectCame
           </div>
 
           <ValidationIssuesPanel issues={configValidation} lanes={draft.lane_config.lanes} />
+          {polygonStatus.warnings.length > 0 ? (
+            <div className="message-bar warning lane-editor-message">
+              {polygonStatus.warnings.map((warning) => (
+                <div key={warning}>{warning}</div>
+              ))}
+            </div>
+          ) : null}
+          {laneMessage ? <div className="message-bar lane-editor-message">{laneMessage}</div> : null}
         </section>
       </section>
     </div>
+    <Toast message={message} tone={getToastTone(message)} duration={5000} onClose={dismissMessage} />
+    <ConfirmDialog
+      open={Boolean(confirmDialog)}
+      title={confirmDialog?.title}
+      description={confirmDialog?.description}
+      confirmLabel={confirmDialog?.confirmLabel}
+      cancelLabel={confirmDialog?.cancelLabel}
+      tone={confirmDialog?.tone}
+      icon={confirmDialog?.icon}
+      confirmIcon={confirmDialog?.confirmIcon}
+      loading={saving}
+      onCancel={closeConfirmDialog}
+      onConfirm={confirmDialog?.onConfirm}
+    />
+    </>
   );
 }

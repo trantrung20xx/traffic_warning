@@ -1,4 +1,5 @@
 import React, { startTransition, useEffect, useState } from "react";
+import AppIcon from "./components/AppIcon";
 import MonitoringView from "./views/MonitoringView";
 import AnalyticsView from "./views/AnalyticsView";
 import ManagementView from "./views/ManagementView";
@@ -40,18 +41,26 @@ export default function App() {
   return (
     <div className="app-shell">
       <header className="topbar">
-        <div>
-          <div className="eyebrow">Hệ thống cảnh báo vi phạm giao thông</div>
-          <h1>Trung tâm điều hành cảnh báo giao thông</h1>
+        <div className="topbar-title">
+          <span className="topbar-icon">
+            <AppIcon name="radio-tower" size={27} />
+          </span>
+          <div>
+            <div className="eyebrow">Hệ thống cảnh báo vi phạm giao thông</div>
+            <h1>Trung tâm điều hành cảnh báo giao thông</h1>
+          </div>
         </div>
         <div className="nav-tabs">
           <button className={view === "monitor" ? "nav-tab active" : "nav-tab"} onClick={() => setView("monitor")}>
+            <AppIcon name="monitor" />
             Giám sát
           </button>
           <button className={view === "analytics" ? "nav-tab active" : "nav-tab"} onClick={() => setView("analytics")}>
+            <AppIcon name="analytics" />
             Thống kê
           </button>
           <button className={view === "management" ? "nav-tab active" : "nav-tab"} onClick={() => setView("management")}>
+            <AppIcon name="camera" />
             Quản lý camera
           </button>
         </div>

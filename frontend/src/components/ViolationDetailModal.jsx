@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
+import AppIcon from "./AppIcon";
 import { getViolationEvidenceUrl } from "../api";
 import { buildViolationSections, getViolationLocationText, hasViolationCoreDetails } from "../violationDetails";
 import { getVehicleTypeLabel, getViolationLabel } from "../utils";
@@ -13,7 +14,10 @@ function ViolationEvidence({ imageSrc }) {
 
   return (
     <section className="violation-detail-card violation-media-card">
-      <div className="panel-kicker">Ảnh phương tiện vi phạm</div>
+      <div className="panel-kicker icon-label">
+        <AppIcon name="image" />
+        Ảnh phương tiện vi phạm
+      </div>
       <div className="violation-media-frame">
         {imageSrc && !hasImageError ? (
           <img
@@ -24,6 +28,7 @@ function ViolationEvidence({ imageSrc }) {
           />
         ) : (
           <div className="violation-media-empty">
+            <AppIcon name="image-off" size={32} />
             <strong>{hasImageError ? "Không tải được ảnh vi phạm" : "Chưa có ảnh vi phạm"}</strong>
             <span>{hasImageError ? "Ảnh evidence đã lưu nhưng hiện không tải được." : "Bản ghi này chưa có ảnh evidence lưu sẵn."}</span>
           </div>
@@ -38,7 +43,10 @@ function ViolationMetadata({ sections }) {
     <div className="violation-info-stack">
       {sections.map((section) => (
         <section className="violation-detail-card" key={section.id}>
-          <div className="panel-kicker">{section.kicker}</div>
+          <div className="panel-kicker icon-label">
+            <AppIcon name={section.id === "vehicle" ? "car" : section.id === "location" ? "map-pin" : "info"} />
+            {section.kicker}
+          </div>
           <div className="violation-meta-grid">
             {section.items
               .filter((item) => !item.hidden)
@@ -144,13 +152,25 @@ export default function ViolationDetailModal({ open, violation, imageSrc = null,
         <div className="violation-modal-header">
           <div className="violation-modal-title-block">
             <div className="panel-kicker">Chi tiết vi phạm</div>
-            <h3 id="violation-detail-title">{violationLabel}</h3>
+            <div className="title-with-icon">
+              <span className="panel-title-icon danger">
+                <AppIcon name="shield-alert" size={18} />
+              </span>
+              <h3 id="violation-detail-title">{violationLabel}</h3>
+            </div>
             <div className="violation-modal-subtitle">
-              <span className="badge danger">{vehicleLabel}</span>
-              <span className="row-meta">{locationLabel}</span>
+              <span className="badge danger">
+                <AppIcon name="car" />
+                {vehicleLabel}
+              </span>
+              <span className="row-meta icon-label">
+                <AppIcon name="map-pin" />
+                {locationLabel}
+              </span>
             </div>
           </div>
           <button className="button ghost compact-button" type="button" onClick={() => onClose?.()}>
+            <AppIcon name="x" />
             Đóng
           </button>
         </div>
