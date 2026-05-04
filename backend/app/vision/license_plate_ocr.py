@@ -2,10 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import os
-import threading
-import time
-from multiprocessing import get_context
-from queue import Empty, Full
 from typing import Callable, Optional
 
 import cv2
@@ -115,265 +111,9 @@ def _create_paddle_ocr_engine(
     return PaddleOCR(**kwargs)
 
 
-def _paddle_ocr_worker_main(request_queue, response_queue, config: dict) -> None:
-    try:
-        import numpy as np
-
-        engine = _create_paddle_ocr_engine(
-            ocr_version=str(config.get("ocr_version") or "PP-OCRv5"),
-            text_detection_model_name=str(config.get("text_detection_model_name") or "PP-OCRv5_mobile_det"),
-            text_recognition_model_name=str(config.get("text_recognition_model_name") or "PP-OCRv5_mobile_rec"),
-            lang=str(config.get("lang") or "en").strip().lower(),
-            use_gpu=bool(config.get("use_gpu", False)),
-        )
-    except Exception as exc:
-        response_queue.put(
-            {
-                "type": "startup",
-                "ok": False,
-                "error": f"failed to initialize paddle runtime: {exc}",
-            }
-        )
-        return
-
-    response_queue.put({"type": "startup", "ok": True})
-
-    while True:
-        message = request_queue.get()
-        if not message:
-            continue
-        if message.get("type") == "shutdown":
-            break
-
-        request_id = int(message.get("request_id", -1))
-        image_jpg = message.get("image_jpg")
-        if request_id < 0 or not image_jpg:
-            response_queue.put(
-                {
-                    "type": "result",
-                    "request_id": request_id,
-                    "ok": True,
-                    "text": None,
-                    "confidence": None,
-                }
-            )
-            continue
-
-        try:
-            image_bytes = bytes(image_jpg)
-            buffer = np.frombuffer(image_bytes, dtype=np.uint8)
-            image_bgr = cv2.imdecode(buffer, cv2.IMREAD_COLOR)
-            if image_bgr is None:
-                response_queue.put(
-                    {
-                        "type": "result",
-                        "request_id": request_id,
-                        "ok": True,
-                        "text": None,
-                        "confidence": None,
-                    }
-                )
-                continue
-
-            image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-            payload = engine.ocr(image_rgb, cls=False)
-            best = _extract_best_from_paddle_payload(payload)
-            if best is None:
-                response_queue.put(
-                    {
-                        "type": "result",
-                        "request_id": request_id,
-                        "ok": True,
-                        "text": None,
-                        "confidence": None,
-                    }
-                )
-                continue
-
-            response_queue.put(
-                {
-                    "type": "result",
-                    "request_id": request_id,
-                    "ok": True,
-                    "text": best.text,
-                    "confidence": best.confidence,
-                }
-            )
-        except Exception as exc:
-            response_queue.put(
-                {
-                    "type": "result",
-                    "request_id": request_id,
-                    "ok": False,
-                    "error": str(exc),
-                }
-            )
-
-
-class PaddleOcrSubprocessClient:
-    """
-    Tách PaddleOCR sang process riêng để tránh xung đột runtime CUDA với PyTorch.
-    """
-
-    def __init__(
-        self,
-        *,
-        ocr_version: str = "PP-OCRv5",
-        text_detection_model_name: str = "PP-OCRv5_mobile_det",
-        text_recognition_model_name: str = "PP-OCRv5_mobile_rec",
-        lang: str = "en",
-        use_gpu: bool = False,
-        startup_timeout_s: float = 30.0,
-        request_timeout_ms: int = 1200,
-        request_jpeg_quality: int = 92,
-        on_log: Optional[Callable[[str], None]] = None,
-    ):
-        self.available = False
-        self._on_log = on_log or (lambda _: None)
-        self._startup_timeout_s = max(float(startup_timeout_s), 1.0)
-        self._request_timeout_ms = max(int(request_timeout_ms), 100)
-        self._request_jpeg_quality = min(max(int(request_jpeg_quality), 40), 100)
-        self._request_lock = threading.Lock()
-        self._request_seq = 0
-        self._request_queue = None
-        self._response_queue = None
-        self._process = None
-        self._config = {
-            "ocr_version": str(ocr_version or "PP-OCRv5"),
-            "text_detection_model_name": str(text_detection_model_name or "PP-OCRv5_mobile_det"),
-            "text_recognition_model_name": str(text_recognition_model_name or "PP-OCRv5_mobile_rec"),
-            "lang": str(lang or "en").strip().lower(),
-            "use_gpu": bool(use_gpu),
-        }
-        self._start_worker()
-
-    def _start_worker(self) -> None:
-        try:
-            context = get_context("spawn")
-            self._request_queue = context.Queue(maxsize=64)
-            self._response_queue = context.Queue(maxsize=128)
-            self._process = context.Process(
-                target=_paddle_ocr_worker_main,
-                args=(self._request_queue, self._response_queue, self._config),
-                daemon=True,
-            )
-            self._process.start()
-        except Exception as exc:
-            self._on_log(f"[license_plate_ocr] failed to start paddle subprocess: {exc}")
-            self.close()
-            return
-
-        deadline = time.time() + self._startup_timeout_s
-        while time.time() < deadline:
-            remaining = max(deadline - time.time(), 0.1)
-            try:
-                message = self._response_queue.get(timeout=remaining)
-            except Empty:
-                continue
-            if not isinstance(message, dict):
-                continue
-            if message.get("type") != "startup":
-                continue
-            if bool(message.get("ok")):
-                self.available = True
-                return
-            self._on_log(f"[license_plate_ocr] paddle subprocess startup failed: {message.get('error')}")
-            self.close()
-            return
-
-        self._on_log("[license_plate_ocr] paddle subprocess startup timeout.")
-        self.close()
-
-    def read_best(self, image_bgr) -> Optional[OcrReadout]:
-        if not self.available or self._request_queue is None or self._response_queue is None:
-            return None
-        if image_bgr is None or getattr(image_bgr, "size", 0) == 0:
-            return None
-
-        ok, encoded = cv2.imencode(
-            ".jpg",
-            image_bgr,
-            [int(cv2.IMWRITE_JPEG_QUALITY), self._request_jpeg_quality],
-        )
-        if not ok:
-            return None
-
-        with self._request_lock:
-            self._request_seq += 1
-            request_id = int(self._request_seq)
-            try:
-                self._request_queue.put(
-                    {
-                        "type": "read_best",
-                        "request_id": request_id,
-                        "image_jpg": encoded.tobytes(),
-                    },
-                    timeout=0.5,
-                )
-            except Full:
-                self._on_log("[license_plate_ocr] paddle subprocess request queue is full.")
-                return None
-
-            deadline = time.time() + (self._request_timeout_ms / 1000.0)
-            while time.time() < deadline:
-                remaining = max(deadline - time.time(), 0.05)
-                try:
-                    message = self._response_queue.get(timeout=remaining)
-                except Empty:
-                    continue
-                if not isinstance(message, dict):
-                    continue
-                if message.get("type") != "result":
-                    continue
-                if int(message.get("request_id", -1)) != request_id:
-                    continue
-                if not bool(message.get("ok", False)):
-                    self._on_log(
-                        f"[license_plate_ocr] paddle subprocess inference failed: {message.get('error')}"
-                    )
-                    return None
-                text = message.get("text")
-                confidence = _to_confidence(message.get("confidence"))
-                if not text or confidence is None:
-                    return None
-                return OcrReadout(text=str(text), confidence=confidence)
-
-            self._on_log(
-                f"[license_plate_ocr] paddle subprocess timeout after {self._request_timeout_ms} ms."
-            )
-            return None
-
-    def close(self) -> None:
-        self.available = False
-        try:
-            if self._request_queue is not None:
-                self._request_queue.put({"type": "shutdown"}, timeout=0.2)
-        except Exception:
-            pass
-
-        if self._process is not None:
-            try:
-                self._process.join(timeout=1.5)
-            except Exception:
-                pass
-            if self._process.is_alive():
-                try:
-                    self._process.terminate()
-                except Exception:
-                    pass
-                try:
-                    self._process.join(timeout=0.5)
-                except Exception:
-                    pass
-
-        self._process = None
-        self._request_queue = None
-        self._response_queue = None
-
-
 class LicensePlateOcr:
     """
-    OCR biển số cho chế độ in-process (easyocr hoặc paddleocr).
+    OCR biển số chạy in-process (easyocr hoặc paddleocr).
     """
 
     def __init__(
@@ -457,15 +197,15 @@ class LicensePlateOcr:
         if image_bgr is None or getattr(image_bgr, "size", 0) == 0:
             return None
         try:
-            rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+            image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
         except Exception:
             return None
 
         try:
             if self.backend == "easyocr":
-                return self._read_easyocr(rgb)
+                return self._read_easyocr(image_rgb)
             if self.backend == "paddleocr":
-                return self._read_paddleocr(rgb)
+                return self._read_paddleocr(image_rgb)
         except Exception as exc:
             self._on_log(f"[license_plate_ocr] OCR inference failed: {exc}")
             return None

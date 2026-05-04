@@ -28,7 +28,6 @@ from app.managers.camera_context import CameraContext
 from app.logic.geometry_validator import validate_lane_geometry
 from app.schemas.camera import CameraConfig
 from app.schemas.events import TrackMessage, ViolationEvent
-from app.vision.license_plate_ocr import PaddleOcrSubprocessClient
 
 
 class CameraManager:
@@ -53,8 +52,6 @@ class CameraManager:
         self._violation_listeners: set[asyncio.Queue[ViolationEvent | None]] = set()
         self._track_websockets: set[WebSocket] = set()
         self._violation_websockets: set[WebSocket] = set()
-        self._shared_paddle_ocr_client: Optional[PaddleOcrSubprocessClient] = None
-        self._shared_paddle_ocr_unavailable: bool = False
 
     @property
     def session_factory(self):
@@ -313,8 +310,6 @@ class CameraManager:
         if self._running:
             return
         self._stop_event.clear()
-        self._shared_paddle_ocr_unavailable = False
-        self._ensure_shared_paddle_ocr_client()
         for cam in self.cameras:
             self._start_context(cam.camera_id)
         self._running = True
@@ -348,7 +343,6 @@ class CameraManager:
         self._violation_listeners.clear()
         self._track_websockets.clear()
         self._violation_websockets.clear()
-        self._close_shared_paddle_ocr_client()
         try:
             self._engine.dispose()
         except Exception:
@@ -454,7 +448,6 @@ class CameraManager:
             license_plate_paddle_text_recognition_model_name=self.cfg.license_plate.paddle_text_recognition_model_name,
             license_plate_paddle_lang=self.cfg.license_plate.paddle_lang,
             license_plate_paddle_use_gpu=self.cfg.license_plate.paddle_use_gpu,
-            license_plate_paddle_subprocess_enabled=self.cfg.license_plate.paddle_subprocess_enabled,
             license_plate_read_interval_ms=self.cfg.license_plate.read_interval_ms,
             license_plate_min_ocr_confidence=self.cfg.license_plate.min_ocr_confidence,
             license_plate_consensus_min_hits=self.cfg.license_plate.consensus_min_hits,
@@ -463,7 +456,6 @@ class CameraManager:
             license_plate_crop_expand_x_ratio=self.cfg.license_plate.crop_expand_x_ratio,
             license_plate_crop_expand_y_ratio=self.cfg.license_plate.crop_expand_y_ratio,
             license_plate_image_jpeg_quality=self.cfg.license_plate.image_jpeg_quality,
-            shared_paddle_ocr_client=self._shared_paddle_ocr_client,
         )
 
     def _ui_payload(self) -> dict:
@@ -518,52 +510,4 @@ class CameraManager:
         if sockets:
             await asyncio.gather(*(close_one(ws) for ws in sockets), return_exceptions=True)
 
-    def _should_use_paddle_subprocess(self) -> bool:
-        lp_cfg = self.cfg.license_plate
-        return bool(lp_cfg.enabled) and lp_cfg.ocr_backend == "paddleocr" and bool(lp_cfg.paddle_subprocess_enabled)
-
-    def _ensure_shared_paddle_ocr_client(self) -> None:
-        if not self._should_use_paddle_subprocess():
-            self._close_shared_paddle_ocr_client()
-            return
-        if self._shared_paddle_ocr_unavailable:
-            return
-        if self._shared_paddle_ocr_client is not None and self._shared_paddle_ocr_client.available:
-            return
-        client = PaddleOcrSubprocessClient(
-            ocr_version=self.cfg.license_plate.paddle_ocr_version,
-            text_detection_model_name=self.cfg.license_plate.paddle_text_detection_model_name,
-            text_recognition_model_name=self.cfg.license_plate.paddle_text_recognition_model_name,
-            lang=self.cfg.license_plate.paddle_lang,
-            use_gpu=self.cfg.license_plate.paddle_use_gpu,
-            startup_timeout_s=self.cfg.license_plate.paddle_subprocess_startup_timeout_s,
-            request_timeout_ms=self.cfg.license_plate.paddle_subprocess_request_timeout_ms,
-            request_jpeg_quality=self.cfg.license_plate.paddle_subprocess_request_jpeg_quality,
-            on_log=lambda msg: print(msg, flush=True),
-        )
-        if client.available:
-            self._shared_paddle_ocr_client = client
-            self._shared_paddle_ocr_unavailable = False
-            return
-        self._shared_paddle_ocr_client = None
-        self._shared_paddle_ocr_unavailable = True
-        try:
-            client.close()
-        except Exception:
-            pass
-        print(
-            "[camera_manager] paddle subprocess OCR is unavailable; license plate OCR will be disabled for contexts.",
-            flush=True,
-        )
-
-    def _close_shared_paddle_ocr_client(self) -> None:
-        client = self._shared_paddle_ocr_client
-        self._shared_paddle_ocr_client = None
-        self._shared_paddle_ocr_unavailable = False
-        if client is None:
-            return
-        try:
-            client.close()
-        except Exception:
-            pass
 

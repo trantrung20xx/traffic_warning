@@ -32,7 +32,7 @@ from app.rtsp.rtsp_stream import RtspFrameReader
 from app.tracking.tracker import YoloByteTrackVehicleTracker
 from app.vision.detector import YoloV8VehicleDetector
 from app.vision.license_plate_detector import YoloV8LicensePlateDetector
-from app.vision.license_plate_ocr import LicensePlateOcr, PaddleOcrSubprocessClient
+from app.vision.license_plate_ocr import LicensePlateOcr
 
 
 class CameraContext:
@@ -137,7 +137,6 @@ class CameraContext:
         license_plate_paddle_text_recognition_model_name: str = "PP-OCRv5_mobile_rec",
         license_plate_paddle_lang: str = "en",
         license_plate_paddle_use_gpu: bool = False,
-        license_plate_paddle_subprocess_enabled: bool = True,
         license_plate_read_interval_ms: int = 500,
         license_plate_min_ocr_confidence: float = 0.65,
         license_plate_consensus_min_hits: int = 2,
@@ -146,7 +145,6 @@ class CameraContext:
         license_plate_crop_expand_x_ratio: float = 0.10,
         license_plate_crop_expand_y_ratio: float = 0.08,
         license_plate_image_jpeg_quality: int = 92,
-        shared_paddle_ocr_client: Optional[PaddleOcrSubprocessClient] = None,
     ):
         self.repo_root = Path(repo_root)
         self.camera_config = camera_config
@@ -260,10 +258,9 @@ class CameraContext:
         self._license_plate_crop_expand_y_ratio = float(license_plate_crop_expand_y_ratio)
         self._license_plate_image_jpeg_quality = int(license_plate_image_jpeg_quality)
         self._license_plate_detector: Optional[YoloV8LicensePlateDetector] = None
-        self._license_plate_ocr: Optional[LicensePlateOcr | PaddleOcrSubprocessClient] = None
+        self._license_plate_ocr: Optional[LicensePlateOcr] = None
         self._license_plate_resolver: Optional[LicensePlateTemporalResolver] = None
         ocr_backend_normalized = str(license_plate_ocr_backend).strip().lower()
-        use_paddle_subprocess = ocr_backend_normalized == "paddleocr" and bool(license_plate_paddle_subprocess_enabled)
 
         if self._license_plate_enabled:
             self._license_plate_resolver = LicensePlateTemporalResolver(
@@ -289,28 +286,23 @@ class CameraContext:
                     "license plate pipeline disabled."
                 )
             else:
-                if use_paddle_subprocess:
-                    self._license_plate_ocr = shared_paddle_ocr_client
-                else:
-                    self._license_plate_ocr = LicensePlateOcr(
-                        backend=license_plate_ocr_backend,
-                        easyocr_lang=license_plate_easyocr_lang,
-                        easyocr_use_gpu=license_plate_easyocr_use_gpu,
-                        paddle_ocr_version=license_plate_paddle_ocr_version,
-                        paddle_text_detection_model_name=license_plate_paddle_text_detection_model_name,
-                        paddle_text_recognition_model_name=license_plate_paddle_text_recognition_model_name,
-                        paddle_lang=license_plate_paddle_lang,
-                        paddle_use_gpu=license_plate_paddle_use_gpu,
-                        on_log=lambda message: self.on_log(f"[{self.camera_id}] {message}"),
-                    )
+                self._license_plate_ocr = LicensePlateOcr(
+                    backend=license_plate_ocr_backend,
+                    easyocr_lang=license_plate_easyocr_lang,
+                    easyocr_use_gpu=license_plate_easyocr_use_gpu,
+                    paddle_ocr_version=license_plate_paddle_ocr_version,
+                    paddle_text_detection_model_name=license_plate_paddle_text_detection_model_name,
+                    paddle_text_recognition_model_name=license_plate_paddle_text_recognition_model_name,
+                    paddle_lang=license_plate_paddle_lang,
+                    paddle_use_gpu=license_plate_paddle_use_gpu,
+                    on_log=lambda message: self.on_log(f"[{self.camera_id}] {message}"),
+                )
                 if self._license_plate_ocr is None or not self._license_plate_ocr.available:
                     self._license_plate_enabled = False
                     self._license_plate_detector = None
                     self._license_plate_ocr = None
                     self._license_plate_resolver = None
                     unavailable_reason = f"backend unavailable ({license_plate_ocr_backend})"
-                    if use_paddle_subprocess:
-                        unavailable_reason = "paddle subprocess OCR service unavailable"
                     self.on_log(
                         f"[{self.camera_id}] license plate OCR {unavailable_reason}. "
                         "license plate pipeline disabled."
@@ -324,7 +316,6 @@ class CameraContext:
                             f" rec_model={license_plate_paddle_text_recognition_model_name}"
                             f" lang={license_plate_paddle_lang}"
                             f" use_gpu={bool(license_plate_paddle_use_gpu)}"
-                            f" subprocess={bool(use_paddle_subprocess)}"
                         )
                     elif ocr_backend_normalized == "easyocr":
                         ocr_extra = (

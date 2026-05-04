@@ -331,9 +331,6 @@ Toàn bộ tọa độ lưu theo chuẩn hóa `[0, 1]`.
 | `license_plate.detector_confidence_threshold` | Ngưỡng confidence detector biển số. |
 | `license_plate.ocr_backend` | Backend OCR (hiện đang dùng `paddleocr`). |
 | `license_plate.paddle_use_gpu` | Bật GPU cho OCR phía Paddle runtime. |
-| `license_plate.paddle_subprocess_enabled` | Chạy OCR Paddle ở process riêng để tránh xung đột CUDA với Torch. |
-| `license_plate.paddle_subprocess_startup_timeout_s` | Timeout khởi động OCR subprocess. |
-| `license_plate.paddle_subprocess_request_timeout_ms` | Timeout một request OCR. |
 | `license_plate.read_interval_ms` | Chu kỳ đọc OCR theo từng `vehicle_id` (không chạy mọi frame). |
 | `license_plate.min_ocr_confidence` | Ngưỡng confidence tối thiểu để giữ candidate OCR. |
 | `license_plate.consensus_min_hits` | Số lần lặp tối thiểu để xác nhận biển số. |

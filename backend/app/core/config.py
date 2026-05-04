@@ -258,10 +258,6 @@ class LicensePlateConfig(BaseModel):
     paddle_text_recognition_model_name: str = "PP-OCRv5_mobile_rec"
     paddle_lang: str = "en"
     paddle_use_gpu: bool = False
-    paddle_subprocess_enabled: bool = True
-    paddle_subprocess_startup_timeout_s: float = 30.0
-    paddle_subprocess_request_timeout_ms: int = 1200
-    paddle_subprocess_request_jpeg_quality: int = 92
     read_interval_ms: int = 500
     min_ocr_confidence: float = 0.65
     consensus_min_hits: int = 2
