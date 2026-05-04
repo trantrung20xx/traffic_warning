@@ -215,6 +215,84 @@
           "corridor_width_px": 137
         }
       }
+    },
+    {
+      "lane_id": 4,
+      "polygon": [
+        [
+          0.56640625,
+          0.34444444444444444
+        ],
+        [
+          0.5921875,
+          0.3333333333333333
+        ],
+        [
+          0.65390625,
+          0.5180555555555556
+        ],
+        [
+          0.6875,
+          0.6180555555555556
+        ],
+        [
+          0.82109375,
+          0.9944444444444445
+        ],
+        [
+          0.76328125,
+          0.9986111111111111
+        ]
+      ],
+      "allowed_lane_changes": [
+        4
+      ],
+      "allowed_vehicle_types": [
+        "motorcycle",
+        "car",
+        "truck",
+        "bus"
+      ],
+      "maneuvers": {
+        "straight": {
+          "enabled": true,
+          "allowed": false,
+          "movement_path": [
+            [
+              0.79453125,
+              0.9944444444444445
+            ],
+            [
+              0.73984375,
+              0.8486111111111111
+            ],
+            [
+              0.68125,
+              0.6513888888888889
+            ],
+            [
+              0.58828125,
+              0.34305555555555556
+            ]
+          ],
+          "corridor_width_px": 45
+        },
+        "right": {
+          "enabled": false,
+          "allowed": false,
+          "corridor_width_px": 82
+        },
+        "left": {
+          "enabled": true,
+          "allowed": true,
+          "corridor_width_px": 82
+        },
+        "u_turn": {
+          "enabled": false,
+          "allowed": false,
+          "corridor_width_px": 104
+        }
+      }
     }
   ]
 }

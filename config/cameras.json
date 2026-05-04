@@ -14,7 +14,34 @@
       "monitored_lanes": [
         1,
         2,
-        3
+        3,
+        4
+      ],
+      "frame_width": 1280,
+      "frame_height": 720
+    },
+    {
+      "camera_id": "cam_02",
+      "rtsp_url": "abc",
+      "camera_type": "roadside",
+      "location": {
+        "road_name": "Ngã tư Sở"
+      },
+      "monitored_lanes": [
+        1
+      ],
+      "frame_width": 1280,
+      "frame_height": 720
+    },
+    {
+      "camera_id": "cam_03",
+      "rtsp_url": "bcd",
+      "camera_type": "roadside",
+      "location": {
+        "road_name": "Ngã tư Nhổn"
+      },
+      "monitored_lanes": [
+        1
       ],
       "frame_width": 1280,
       "frame_height": 720
