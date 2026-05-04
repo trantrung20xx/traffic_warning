@@ -1,4 +1,10 @@
-import { formatTimestamp, getVehicleTypeLabel, getViolationLabel } from "./utils";
+import {
+  formatLicensePlateValue,
+  formatTimestamp,
+  getLicensePlateStatusLabel,
+  getVehicleTypeLabel,
+  getViolationLabel,
+} from "./utils";
 
 export const VIOLATION_FALLBACK = "-";
 
@@ -71,6 +77,21 @@ export function buildViolationSections(violation) {
           label: "Làn phát hiện",
           value: formatValue(violation?.lane_id),
         },
+        {
+          label: "Biển số",
+          value: formatLicensePlateValue(violation?.license_plate, violation?.license_plate_status),
+        },
+        {
+          label: "Trạng thái OCR",
+          value: getLicensePlateStatusLabel(violation?.license_plate_status),
+        },
+        {
+          label: "Độ tin cậy OCR",
+          value:
+            typeof violation?.license_plate_confidence === "number"
+              ? Number(violation.license_plate_confidence).toFixed(2)
+              : VIOLATION_FALLBACK,
+        },
       ],
     },
     {
@@ -86,6 +107,11 @@ export function buildViolationSections(violation) {
           label: "GPS",
           value: gpsText,
           hidden: !gpsText,
+        },
+        {
+          label: "Track session",
+          value: formatValue(violation?.track_session_id),
+          hidden: !hasValue(violation?.track_session_id),
         },
       ],
     },

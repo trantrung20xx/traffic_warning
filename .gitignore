@@ -30,3 +30,4 @@ pnpm-debug.log*
 
 # Local model weights
 backend/yolov8*.pt
+backend/license_plate_yolov8.pt

@@ -149,6 +149,29 @@
       }
     }
   },
+  "license_plate": {
+    "enabled": true,
+    "detector_weights_path": "backend/license_plate_yolov8.pt",
+    "detector_confidence_threshold": 0.35,
+    "ocr_backend": "paddleocr",
+    "paddle_ocr_version": "PP-OCRv5",
+    "paddle_text_detection_model_name": "PP-OCRv5_mobile_det",
+    "paddle_text_recognition_model_name": "PP-OCRv5_mobile_rec",
+    "paddle_lang": "en",
+    "paddle_use_gpu": true,
+    "paddle_subprocess_enabled": true,
+    "paddle_subprocess_startup_timeout_s": 30.0,
+    "paddle_subprocess_request_timeout_ms": 1200,
+    "paddle_subprocess_request_jpeg_quality": 92,
+    "read_interval_ms": 700,
+    "min_ocr_confidence": 0.65,
+    "consensus_min_hits": 2,
+    "candidate_window_ms": 4000,
+    "max_attempts_before_unreadable": 6,
+    "crop_expand_x_ratio": 0.1,
+    "crop_expand_y_ratio": 0.08,
+    "image_jpeg_quality": 92
+  },
   "analytics": {
     "chart": {
       "minute_granularity_max_range_hours": 24,

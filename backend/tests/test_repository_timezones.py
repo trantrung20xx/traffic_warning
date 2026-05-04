@@ -145,6 +145,51 @@ class RepositoryTimezoneTests(unittest.TestCase):
 
         self.assertEqual(dashboard["time_series_granularity"], "hour")
 
+    def test_history_can_filter_by_license_plate(self) -> None:
+        engine = None
+        try:
+            engine, session_factory = self._create_session_factory()
+
+            with session_factory() as session:
+                insert_violation(
+                    session,
+                    ViolationEvent(
+                        camera_id="cam_01",
+                        location=ViolationLocation(road_name="Vo Van Kiet"),
+                        vehicle_id=1,
+                        vehicle_type="car",
+                        lane_id=1,
+                        violation="wrong_lane",
+                        license_plate="51A12345",
+                        license_plate_status="confirmed",
+                        license_plate_confidence=0.86,
+                        timestamp=datetime(2026, 4, 10, 9, 30, 15, tzinfo=timezone.utc).isoformat(),
+                    ),
+                )
+                insert_violation(
+                    session,
+                    ViolationEvent(
+                        camera_id="cam_01",
+                        location=ViolationLocation(road_name="Vo Van Kiet"),
+                        vehicle_id=2,
+                        vehicle_type="car",
+                        lane_id=1,
+                        violation="wrong_lane",
+                        license_plate="30H99876",
+                        license_plate_status="confirmed",
+                        license_plate_confidence=0.79,
+                        timestamp=datetime(2026, 4, 10, 9, 31, 15, tzinfo=timezone.utc).isoformat(),
+                    ),
+                )
+                rows = query_violation_history(session, license_plate="51a1")
+        finally:
+            if engine is not None:
+                engine.dispose()
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["license_plate"], "51A12345")
+        self.assertEqual(rows[0]["license_plate_status"], "confirmed")
+
 
 if __name__ == "__main__":
     unittest.main()

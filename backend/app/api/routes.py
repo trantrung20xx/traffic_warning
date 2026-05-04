@@ -41,12 +41,14 @@ def create_api_router(manager: CameraManager) -> APIRouter:
         camera_id: Optional[str],
         from_ts: Optional[str],
         to_ts: Optional[str],
+        license_plate: Optional[str],
         limit: Optional[int],
     ):
         return manager.query_history(
             from_ts=from_ts,
             to_ts=to_ts,
             camera_id=camera_id,
+            license_plate=license_plate,
             limit=limit,
         )
 
@@ -178,11 +180,18 @@ def create_api_router(manager: CameraManager) -> APIRouter:
     @router.get("/api/violations/history")
     def violation_history(
         camera_id: Optional[str] = Query(default=None),
+        license_plate: Optional[str] = Query(default=None),
         from_ts: Optional[str] = Query(default=None),
         to_ts: Optional[str] = Query(default=None),
         limit: Optional[int] = Query(default=None, ge=1),
     ):
-        rows = _query_history_rows(camera_id=camera_id, from_ts=from_ts, to_ts=to_ts, limit=limit)
+        rows = _query_history_rows(
+            camera_id=camera_id,
+            license_plate=license_plate,
+            from_ts=from_ts,
+            to_ts=to_ts,
+            limit=limit,
+        )
         return {"rows": rows}
 
     @router.get("/api/violations/export")
@@ -190,10 +199,17 @@ def create_api_router(manager: CameraManager) -> APIRouter:
         request: Request,
         format: str = Query(default="csv", pattern="^(csv|xlsx)$"),
         camera_id: Optional[str] = Query(default=None),
+        license_plate: Optional[str] = Query(default=None),
         from_ts: Optional[str] = Query(default=None),
         to_ts: Optional[str] = Query(default=None),
     ):
-        rows = _query_history_rows(camera_id=camera_id, from_ts=from_ts, to_ts=to_ts, limit=None)
+        rows = _query_history_rows(
+            camera_id=camera_id,
+            license_plate=license_plate,
+            from_ts=from_ts,
+            to_ts=to_ts,
+            limit=None,
+        )
         if not rows:
             format_label = "Excel" if format == "xlsx" else "CSV"
             raise HTTPException(

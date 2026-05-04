@@ -109,9 +109,10 @@ export async function fetchDashboard({ cameraId, fromTs, toTs }) {
   );
 }
 
-export async function fetchViolationHistory({ cameraId, fromTs, toTs, limit }) {
+export async function fetchViolationHistory({ cameraId, licensePlate, fromTs, toTs, limit }) {
   const params = {
     camera_id: cameraId,
+    license_plate: licensePlate,
     from_ts: fromTs,
     to_ts: toTs,
   };
@@ -121,11 +122,12 @@ export async function fetchViolationHistory({ cameraId, fromTs, toTs, limit }) {
   return await request(withQuery("/api/violations/history", params));
 }
 
-export async function exportViolationHistory({ format, cameraId, fromTs, toTs }) {
+export async function exportViolationHistory({ format, cameraId, licensePlate, fromTs, toTs }) {
   const extension = format === "xlsx" ? "xlsx" : "csv";
   const params = {
     format: extension,
     camera_id: cameraId,
+    license_plate: licensePlate,
     from_ts: fromTs,
     to_ts: toTs,
   };

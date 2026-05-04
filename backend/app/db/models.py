@@ -24,6 +24,11 @@ class Violation(Base):
     lane_id = Column(Integer, nullable=False)
     violation = Column(String, nullable=False, index=True)
     evidence_image_path = Column(String, nullable=True)
+    license_plate = Column(String, nullable=True, index=True)
+    license_plate_status = Column(String, nullable=True, index=True)
+    license_plate_confidence = Column(Float, nullable=True)
+    license_plate_image_path = Column(String, nullable=True)
+    track_session_id = Column(String, nullable=True, index=True)
 
     timestamp_utc = Column(DateTime(timezone=True), nullable=False, index=True)
 

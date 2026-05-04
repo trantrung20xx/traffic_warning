@@ -246,6 +246,38 @@ class UiConfig(BaseModel):
     monitoring: MonitoringUiConfig = MonitoringUiConfig()
 
 
+class LicensePlateConfig(BaseModel):
+    enabled: bool = False
+    detector_weights_path: str = "backend/license_plate_yolov8.pt"
+    detector_confidence_threshold: float = 0.35
+    ocr_backend: str = "paddleocr"
+    paddle_ocr_version: str = "PP-OCRv5"
+    paddle_text_detection_model_name: str = "PP-OCRv5_mobile_det"
+    paddle_text_recognition_model_name: str = "PP-OCRv5_mobile_rec"
+    paddle_lang: str = "en"
+    paddle_use_gpu: bool = False
+    paddle_subprocess_enabled: bool = True
+    paddle_subprocess_startup_timeout_s: float = 30.0
+    paddle_subprocess_request_timeout_ms: int = 1200
+    paddle_subprocess_request_jpeg_quality: int = 92
+    read_interval_ms: int = 500
+    min_ocr_confidence: float = 0.65
+    consensus_min_hits: int = 2
+    candidate_window_ms: int = 4000
+    max_attempts_before_unreadable: int = 6
+    crop_expand_x_ratio: float = 0.10
+    crop_expand_y_ratio: float = 0.08
+    image_jpeg_quality: int = 92
+
+    @field_validator("ocr_backend")
+    @classmethod
+    def validate_ocr_backend(cls, value: str) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized not in {"easyocr", "paddleocr"}:
+            raise ValueError("license_plate.ocr_backend must be either 'easyocr' or 'paddleocr'")
+        return normalized
+
+
 class ManeuverConfig(BaseModel):
     enabled: bool = True
     allowed: bool = False
@@ -503,6 +535,7 @@ class AppConfig(BaseModel):
     evidence_crop_expand_y_bottom_ratio: float = 0.27
     evidence_crop_min_size_px: int = 24
     evidence_jpeg_quality: int = 92
+    license_plate: LicensePlateConfig = LicensePlateConfig()
     analytics_chart: AnalyticsChartConfig = AnalyticsChartConfig()
     ui: UiConfig = UiConfig()
 
@@ -916,6 +949,9 @@ def load_app_config(repo_root: Path) -> AppConfig:
         ),
         evidence_crop_min_size_px=int(_setting(settings, ("geometry", "evidence_crop", "min_size_px"), 24)),
         evidence_jpeg_quality=int(_setting(settings, ("geometry", "evidence_image", "jpeg_quality"), 92)),
+        license_plate=LicensePlateConfig.model_validate(
+            _setting(settings, ("license_plate",), {}) or {}
+        ),
         analytics_chart=AnalyticsChartConfig.model_validate(
             _setting(settings, ("analytics", "chart"), {}) or {}
         ),

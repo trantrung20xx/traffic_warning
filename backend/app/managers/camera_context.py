@@ -7,6 +7,7 @@ from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional
+from uuid import uuid4
 
 import cv2
 
@@ -14,6 +15,7 @@ from app.core.config import CameraConfig, RuntimeCameraLaneConfig
 from app.core.evidence_images import build_evidence_image_url, save_evidence_image
 from app.db.repository import insert_violation
 from app.logic.lane_logic import LaneLogic, TemporalLaneAssigner
+from app.logic.license_plate_logic import LicensePlateSnapshot, LicensePlateTemporalResolver
 from app.logic.track_id_logic import StableTrackIdAssigner
 from app.logic.vehicle_type_logic import TemporalVehicleTypeAssigner
 from app.logic.violation_logic import ViolationLogic
@@ -29,6 +31,8 @@ from app.stats.statistics_engine import StatisticsEngine
 from app.rtsp.rtsp_stream import RtspFrameReader
 from app.tracking.tracker import YoloByteTrackVehicleTracker
 from app.vision.detector import YoloV8VehicleDetector
+from app.vision.license_plate_detector import YoloV8LicensePlateDetector
+from app.vision.license_plate_ocr import LicensePlateOcr, PaddleOcrSubprocessClient
 
 
 class CameraContext:
@@ -122,6 +126,25 @@ class CameraContext:
         evidence_crop_expand_y_bottom_ratio: float = 0.27,
         evidence_crop_min_size_px: int = 24,
         evidence_jpeg_quality: int = 92,
+        license_plate_enabled: bool = False,
+        license_plate_detector_weights_path: str = "backend/license_plate_yolov8.pt",
+        license_plate_detector_conf_threshold: float = 0.35,
+        license_plate_ocr_backend: str = "paddleocr",
+        license_plate_paddle_ocr_version: str = "PP-OCRv5",
+        license_plate_paddle_text_detection_model_name: str = "PP-OCRv5_mobile_det",
+        license_plate_paddle_text_recognition_model_name: str = "PP-OCRv5_mobile_rec",
+        license_plate_paddle_lang: str = "en",
+        license_plate_paddle_use_gpu: bool = False,
+        license_plate_paddle_subprocess_enabled: bool = True,
+        license_plate_read_interval_ms: int = 500,
+        license_plate_min_ocr_confidence: float = 0.65,
+        license_plate_consensus_min_hits: int = 2,
+        license_plate_candidate_window_ms: int = 4000,
+        license_plate_max_attempts_before_unreadable: int = 6,
+        license_plate_crop_expand_x_ratio: float = 0.10,
+        license_plate_crop_expand_y_ratio: float = 0.08,
+        license_plate_image_jpeg_quality: int = 92,
+        shared_paddle_ocr_client: Optional[PaddleOcrSubprocessClient] = None,
     ):
         self.repo_root = Path(repo_root)
         self.camera_config = camera_config
@@ -226,6 +249,83 @@ class CameraContext:
         )
 
         self.stats = StatisticsEngine()
+        self.track_session_id = f"{self.camera_id}-{uuid4().hex[:12]}"
+
+        self._license_plate_enabled = bool(license_plate_enabled)
+        self._license_plate_last_read_ms: dict[int, int] = {}
+        self._license_plate_read_interval_ms = max(int(license_plate_read_interval_ms), 100)
+        self._license_plate_crop_expand_x_ratio = float(license_plate_crop_expand_x_ratio)
+        self._license_plate_crop_expand_y_ratio = float(license_plate_crop_expand_y_ratio)
+        self._license_plate_image_jpeg_quality = int(license_plate_image_jpeg_quality)
+        self._license_plate_detector: Optional[YoloV8LicensePlateDetector] = None
+        self._license_plate_ocr: Optional[LicensePlateOcr | PaddleOcrSubprocessClient] = None
+        self._license_plate_resolver: Optional[LicensePlateTemporalResolver] = None
+        ocr_backend_normalized = str(license_plate_ocr_backend).strip().lower()
+        use_paddle_subprocess = ocr_backend_normalized == "paddleocr" and bool(license_plate_paddle_subprocess_enabled)
+
+        if self._license_plate_enabled:
+            self._license_plate_resolver = LicensePlateTemporalResolver(
+                candidate_window_ms=license_plate_candidate_window_ms,
+                min_ocr_confidence=license_plate_min_ocr_confidence,
+                consensus_min_hits=license_plate_consensus_min_hits,
+                max_attempts_before_unreadable=license_plate_max_attempts_before_unreadable,
+            )
+            try:
+                self._license_plate_detector = YoloV8LicensePlateDetector(
+                    weights_path=license_plate_detector_weights_path,
+                    conf_threshold=license_plate_detector_conf_threshold,
+                    iou_threshold=detector_iou_threshold,
+                    device=detector_device,
+                )
+            except Exception as exc:
+                self._license_plate_enabled = False
+                self._license_plate_detector = None
+                self._license_plate_ocr = None
+                self._license_plate_resolver = None
+                self.on_log(
+                    f"[{self.camera_id}] license plate detector unavailable: {exc}. "
+                    "license plate pipeline disabled."
+                )
+            else:
+                if use_paddle_subprocess:
+                    self._license_plate_ocr = shared_paddle_ocr_client
+                else:
+                    self._license_plate_ocr = LicensePlateOcr(
+                        backend=license_plate_ocr_backend,
+                        paddle_ocr_version=license_plate_paddle_ocr_version,
+                        paddle_text_detection_model_name=license_plate_paddle_text_detection_model_name,
+                        paddle_text_recognition_model_name=license_plate_paddle_text_recognition_model_name,
+                        paddle_lang=license_plate_paddle_lang,
+                        paddle_use_gpu=license_plate_paddle_use_gpu,
+                        on_log=lambda message: self.on_log(f"[{self.camera_id}] {message}"),
+                    )
+                if self._license_plate_ocr is None or not self._license_plate_ocr.available:
+                    self._license_plate_enabled = False
+                    self._license_plate_detector = None
+                    self._license_plate_ocr = None
+                    self._license_plate_resolver = None
+                    unavailable_reason = f"backend unavailable ({license_plate_ocr_backend})"
+                    if use_paddle_subprocess:
+                        unavailable_reason = "paddle subprocess OCR service unavailable"
+                    self.on_log(
+                        f"[{self.camera_id}] license plate OCR {unavailable_reason}. "
+                        "license plate pipeline disabled."
+                    )
+                else:
+                    ocr_extra = ""
+                    if ocr_backend_normalized == "paddleocr":
+                        ocr_extra = (
+                            f" ocr_version={license_plate_paddle_ocr_version}"
+                            f" det_model={license_plate_paddle_text_detection_model_name}"
+                            f" rec_model={license_plate_paddle_text_recognition_model_name}"
+                            f" lang={license_plate_paddle_lang}"
+                            f" use_gpu={bool(license_plate_paddle_use_gpu)}"
+                            f" subprocess={bool(use_paddle_subprocess)}"
+                        )
+                    self.on_log(
+                        f"[{self.camera_id}] license_plate enabled backend={license_plate_ocr_backend} "
+                        f"detector={license_plate_detector_weights_path}{ocr_extra}"
+                    )
 
         self._db_session_factory = db_session_factory
 
@@ -342,6 +442,13 @@ class CameraContext:
                 ts_dt = datetime.fromtimestamp(frame.timestamp_utc_ms / 1000.0, tz=timezone.utc)
                 tracks = await asyncio.to_thread(self.tracker.track, frame.bgr)
                 tracks = await asyncio.to_thread(self.stable_track_id_assigner.assign, raw_tracks=tracks, ts=ts_dt)
+                plate_snapshots = await asyncio.to_thread(
+                    self._resolve_license_plate_snapshots,
+                    frame.bgr,
+                    tracks,
+                    ts_dt=ts_dt,
+                    frame_timestamp_utc_ms=frame.timestamp_utc_ms,
+                )
 
                 vehicles: list[TrackVehicle] = []
                 violation_candidates: list[tuple[int, str, dict, list[float]]] = []
@@ -363,12 +470,16 @@ class CameraContext:
                         raw_lane_id=raw_lane_id,
                         ts=ts_dt,
                     )
+                    plate_snapshot = plate_snapshots.get(tr.vehicle_id)
                     vehicles.append(
                         TrackVehicle(
                             vehicle_id=tr.vehicle_id,
                             vehicle_type=vehicle_type,
                             lane_id=lane_id,
                             raw_lane_id=raw_lane_id,
+                            license_plate=plate_snapshot.license_plate if plate_snapshot else None,
+                            license_plate_status=plate_snapshot.status if plate_snapshot else None,
+                            license_plate_confidence=plate_snapshot.confidence if plate_snapshot else None,
                             bbox=BBox(x1=tr.bbox_xyxy[0], y1=tr.bbox_xyxy[1], x2=tr.bbox_xyxy[2], y2=tr.bbox_xyxy[3]),
                         )
                     )
@@ -421,9 +532,191 @@ class CameraContext:
                     current_ts=ts_dt,
                     max_age_s=self._state_prune_max_age_s,
                 )
+                if self._license_plate_resolver is not None:
+                    await asyncio.to_thread(
+                        self._license_plate_resolver.prune,
+                        current_ts=ts_dt,
+                        max_age_s=self._state_prune_max_age_s,
+                    )
+                    self._prune_license_plate_read_schedule(current_ts=ts_dt)
                 self._mark_processed_frame()
         finally:
             await asyncio.to_thread(self.rtsp_reader.close)
+
+    def _license_plate_snapshot_for(self, *, vehicle_id: int) -> Optional[LicensePlateSnapshot]:
+        if self._license_plate_resolver is None:
+            return None
+        return self._license_plate_resolver.snapshot_for(vehicle_id=vehicle_id)
+
+    def _resolve_license_plate_snapshots(
+        self,
+        frame_bgr,
+        tracks,
+        *,
+        ts_dt: datetime,
+        frame_timestamp_utc_ms: int,
+    ) -> dict[int, LicensePlateSnapshot]:
+        resolver = self._license_plate_resolver
+        if resolver is None:
+            return {}
+
+        snapshots: dict[int, LicensePlateSnapshot] = {}
+        active_vehicle_ids: set[int] = set()
+
+        for track in tracks:
+            vehicle_id = int(track.vehicle_id)
+            active_vehicle_ids.add(vehicle_id)
+            resolver.touch(vehicle_id=vehicle_id, ts=ts_dt)
+
+            if self._license_plate_enabled and self._should_attempt_license_plate_read(
+                vehicle_id=vehicle_id,
+                frame_timestamp_utc_ms=frame_timestamp_utc_ms,
+            ):
+                self._license_plate_last_read_ms[vehicle_id] = int(frame_timestamp_utc_ms)
+                raw_text: Optional[str] = None
+                confidence: Optional[float] = None
+                try:
+                    raw_text, confidence = self._infer_license_plate_text(
+                        frame_bgr,
+                        track.bbox_xyxy,
+                    )
+                except Exception as exc:
+                    self.on_log(f"[{self.camera_id}] license plate inference failed for vehicle {vehicle_id}: {exc}")
+                resolver.observe_attempt(
+                    vehicle_id=vehicle_id,
+                    ts=ts_dt,
+                    raw_text=raw_text,
+                    confidence=confidence,
+                )
+
+            snapshots[vehicle_id] = resolver.snapshot_for(vehicle_id=vehicle_id)
+
+        stale_read_ids = [
+            vehicle_id for vehicle_id in self._license_plate_last_read_ms.keys() if vehicle_id not in active_vehicle_ids
+        ]
+        for vehicle_id in stale_read_ids:
+            del self._license_plate_last_read_ms[vehicle_id]
+
+        return snapshots
+
+    def _should_attempt_license_plate_read(self, *, vehicle_id: int, frame_timestamp_utc_ms: int) -> bool:
+        if self._license_plate_read_interval_ms <= 0:
+            return True
+        last_read_ms = self._license_plate_last_read_ms.get(vehicle_id)
+        if last_read_ms is None:
+            return True
+        return int(frame_timestamp_utc_ms) - int(last_read_ms) >= self._license_plate_read_interval_ms
+
+    def _prune_license_plate_read_schedule(self, *, current_ts: datetime) -> None:
+        cutoff_s = current_ts.timestamp() - self._state_prune_max_age_s
+        stale_vehicle_ids = [
+            vehicle_id
+            for vehicle_id, ts_ms in self._license_plate_last_read_ms.items()
+            if (float(ts_ms) / 1000.0) < cutoff_s
+        ]
+        for vehicle_id in stale_vehicle_ids:
+            del self._license_plate_last_read_ms[vehicle_id]
+
+    def _crop_vehicle_for_license_plate(self, frame_bgr, bbox_xyxy: list[float]):
+        frame_height, frame_width = frame_bgr.shape[:2]
+        if frame_height <= 0 or frame_width <= 0:
+            return None
+
+        x1, y1, x2, y2 = [float(value) for value in bbox_xyxy]
+        box_width = max(x2 - x1, 1.0)
+        box_height = max(y2 - y1, 1.0)
+
+        expand_x = box_width * self._license_plate_crop_expand_x_ratio
+        expand_y = box_height * self._license_plate_crop_expand_y_ratio
+
+        crop_x1 = max(int(round(x1 - expand_x)), 0)
+        crop_y1 = max(int(round(y1 - expand_y)), 0)
+        crop_x2 = min(int(round(x2 + expand_x)), frame_width)
+        crop_y2 = min(int(round(y2 + expand_y)), frame_height)
+        if crop_x2 <= crop_x1 or crop_y2 <= crop_y1:
+            return None
+
+        vehicle_crop = frame_bgr[crop_y1:crop_y2, crop_x1:crop_x2]
+        if vehicle_crop is None or vehicle_crop.size == 0:
+            return None
+        return vehicle_crop.copy()
+
+    def _extract_license_plate_crop(self, frame_bgr, bbox_xyxy: list[float]):
+        detector = self._license_plate_detector
+        if detector is None:
+            return None
+
+        vehicle_crop = self._crop_vehicle_for_license_plate(frame_bgr, bbox_xyxy)
+        if vehicle_crop is None:
+            return None
+
+        detections = detector.detect(vehicle_crop)
+        if not detections:
+            return None
+
+        x1, y1, x2, y2 = [float(value) for value in detections[0].bbox_xyxy]
+        h, w = vehicle_crop.shape[:2]
+        crop_x1 = max(int(round(x1)), 0)
+        crop_y1 = max(int(round(y1)), 0)
+        crop_x2 = min(int(round(x2)), w)
+        crop_y2 = min(int(round(y2)), h)
+        if crop_x2 <= crop_x1 or crop_y2 <= crop_y1:
+            return None
+
+        plate_crop = vehicle_crop[crop_y1:crop_y2, crop_x1:crop_x2]
+        if plate_crop is None or plate_crop.size == 0:
+            return None
+        if plate_crop.shape[0] < 8 or plate_crop.shape[1] < 20:
+            return None
+        return plate_crop.copy()
+
+    def _infer_license_plate_text(self, frame_bgr, bbox_xyxy: list[float]) -> tuple[Optional[str], Optional[float]]:
+        if not self._license_plate_enabled:
+            return (None, None)
+
+        plate_crop = self._extract_license_plate_crop(frame_bgr, bbox_xyxy)
+        if plate_crop is None:
+            return (None, None)
+
+        ocr = self._license_plate_ocr
+        if ocr is None:
+            return (None, None)
+        readout = ocr.read_best(plate_crop)
+        if readout is None:
+            return (None, None)
+        return (readout.text, readout.confidence)
+
+    def _create_license_plate_evidence(
+        self,
+        frame_bgr,
+        bbox_xyxy: list[float],
+        *,
+        frame_timestamp_utc_ms: int,
+        vehicle_id: int,
+        lane_id: int,
+        violation: str,
+    ) -> Optional[str]:
+        if not self._license_plate_enabled:
+            return None
+        try:
+            plate_crop = self._extract_license_plate_crop(frame_bgr, bbox_xyxy)
+            if plate_crop is None:
+                return None
+            return save_evidence_image(
+                self.repo_root,
+                camera_id=self.camera_id,
+                timestamp_utc_ms=frame_timestamp_utc_ms,
+                vehicle_id=vehicle_id,
+                lane_id=lane_id,
+                violation=f"{violation}_license_plate",
+                image_bgr=plate_crop,
+                jpeg_quality=self._license_plate_image_jpeg_quality,
+            )
+        except Exception as exc:
+            self.on_log(
+                f"[{self.camera_id}] failed to save license plate evidence for vehicle {vehicle_id}: {exc}"
+            )
+            return None
 
     def _mark_processed_frame(self) -> None:
         """Tính FPS xử lý bằng cửa sổ thời gian trượt thay vì dựa trên một frame đơn lẻ."""
@@ -468,6 +761,16 @@ class CameraContext:
                 lane_id=int(cand["lane_id"]),
                 violation=str(cand["violation"]),
             )
+            plate_snapshot = self._license_plate_snapshot_for(vehicle_id=vehicle_id)
+            license_plate_image_path = await asyncio.to_thread(
+                self._create_license_plate_evidence,
+                frame_bgr,
+                bbox_xyxy,
+                frame_timestamp_utc_ms=frame_timestamp_utc_ms,
+                vehicle_id=vehicle_id,
+                lane_id=int(cand["lane_id"]),
+                violation=str(cand["violation"]),
+            )
 
             event = ViolationEvent.from_parts(
                 camera_id=self.camera_id,
@@ -478,6 +781,12 @@ class CameraContext:
                 violation=str(cand["violation"]),
                 image_path=image_path,
                 image_url=build_evidence_image_url(image_path),
+                license_plate=plate_snapshot.license_plate if plate_snapshot else None,
+                license_plate_status=plate_snapshot.status if plate_snapshot else None,
+                license_plate_confidence=plate_snapshot.confidence if plate_snapshot else None,
+                license_plate_image_path=license_plate_image_path,
+                license_plate_image_url=build_evidence_image_url(license_plate_image_path),
+                track_session_id=self.track_session_id,
                 ts=ts_dt,
             )
 

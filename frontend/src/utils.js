@@ -59,6 +59,13 @@ export const CAMERA_TYPE_LABELS = {
   intersection: "Nút giao",
 };
 
+export const LICENSE_PLATE_STATUS_LABELS = {
+  pending: "Đang chờ xác nhận",
+  confirmed: "Đã xác nhận",
+  uncertain: "Chưa chắc chắn",
+  unreadable: "Không đọc được",
+};
+
 export const VIETNAM_TIMEZONE = "Asia/Ho_Chi_Minh";
 export const DEFAULT_ANALYTICS_CHART_CONFIG = {
   minute_granularity_max_range_hours: 24,
@@ -573,6 +580,19 @@ export function getViolationLabel(value) {
 
 export function getCameraTypeLabel(value) {
   return CAMERA_TYPE_LABELS[value] || value;
+}
+
+export function getLicensePlateStatusLabel(value) {
+  if (!value) return "OCR tắt";
+  return LICENSE_PLATE_STATUS_LABELS[value] || value;
+}
+
+export function formatLicensePlateValue(plate, status) {
+  if (plate) return String(plate);
+  if (status === "unreadable") return "Không đọc được";
+  if (status === "uncertain") return "Chưa chắc chắn";
+  if (status === "pending") return "Chưa xác định";
+  return "Chưa xác định";
 }
 
 function createDefaultManeuverConfig(maneuver, { allowed = false } = {}) {

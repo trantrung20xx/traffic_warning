@@ -53,3 +53,12 @@ python-multipart
 
 openpyxl
 # Thư viện dùng để tạo và xuất file Excel (.xlsx)
+
+# License plate OCR backend mặc định:
+paddleocr
+paddlepaddle
+
+# Nếu chạy GPU, có thể thay `paddlepaddle` bằng `paddlepaddle-gpu` theo môi trường triển khai.
+
+# Optional fallback backend:
+# easyocr

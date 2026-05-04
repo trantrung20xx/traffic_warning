@@ -6,6 +6,28 @@ Hệ thống giám sát và cảnh báo vi phạm giao thông thời gian thực
 - `frontend`: React cho giám sát realtime, thống kê, quản lý cấu hình camera.
 - `config`: dữ liệu cấu hình camera/làn, ảnh nền, ảnh bằng chứng, SQLite.
 
+## Cập nhật mới: Nhận diện biển số (License Plate OCR)
+
+Hệ thống đã bổ sung pipeline nhận diện biển số độc lập, chạy sau bước tracking ổn định:
+
+`RTSP -> YOLOv8 vehicle -> ByteTrack -> StableTrackIdAssigner -> License Plate Detector/OCR -> Violation`
+
+Nguyên tắc vận hành:
+
+- `vehicle_id` vẫn là định danh realtime để theo dõi bbox/quỹ đạo.
+- Biển số là thông tin nhận dạng bổ sung, không thay thế `vehicle_id`.
+- Khi OCR chưa chắc chắn, hệ thống vẫn phát hiện vi phạm bình thường.
+- OCR dùng trạng thái minh bạch: `pending`, `confirmed`, `uncertain`, `unreadable`.
+- Mỗi runtime camera có `track_session_id` để tránh nhầm `vehicle_id` sau khi restart.
+
+Trường mới trong realtime/history:
+
+- `license_plate`
+- `license_plate_status`
+- `license_plate_confidence`
+- `license_plate_image_url`
+- `track_session_id` (đối với sự kiện vi phạm)
+
 ## Khởi chạy nhanh
 
 ### Backend
@@ -300,6 +322,24 @@ Toàn bộ tọa độ lưu theo chuẩn hóa `[0, 1]`.
 | `analytics.chart.overview_axis_max_ticks` | Số tick tối đa của biểu đồ tổng quan day/week/month. |
 | `analytics.chart.point_markers_max_points` | Số điểm tối đa trước khi ẩn marker để giảm rối và tải render. |
 
+### `license_plate`
+
+| Key | Giải thích |
+|---|---|
+| `license_plate.enabled` | Bật/tắt pipeline biển số. |
+| `license_plate.detector_weights_path` | Đường dẫn model detector biển số. |
+| `license_plate.detector_confidence_threshold` | Ngưỡng confidence detector biển số. |
+| `license_plate.ocr_backend` | Backend OCR (hiện đang dùng `paddleocr`). |
+| `license_plate.paddle_use_gpu` | Bật GPU cho OCR phía Paddle runtime. |
+| `license_plate.paddle_subprocess_enabled` | Chạy OCR Paddle ở process riêng để tránh xung đột CUDA với Torch. |
+| `license_plate.paddle_subprocess_startup_timeout_s` | Timeout khởi động OCR subprocess. |
+| `license_plate.paddle_subprocess_request_timeout_ms` | Timeout một request OCR. |
+| `license_plate.read_interval_ms` | Chu kỳ đọc OCR theo từng `vehicle_id` (không chạy mọi frame). |
+| `license_plate.min_ocr_confidence` | Ngưỡng confidence tối thiểu để giữ candidate OCR. |
+| `license_plate.consensus_min_hits` | Số lần lặp tối thiểu để xác nhận biển số. |
+| `license_plate.candidate_window_ms` | Cửa sổ thời gian voting candidate biển số. |
+| `license_plate.max_attempts_before_unreadable` | Số lần thử tối đa trước khi đánh dấu `unreadable`. |
+
 ### `logging`
 
 | Key | Giải thích |
@@ -325,8 +365,8 @@ Ghi chú: 2 key trên hiện là key cấu hình dự phòng, chưa được bac
 | `GET` | `/api/camera/{camera_id}/background-image` | Lấy ảnh nền hiện tại của camera. |
 | `DELETE` | `/api/camera/{camera_id}/background-image` | Xóa ảnh nền hiện tại. |
 | `GET` | `/api/violations/evidence/{evidence_path}` | Trả file ảnh bằng chứng vi phạm. |
-| `GET` | `/api/violations/history` | Truy vấn lịch sử vi phạm (`camera_id`, `from_ts`, `to_ts`, `limit`). |
-| `GET` | `/api/violations/export` | Export lịch sử vi phạm `csv/xlsx` (`format`, `camera_id`, `from_ts`, `to_ts`). |
+| `GET` | `/api/violations/history` | Truy vấn lịch sử vi phạm (`camera_id`, `from_ts`, `to_ts`, `license_plate`, `limit`). |
+| `GET` | `/api/violations/export` | Export lịch sử vi phạm `csv/xlsx` (`format`, `camera_id`, `from_ts`, `to_ts`, `license_plate`) kèm cột biển số/OCR. |
 | `GET` | `/api/analytics/dashboard` | Dữ liệu dashboard tổng hợp + `chart_config` cho frontend. |
 | `GET` | `/api/stats` | Thống kê tổng hợp theo khoảng thời gian (`from_ts`, `to_ts`). |
 

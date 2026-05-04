@@ -30,6 +30,12 @@
     "violation": { "type": "string" },
     "image_path": { "type": ["string", "null"] },
     "image_url": { "type": ["string", "null"] },
+    "license_plate": { "type": ["string", "null"] },
+    "license_plate_status": { "type": ["string", "null"] },
+    "license_plate_confidence": { "type": ["number", "null"] },
+    "license_plate_image_path": { "type": ["string", "null"] },
+    "license_plate_image_url": { "type": ["string", "null"] },
+    "track_session_id": { "type": ["string", "null"] },
     "timestamp": { "type": "string" }
   }
 }

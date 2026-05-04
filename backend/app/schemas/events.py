@@ -18,6 +18,9 @@ class TrackVehicle(BaseModel):
     vehicle_type: str
     lane_id: Optional[int] = None
     raw_lane_id: Optional[int] = None
+    license_plate: Optional[str] = None
+    license_plate_status: Optional[str] = None
+    license_plate_confidence: Optional[float] = None
     bbox: BBox
 
 
@@ -47,6 +50,12 @@ class ViolationEvent(BaseModel):
     violation: str
     image_path: Optional[str] = None
     image_url: Optional[str] = None
+    license_plate: Optional[str] = None
+    license_plate_status: Optional[str] = None
+    license_plate_confidence: Optional[float] = None
+    license_plate_image_path: Optional[str] = None
+    license_plate_image_url: Optional[str] = None
+    track_session_id: Optional[str] = None
     timestamp: str = Field(
         description="ISO-8601 timestamp string"
     )
@@ -62,6 +71,12 @@ class ViolationEvent(BaseModel):
         violation: str,
         image_path: Optional[str] = None,
         image_url: Optional[str] = None,
+        license_plate: Optional[str] = None,
+        license_plate_status: Optional[str] = None,
+        license_plate_confidence: Optional[float] = None,
+        license_plate_image_path: Optional[str] = None,
+        license_plate_image_url: Optional[str] = None,
+        track_session_id: Optional[str] = None,
         ts: Optional[datetime] = None,
     ) -> "ViolationEvent":
         if ts is None:
@@ -76,6 +91,12 @@ class ViolationEvent(BaseModel):
             violation=violation,
             image_path=image_path,
             image_url=image_url,
+            license_plate=license_plate,
+            license_plate_status=license_plate_status,
+            license_plate_confidence=license_plate_confidence,
+            license_plate_image_path=license_plate_image_path,
+            license_plate_image_url=license_plate_image_url,
+            track_session_id=track_session_id,
             timestamp=ts.replace(microsecond=0).isoformat(),
         )
 

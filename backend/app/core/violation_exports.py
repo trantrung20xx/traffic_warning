@@ -24,6 +24,13 @@ VIOLATION_LABELS = {
     "turn_u_turn_not_allowed": "Quay đầu không đúng quy định",
 }
 
+LICENSE_PLATE_STATUS_LABELS = {
+    "pending": "Đang chờ xác nhận",
+    "confirmed": "Đã xác nhận",
+    "uncertain": "Chưa chắc chắn",
+    "unreadable": "Không đọc được",
+}
+
 CSV_EXPORT_COLUMNS: list[tuple[str, str]] = [
     ("stt", "STT"),
     ("timestamp", "Thời gian vi phạm"),
@@ -31,6 +38,9 @@ CSV_EXPORT_COLUMNS: list[tuple[str, str]] = [
     ("violation", "Loại vi phạm"),
     ("vehicle_type", "Loại phương tiện"),
     ("vehicle_id", "Vehicle ID"),
+    ("license_plate", "Biển số"),
+    ("license_plate_status", "Trạng thái OCR"),
+    ("license_plate_confidence", "Độ tin cậy OCR"),
     ("lane_id", "Làn"),
     ("location", "Địa điểm / khu vực"),
     ("image_path", "Đường dẫn ảnh vi phạm"),
@@ -43,6 +53,9 @@ XLSX_EXPORT_COLUMNS: list[tuple[str, str]] = [
     ("violation", "Loại vi phạm"),
     ("vehicle_type", "Loại phương tiện"),
     ("vehicle_id", "Vehicle ID"),
+    ("license_plate", "Biển số"),
+    ("license_plate_status", "Trạng thái OCR"),
+    ("license_plate_confidence", "Độ tin cậy OCR"),
     ("lane_id", "Làn"),
     ("location", "Địa điểm"),
     ("image_path", "Đường dẫn ảnh"),
@@ -82,6 +95,18 @@ def _format_value(value) -> str:
     return str(value)
 
 
+def _format_confidence(value: Optional[float]) -> str:
+    if value is None:
+        return "-"
+    try:
+        normalized = float(value)
+    except (TypeError, ValueError):
+        return "-"
+    if normalized < 0.0:
+        return "-"
+    return f"{normalized:.2f}"
+
+
 def _build_location_label(location: Optional[dict]) -> str:
     if not location:
         return "-"
@@ -118,6 +143,9 @@ def build_violation_export_rows(rows: list[dict], *, base_url: str) -> list[dict
                 "violation": _get_label(VIOLATION_LABELS, row.get("violation")),
                 "vehicle_type": _get_label(VEHICLE_TYPE_LABELS, row.get("vehicle_type")),
                 "vehicle_id": _format_value(row.get("vehicle_id")),
+                "license_plate": _format_value(row.get("license_plate")),
+                "license_plate_status": _get_label(LICENSE_PLATE_STATUS_LABELS, row.get("license_plate_status")),
+                "license_plate_confidence": _format_confidence(row.get("license_plate_confidence")),
                 "lane_id": _format_value(row.get("lane_id")),
                 "location": _build_location_label(row.get("location")),
                 "image_path": _build_evidence_link(row, base_url=base_url),

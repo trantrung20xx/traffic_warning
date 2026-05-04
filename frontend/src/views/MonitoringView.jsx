@@ -10,8 +10,10 @@ import {
 	getCameraPreviewUrl,
 } from "../api";
 import {
+	formatLicensePlateValue,
 	formatTimestamp,
 	getCameraTypeLabel,
+	getLicensePlateStatusLabel,
 	getVehicleTypeLabel,
 	getViolationLabel,
 } from "../utils";
@@ -564,14 +566,23 @@ export default function MonitoringView({
 									<div>
 										<div className="row-title icon-label">
 											<AppIcon name="car" />
-											#{vehicle.vehicle_id} ·{" "}
-											{getVehicleTypeLabel(vehicle.vehicle_type)}
+											{vehicle.license_plate_status === "confirmed" &&
+											vehicle.license_plate
+												? `${vehicle.license_plate} · #${vehicle.vehicle_id} · ${getVehicleTypeLabel(vehicle.vehicle_type)}`
+												: `#${vehicle.vehicle_id} · ${getVehicleTypeLabel(vehicle.vehicle_type)}`}
 										</div>
 										<div className="row-sub">
 											Làn ổn định:{" "}
 											{vehicle.lane_id ?? "đang ổn định"}
-											{vehicle.raw_lane_id != null
-												? ` · hit hiện tại: ${vehicle.raw_lane_id}`
+											{` · Biển số: ${formatLicensePlateValue(
+												vehicle.license_plate,
+												vehicle.license_plate_status,
+											)}`}
+											{` · OCR: ${getLicensePlateStatusLabel(
+												vehicle.license_plate_status,
+											)}`}
+											{Number.isFinite(vehicle.license_plate_confidence)
+												? ` · Conf: ${Number(vehicle.license_plate_confidence).toFixed(2)}`
 												: ""}
 										</div>
 									</div>
@@ -629,8 +640,12 @@ export default function MonitoringView({
 										{event.lane_id}
 									</div>
 									<div className="row-sub">
-										{getVehicleTypeLabel(event.vehicle_type)} · xe #
+										{getVehicleTypeLabel(event.vehicle_type)} · ID xe: #
 										{event.vehicle_id}
+										{` · Biển số: ${formatLicensePlateValue(
+											event.license_plate,
+											event.license_plate_status,
+										)}`}
 									</div>
 								</div>
 								<div className="row-meta icon-label">

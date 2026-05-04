@@ -89,6 +89,29 @@ def test_load_app_config_reads_grouped_settings_schema(tmp_path: Path) -> None:
                 "processing_fps": {"stale_after_ms": 1200},
             }
         },
+        "license_plate": {
+            "enabled": True,
+            "detector_weights_path": "backend/license_plate_yolov8.pt",
+            "detector_confidence_threshold": 0.4,
+            "ocr_backend": "paddleocr",
+            "paddle_ocr_version": "PP-OCRv5",
+            "paddle_text_detection_model_name": "PP-OCRv5_mobile_det",
+            "paddle_text_recognition_model_name": "PP-OCRv5_mobile_rec",
+            "paddle_lang": "en",
+            "paddle_use_gpu": False,
+            "paddle_subprocess_enabled": True,
+            "paddle_subprocess_startup_timeout_s": 24.0,
+            "paddle_subprocess_request_timeout_ms": 1500,
+            "paddle_subprocess_request_jpeg_quality": 88,
+            "read_interval_ms": 650,
+            "min_ocr_confidence": 0.7,
+            "consensus_min_hits": 3,
+            "candidate_window_ms": 5000,
+            "max_attempts_before_unreadable": 7,
+            "crop_expand_x_ratio": 0.12,
+            "crop_expand_y_ratio": 0.1,
+            "image_jpeg_quality": 90,
+        },
     }
     (config_dir / "settings.json").write_text(json.dumps(settings, ensure_ascii=False), encoding="utf-8")
 
@@ -114,3 +137,17 @@ def test_load_app_config_reads_grouped_settings_schema(tmp_path: Path) -> None:
     assert cfg.ui.monitoring.violation.list_max_rows == 120
     assert cfg.ui.monitoring.processing_fps.stale_after_ms == 1200
     assert cfg.evidence_jpeg_quality == 88
+    assert cfg.license_plate.enabled is True
+    assert cfg.license_plate.detector_confidence_threshold == 0.4
+    assert cfg.license_plate.ocr_backend == "paddleocr"
+    assert cfg.license_plate.paddle_ocr_version == "PP-OCRv5"
+    assert cfg.license_plate.paddle_text_detection_model_name == "PP-OCRv5_mobile_det"
+    assert cfg.license_plate.paddle_text_recognition_model_name == "PP-OCRv5_mobile_rec"
+    assert cfg.license_plate.paddle_lang == "en"
+    assert cfg.license_plate.paddle_use_gpu is False
+    assert cfg.license_plate.paddle_subprocess_enabled is True
+    assert cfg.license_plate.paddle_subprocess_startup_timeout_s == 24.0
+    assert cfg.license_plate.paddle_subprocess_request_timeout_ms == 1500
+    assert cfg.license_plate.paddle_subprocess_request_jpeg_quality == 88
+    assert cfg.license_plate.read_interval_ms == 650
+    assert cfg.license_plate.consensus_min_hits == 3

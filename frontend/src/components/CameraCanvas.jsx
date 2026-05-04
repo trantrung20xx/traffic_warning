@@ -462,7 +462,9 @@ export default function CameraCanvas({
       ctx.lineWidth = 3;
       ctx.strokeRect(x1, y1, w, h);
 
-      const label = `#${v.vehicle_id} ${getVehicleTypeLabel(v.vehicle_type)}${v.lane_id != null ? ` làn ${v.lane_id}` : ""}`;
+      const hasConfirmedPlate = v.license_plate_status === "confirmed" && Boolean(v.license_plate);
+      const trackingLabel = hasConfirmedPlate ? `${v.license_plate} (#${v.vehicle_id})` : `#${v.vehicle_id}`;
+      const label = `${trackingLabel} ${getVehicleTypeLabel(v.vehicle_type)}${v.lane_id != null ? ` làn ${v.lane_id}` : ""}`;
       ctx.font = "14px sans-serif";
       ctx.fillStyle = labelBackground;
       ctx.fillRect(x1, y1 - 22, ctx.measureText(label).width + 10, 22);

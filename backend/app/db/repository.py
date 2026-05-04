@@ -28,6 +28,11 @@ def insert_violation(session, event: ViolationEvent) -> int:
         lane_id=event.lane_id,
         violation=event.violation,
         evidence_image_path=event.image_path,
+        license_plate=event.license_plate,
+        license_plate_status=event.license_plate_status,
+        license_plate_confidence=event.license_plate_confidence,
+        license_plate_image_path=event.license_plate_image_path,
+        track_session_id=event.track_session_id,
         timestamp_utc=ts,
     )
     session.add(row)
@@ -90,6 +95,7 @@ def _base_violation_query(
     from_ts: Optional[str] = None,
     to_ts: Optional[str] = None,
     camera_id: Optional[str] = None,
+    license_plate: Optional[str] = None,
 ):
     q = select(Violation)
     parsed_from = _parse_ts(from_ts)
@@ -100,6 +106,9 @@ def _base_violation_query(
         q = q.where(Violation.timestamp_utc <= parsed_to)
     if camera_id:
         q = q.where(Violation.camera_id == camera_id)
+    if license_plate:
+        normalized = str(license_plate).strip().lower()
+        q = q.where(func.lower(Violation.license_plate).like(f"%{normalized}%"))
     return q
 
 
@@ -244,9 +253,16 @@ def query_violation_history(
     from_ts: Optional[str] = None,
     to_ts: Optional[str] = None,
     camera_id: Optional[str] = None,
+    license_plate: Optional[str] = None,
     limit: Optional[int] = None,
 ):
-    q = _base_violation_query(session, from_ts=from_ts, to_ts=to_ts, camera_id=camera_id).order_by(
+    q = _base_violation_query(
+        session,
+        from_ts=from_ts,
+        to_ts=to_ts,
+        camera_id=camera_id,
+        license_plate=license_plate,
+    ).order_by(
         desc(Violation.timestamp_utc),
         desc(Violation.id),
     )
@@ -269,6 +285,12 @@ def query_violation_history(
             "violation": row.violation,
             "image_path": row.evidence_image_path,
             "image_url": build_evidence_image_url(row.evidence_image_path),
+            "license_plate": row.license_plate,
+            "license_plate_status": row.license_plate_status,
+            "license_plate_confidence": row.license_plate_confidence,
+            "license_plate_image_path": row.license_plate_image_path,
+            "license_plate_image_url": build_evidence_image_url(row.license_plate_image_path),
+            "track_session_id": row.track_session_id,
             "timestamp": to_vietnam_isoformat(row.timestamp_utc),
         }
         for row in rows
