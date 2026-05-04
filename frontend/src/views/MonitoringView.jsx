@@ -13,7 +13,6 @@ import {
 	formatLicensePlateValue,
 	formatTimestamp,
 	getCameraTypeLabel,
-	getLicensePlateStatusLabel,
 	getVehicleTypeLabel,
 	getViolationLabel,
 } from "../utils";
@@ -561,29 +560,23 @@ export default function MonitoringView({
 							) : null}
 							{orderedVehicles.map((vehicle) => (
 								<article
-									className="list-row"
-									key={`${vehicle.vehicle_id}-${vehicle.lane_id ?? "na"}`}>
-									<div>
-										<div className="row-title icon-label">
+									className="list-row tracked-vehicle-row"
+									key={vehicle.vehicle_id}>
+									<div className="tracked-vehicle-main">
+										<div className="row-title icon-label tracked-vehicle-title">
 											<AppIcon name="car" />
-											{vehicle.license_plate_status === "confirmed" &&
-											vehicle.license_plate
-												? `${vehicle.license_plate} · #${vehicle.vehicle_id} · ${getVehicleTypeLabel(vehicle.vehicle_type)}`
-												: `#${vehicle.vehicle_id} · ${getVehicleTypeLabel(vehicle.vehicle_type)}`}
+											{`${getVehicleTypeLabel(vehicle.vehicle_type)} · ID xe: #${vehicle.vehicle_id}`}
 										</div>
-										<div className="row-sub">
-											Làn ổn định:{" "}
-											{vehicle.lane_id ?? "đang ổn định"}
-											{` · Biển số: ${formatLicensePlateValue(
-												vehicle.license_plate,
-												vehicle.license_plate_status,
-											)}`}
-											{` · OCR: ${getLicensePlateStatusLabel(
-												vehicle.license_plate_status,
-											)}`}
-											{Number.isFinite(vehicle.license_plate_confidence)
-												? ` · Conf: ${Number(vehicle.license_plate_confidence).toFixed(2)}`
-												: ""}
+										<div className="row-sub tracked-vehicle-meta">
+											<div className="tracked-vehicle-meta-line">
+												{`Làn ổn định: ${vehicle.lane_id != null ? vehicle.lane_id : "Chưa ổn định"}`}
+											</div>
+											<div className="tracked-vehicle-meta-line">
+												{`Biển số: ${formatLicensePlateValue(
+													vehicle.license_plate,
+													vehicle.license_plate_status,
+												)}`}
+											</div>
 										</div>
 									</div>
 									<div

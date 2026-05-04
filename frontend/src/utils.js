@@ -1,6 +1,6 @@
 export const MANEUVERS = ["left", "straight", "right", "u_turn"];
-export const LANE_EDIT_TARGETS = ["lane_polygon", "approach_zone", "commit_gate", "commit_line"];
-export const MANEUVER_EDIT_TARGETS = ["movement_path", "exit_line", "exit_zone"];
+const LANE_EDIT_TARGETS = ["lane_polygon", "approach_zone", "commit_gate", "commit_line"];
+const MANEUVER_EDIT_TARGETS = ["movement_path", "exit_line", "exit_zone"];
 const POLYGON_GEOMETRY_TARGETS = ["lane_polygon", "approach_zone", "commit_gate", "exit_zone"];
 const LINE_GEOMETRY_TARGETS = ["commit_line", "exit_line"];
 const POLYLINE_GEOMETRY_TARGETS = ["movement_path"];
@@ -15,21 +15,21 @@ const CORRIDOR_DEFAULT_WIDTH_BY_MANEUVER = {
   u_turn: 104,
 };
 
-export const MANEUVER_LABELS = {
+const MANEUVER_LABELS = {
   left: "Rẽ trái",
   straight: "Đi thẳng",
   right: "Rẽ phải",
   u_turn: "Quay đầu",
 };
 
-export const LANE_TARGET_LABELS = {
+const LANE_TARGET_LABELS = {
   lane_polygon: "Biên làn xe",
   approach_zone: "Vùng chuẩn bị rẽ",
   commit_gate: "Vùng bắt đầu rẽ",
   commit_line: "Vạch bắt đầu rẽ",
 };
 
-export const MANEUVER_TARGET_LABELS = {
+const MANEUVER_TARGET_LABELS = {
   movement_path: "Đường đi",
   exit_line: "Vạch xác nhận đầu ra",
   exit_zone: "Vùng xác nhận đầu ra",
@@ -37,14 +37,14 @@ export const MANEUVER_TARGET_LABELS = {
 
 export const VEHICLE_TYPES = ["motorcycle", "car", "truck", "bus"];
 
-export const VEHICLE_TYPE_LABELS = {
+const VEHICLE_TYPE_LABELS = {
   motorcycle: "Xe máy",
   car: "Ô tô",
   truck: "Xe tải",
   bus: "Xe buýt",
 };
 
-export const VIOLATION_LABELS = {
+const VIOLATION_LABELS = {
   wrong_lane: "Đi sai làn",
   vehicle_type_not_allowed: "Loại phương tiện không đúng quy định",
   turn_left_not_allowed: "Rẽ trái không đúng quy định",
@@ -53,21 +53,21 @@ export const VIOLATION_LABELS = {
   turn_u_turn_not_allowed: "Quay đầu không đúng quy định",
 };
 
-export const CAMERA_TYPE_LABELS = {
+const CAMERA_TYPE_LABELS = {
   roadside: "Bên đường",
   overhead: "Trên cao",
   intersection: "Nút giao",
 };
 
-export const LICENSE_PLATE_STATUS_LABELS = {
+const LICENSE_PLATE_STATUS_LABELS = {
   pending: "Đang chờ xác nhận",
   confirmed: "Đã xác nhận",
   uncertain: "Chưa chắc chắn",
   unreadable: "Không đọc được",
 };
 
-export const VIETNAM_TIMEZONE = "Asia/Ho_Chi_Minh";
-export const DEFAULT_ANALYTICS_CHART_CONFIG = {
+const VIETNAM_TIMEZONE = "Asia/Ho_Chi_Minh";
+const DEFAULT_ANALYTICS_CHART_CONFIG = {
   minute_granularity_max_range_hours: 24,
   hour_granularity_max_range_days: 14,
   day_granularity_max_range_days: 120,
@@ -294,15 +294,15 @@ export function normalizePoint([x, y], frameWidth, frameHeight) {
   return [clamp(Number(x) / Math.max(frameWidth, 1), 0, 1), clamp(Number(y) / Math.max(frameHeight, 1), 0, 1)];
 }
 
-export function denormalizePoint([x, y], frameWidth, frameHeight) {
+function denormalizePoint([x, y], frameWidth, frameHeight) {
   return [Number(x) * frameWidth, Number(y) * frameHeight];
 }
 
-export function normalizePoints(points, frameWidth, frameHeight) {
+function normalizePoints(points, frameWidth, frameHeight) {
   return (points || []).map((point) => normalizePoint(point, frameWidth, frameHeight));
 }
 
-export function denormalizePoints(points, frameWidth, frameHeight) {
+function denormalizePoints(points, frameWidth, frameHeight) {
   return (points || []).map((point) => denormalizePoint(point, frameWidth, frameHeight));
 }
 
@@ -500,7 +500,7 @@ export function getVehicleTypeLabel(value) {
   return VEHICLE_TYPE_LABELS[value] || value;
 }
 
-export function getEditTargetGeometryType(target) {
+function getEditTargetGeometryType(target) {
   if (LINE_GEOMETRY_TARGETS.includes(target)) return "line";
   if (POLYLINE_GEOMETRY_TARGETS.includes(target)) return "polyline";
   if (POLYGON_GEOMETRY_TARGETS.includes(target)) return "polygon";
@@ -606,14 +606,14 @@ function createDefaultManeuverConfig(maneuver, { allowed = false } = {}) {
   };
 }
 
-export function createDefaultLaneManeuvers({ allowedManeuvers = [] } = {}) {
+function createDefaultLaneManeuvers({ allowedManeuvers = [] } = {}) {
   const allowedSet = new Set(allowedManeuvers || []);
   return Object.fromEntries(
     MANEUVERS.map((maneuver) => [maneuver, createDefaultManeuverConfig(maneuver, { allowed: allowedSet.has(maneuver) })]),
   );
 }
 
-export function normalizeLaneManeuvers(lane = {}) {
+function normalizeLaneManeuvers(lane = {}) {
   const source = lane.maneuvers || {};
   const allowedSet = new Set(Array.isArray(lane.allowed_maneuvers) ? lane.allowed_maneuvers : []);
 

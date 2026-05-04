@@ -6,7 +6,7 @@ import {
   getViolationLabel,
 } from "./utils";
 
-export const VIOLATION_FALLBACK = "-";
+const VIOLATION_FALLBACK = "-";
 
 function hasValue(value) {
   return value !== null && value !== undefined && value !== "";

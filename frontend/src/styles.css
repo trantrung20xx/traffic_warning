@@ -756,6 +756,43 @@ select {
   background: rgba(255, 255, 255, 0.03);
 }
 
+.tracked-vehicle-row {
+  align-items: flex-start;
+  min-height: 88px;
+}
+
+.tracked-vehicle-main {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tracked-vehicle-title {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tracked-vehicle-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  line-height: 1.35;
+}
+
+.tracked-vehicle-meta-line {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tracked-vehicle-row .badge {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
 .camera-card {
   width: 100%;
   text-align: left;
