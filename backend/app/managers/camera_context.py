@@ -130,6 +130,8 @@ class CameraContext:
         license_plate_detector_weights_path: str = "backend/license_plate_yolov8.pt",
         license_plate_detector_conf_threshold: float = 0.35,
         license_plate_ocr_backend: str = "paddleocr",
+        license_plate_easyocr_lang: str = "en",
+        license_plate_easyocr_use_gpu: bool = False,
         license_plate_paddle_ocr_version: str = "PP-OCRv5",
         license_plate_paddle_text_detection_model_name: str = "PP-OCRv5_mobile_det",
         license_plate_paddle_text_recognition_model_name: str = "PP-OCRv5_mobile_rec",
@@ -292,6 +294,8 @@ class CameraContext:
                 else:
                     self._license_plate_ocr = LicensePlateOcr(
                         backend=license_plate_ocr_backend,
+                        easyocr_lang=license_plate_easyocr_lang,
+                        easyocr_use_gpu=license_plate_easyocr_use_gpu,
                         paddle_ocr_version=license_plate_paddle_ocr_version,
                         paddle_text_detection_model_name=license_plate_paddle_text_detection_model_name,
                         paddle_text_recognition_model_name=license_plate_paddle_text_recognition_model_name,
@@ -321,6 +325,11 @@ class CameraContext:
                             f" lang={license_plate_paddle_lang}"
                             f" use_gpu={bool(license_plate_paddle_use_gpu)}"
                             f" subprocess={bool(use_paddle_subprocess)}"
+                        )
+                    elif ocr_backend_normalized == "easyocr":
+                        ocr_extra = (
+                            f" lang={license_plate_easyocr_lang}"
+                            f" use_gpu={bool(license_plate_easyocr_use_gpu)}"
                         )
                     self.on_log(
                         f"[{self.camera_id}] license_plate enabled backend={license_plate_ocr_backend} "

@@ -34,7 +34,6 @@ def _iter_paddle_readouts(payload):
         if current is None:
             continue
 
-        # Định dạng phổ biến ở PaddleOCR v2: [[box, (text, conf)], ...]
         if isinstance(current, (list, tuple)):
             if len(current) >= 2:
                 text_conf = current[1]
@@ -49,7 +48,6 @@ def _iter_paddle_readouts(payload):
                         if text:
                             yield text, confidence
                     continue
-            # Định dạng phổ biến ở chế độ rec-only: [("TEXT", conf), ...]
             if len(current) >= 2 and isinstance(current[0], str):
                 confidence = _to_confidence(current[1])
                 if confidence is not None:
@@ -60,7 +58,6 @@ def _iter_paddle_readouts(payload):
             stack.extend(reversed(current))
             continue
 
-        # Định dạng mới có thể trả dict chứa rec_texts / rec_scores.
         if isinstance(current, dict):
             rec_texts = current.get("rec_texts")
             rec_scores = current.get("rec_scores")
@@ -88,106 +85,55 @@ def _extract_best_from_paddle_payload(payload) -> Optional[OcrReadout]:
     return OcrReadout(text=best_text, confidence=min(max(best_conf, 0.0), 1.0))
 
 
-def _build_paddle_init_candidates(
+def _create_paddle_ocr_engine(
     *,
     ocr_version: str,
     text_detection_model_name: str,
     text_recognition_model_name: str,
     lang: str,
     use_gpu: bool,
-) -> list[dict]:
-    return [
-        {
-            "text_detection_model_name": text_detection_model_name,
-            "text_recognition_model_name": text_recognition_model_name,
-            "use_doc_orientation_classify": False,
-            "use_doc_unwarping": False,
-            "use_textline_orientation": False,
-            "use_gpu": use_gpu,
-        },
-        {
-            "lang": lang,
-            "ocr_version": ocr_version,
-            "use_doc_orientation_classify": False,
-            "use_doc_unwarping": False,
-            "use_textline_orientation": False,
-            "use_gpu": use_gpu,
-        },
-        {
-            "use_angle_cls": False,
-            "lang": lang,
-            "show_log": False,
-            "use_gpu": use_gpu,
-            "ocr_version": ocr_version,
-            "text_detection_model_name": text_detection_model_name,
-            "text_recognition_model_name": text_recognition_model_name,
-        },
-        {
-            "use_angle_cls": False,
-            "lang": lang,
-            "show_log": False,
-            "use_gpu": use_gpu,
-            "ocr_version": ocr_version,
-            "text_detection_model_name": text_detection_model_name,
-        },
-        {
-            "use_angle_cls": False,
-            "lang": lang,
-            "show_log": False,
-            "use_gpu": use_gpu,
-        },
-        {
-            "use_angle_cls": False,
-            "lang": lang,
-            "show_log": False,
-        },
-        {
-            "use_angle_cls": False,
-            "lang": lang,
-        },
-    ]
+):
+    from paddleocr import PaddleOCR
+
+    os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
+    device = "gpu:0" if bool(use_gpu) else "cpu"
+    kwargs = {
+        "use_doc_orientation_classify": False,
+        "use_doc_unwarping": False,
+        "use_textline_orientation": False,
+        "device": device,
+    }
+    det_model = str(text_detection_model_name or "").strip()
+    rec_model = str(text_recognition_model_name or "").strip()
+    if det_model:
+        kwargs["text_detection_model_name"] = det_model
+    if rec_model:
+        kwargs["text_recognition_model_name"] = rec_model
+    if not det_model and not rec_model:
+        kwargs["lang"] = str(lang or "en").strip().lower()
+        kwargs["ocr_version"] = str(ocr_version or "PP-OCRv5").strip()
+    return PaddleOCR(**kwargs)
 
 
 def _paddle_ocr_worker_main(request_queue, response_queue, config: dict) -> None:
-    os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
-
     try:
-        from paddleocr import PaddleOCR
-        import paddle  # noqa: F401
         import numpy as np
+
+        engine = _create_paddle_ocr_engine(
+            ocr_version=str(config.get("ocr_version") or "PP-OCRv5"),
+            text_detection_model_name=str(config.get("text_detection_model_name") or "PP-OCRv5_mobile_det"),
+            text_recognition_model_name=str(config.get("text_recognition_model_name") or "PP-OCRv5_mobile_rec"),
+            lang=str(config.get("lang") or "en").strip().lower(),
+            use_gpu=bool(config.get("use_gpu", False)),
+        )
     except Exception as exc:
         response_queue.put(
             {
                 "type": "startup",
                 "ok": False,
-                "error": f"failed to import paddle runtime: {exc}",
+                "error": f"failed to initialize paddle runtime: {exc}",
             }
         )
-        return
-
-    init_candidates = _build_paddle_init_candidates(
-        ocr_version=str(config.get("ocr_version") or "PP-OCRv5"),
-        text_detection_model_name=str(config.get("text_detection_model_name") or "PP-OCRv5_mobile_det"),
-        text_recognition_model_name=str(config.get("text_recognition_model_name") or "PP-OCRv5_mobile_rec"),
-        lang=str(config.get("lang") or "en").strip().lower(),
-        use_gpu=bool(config.get("use_gpu", False)),
-    )
-
-    engine = None
-    last_error: Optional[Exception] = None
-    for kwargs in init_candidates:
-        try:
-            engine = PaddleOCR(**kwargs)
-            break
-        except (TypeError, ValueError):
-            continue
-        except Exception as exc:
-            last_error = exc
-            continue
-
-    if engine is None:
-        error_text = str(last_error) if last_error is not None else "unsupported PaddleOCR signature"
-        response_queue.put({"type": "startup", "ok": False, "error": error_text})
         return
 
     response_queue.put({"type": "startup", "ok": True})
@@ -331,9 +277,7 @@ class PaddleOcrSubprocessClient:
             if bool(message.get("ok")):
                 self.available = True
                 return
-            self._on_log(
-                f"[license_plate_ocr] paddle subprocess startup failed: {message.get('error')}"
-            )
+            self._on_log(f"[license_plate_ocr] paddle subprocess startup failed: {message.get('error')}")
             self.close()
             return
 
@@ -429,13 +373,15 @@ class PaddleOcrSubprocessClient:
 
 class LicensePlateOcr:
     """
-    Bộ OCR biển số với backend có thể thay thế (easyocr hoặc paddleocr).
+    OCR biển số cho chế độ in-process (easyocr hoặc paddleocr).
     """
 
     def __init__(
         self,
         *,
         backend: str = "paddleocr",
+        easyocr_lang: str = "en",
+        easyocr_use_gpu: bool = False,
         paddle_ocr_version: str = "PP-OCRv5",
         paddle_text_detection_model_name: str = "PP-OCRv5_mobile_det",
         paddle_text_recognition_model_name: str = "PP-OCRv5_mobile_rec",
@@ -444,6 +390,8 @@ class LicensePlateOcr:
         on_log: Optional[Callable[[str], None]] = None,
     ):
         self.backend = str(backend or "paddleocr").strip().lower()
+        self._easyocr_lang = str(easyocr_lang or "en").strip().lower()
+        self._easyocr_use_gpu = bool(easyocr_use_gpu)
         self._paddle_ocr_version = str(paddle_ocr_version or "PP-OCRv5").strip()
         self._paddle_text_detection_model_name = str(
             paddle_text_detection_model_name or "PP-OCRv5_mobile_det"
@@ -467,6 +415,13 @@ class LicensePlateOcr:
             return
         self._on_log(f"[license_plate_ocr] unsupported backend={self.backend}. OCR disabled.")
 
+    def _easyocr_languages(self) -> list[str]:
+        raw = self._easyocr_lang.replace(";", ",").replace(" ", ",")
+        items = [item.strip() for item in raw.split(",") if item.strip()]
+        if not items:
+            return ["en"]
+        return list(dict.fromkeys(items))
+
     def _init_easyocr(self) -> None:
         try:
             import easyocr
@@ -474,52 +429,27 @@ class LicensePlateOcr:
             self._on_log(f"[license_plate_ocr] easyocr is unavailable: {exc}. OCR disabled.")
             return
         try:
-            self._engine = easyocr.Reader(["en"], gpu=False, verbose=False)
+            self._engine = easyocr.Reader(
+                self._easyocr_languages(),
+                gpu=self._easyocr_use_gpu,
+                verbose=False,
+            )
             self.available = True
         except Exception as exc:
             self._on_log(f"[license_plate_ocr] failed to initialize easyocr: {exc}. OCR disabled.")
 
     def _init_paddleocr(self) -> None:
         try:
-            from paddleocr import PaddleOCR
-        except Exception as exc:
-            self._on_log(f"[license_plate_ocr] paddleocr is unavailable: {exc}. OCR disabled.")
-            return
-
-        try:
-            import paddle  # noqa: F401
-        except Exception as exc:
-            self._on_log(
-                f"[license_plate_ocr] paddleocr backend requires paddlepaddle runtime: {exc}. OCR disabled."
+            self._engine = _create_paddle_ocr_engine(
+                ocr_version=self._paddle_ocr_version,
+                text_detection_model_name=self._paddle_text_detection_model_name,
+                text_recognition_model_name=self._paddle_text_recognition_model_name,
+                lang=self._paddle_lang,
+                use_gpu=self._paddle_use_gpu,
             )
-            return
-
-        os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
-
-        init_candidates = _build_paddle_init_candidates(
-            ocr_version=self._paddle_ocr_version,
-            text_detection_model_name=self._paddle_text_detection_model_name,
-            text_recognition_model_name=self._paddle_text_recognition_model_name,
-            lang=self._paddle_lang,
-            use_gpu=self._paddle_use_gpu,
-        )
-
-        last_error: Optional[Exception] = None
-        for kwargs in init_candidates:
-            try:
-                self._engine = PaddleOCR(**kwargs)
-                self.available = True
-                return
-            except (TypeError, ValueError):
-                continue
-            except Exception as exc:
-                last_error = exc
-                continue
-
-        if last_error is not None:
-            self._on_log(f"[license_plate_ocr] failed to initialize paddleocr: {last_error}. OCR disabled.")
-            return
-        self._on_log("[license_plate_ocr] failed to initialize paddleocr: unsupported signature.")
+            self.available = True
+        except Exception as exc:
+            self._on_log(f"[license_plate_ocr] failed to initialize paddleocr: {exc}. OCR disabled.")
 
     def read_best(self, image_bgr) -> Optional[OcrReadout]:
         if not self.available or self._engine is None:
@@ -552,8 +482,8 @@ class LicensePlateOcr:
             if len(item) < 3:
                 continue
             text = str(item[1]).strip()
-            confidence = float(item[2])
-            if not text:
+            confidence = _to_confidence(item[2])
+            if not text or confidence is None:
                 continue
             if confidence > best_conf:
                 best_text = text

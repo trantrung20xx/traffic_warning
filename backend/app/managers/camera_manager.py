@@ -54,6 +54,7 @@ class CameraManager:
         self._track_websockets: set[WebSocket] = set()
         self._violation_websockets: set[WebSocket] = set()
         self._shared_paddle_ocr_client: Optional[PaddleOcrSubprocessClient] = None
+        self._shared_paddle_ocr_unavailable: bool = False
 
     @property
     def session_factory(self):
@@ -312,6 +313,7 @@ class CameraManager:
         if self._running:
             return
         self._stop_event.clear()
+        self._shared_paddle_ocr_unavailable = False
         self._ensure_shared_paddle_ocr_client()
         for cam in self.cameras:
             self._start_context(cam.camera_id)
@@ -445,6 +447,8 @@ class CameraManager:
             ),
             license_plate_detector_conf_threshold=self.cfg.license_plate.detector_confidence_threshold,
             license_plate_ocr_backend=self.cfg.license_plate.ocr_backend,
+            license_plate_easyocr_lang=self.cfg.license_plate.easyocr_lang,
+            license_plate_easyocr_use_gpu=self.cfg.license_plate.easyocr_use_gpu,
             license_plate_paddle_ocr_version=self.cfg.license_plate.paddle_ocr_version,
             license_plate_paddle_text_detection_model_name=self.cfg.license_plate.paddle_text_detection_model_name,
             license_plate_paddle_text_recognition_model_name=self.cfg.license_plate.paddle_text_recognition_model_name,
@@ -466,7 +470,6 @@ class CameraManager:
         return self.cfg.ui.model_dump(mode="json")
 
     def _start_context(self, camera_id: str) -> None:
-        self._ensure_shared_paddle_ocr_client()
         ctx = self._build_context(camera_id)
         self._contexts[camera_id] = ctx
         if self._running or not self._stop_event.is_set():
@@ -523,6 +526,8 @@ class CameraManager:
         if not self._should_use_paddle_subprocess():
             self._close_shared_paddle_ocr_client()
             return
+        if self._shared_paddle_ocr_unavailable:
+            return
         if self._shared_paddle_ocr_client is not None and self._shared_paddle_ocr_client.available:
             return
         client = PaddleOcrSubprocessClient(
@@ -538,8 +543,10 @@ class CameraManager:
         )
         if client.available:
             self._shared_paddle_ocr_client = client
+            self._shared_paddle_ocr_unavailable = False
             return
         self._shared_paddle_ocr_client = None
+        self._shared_paddle_ocr_unavailable = True
         try:
             client.close()
         except Exception:
@@ -552,6 +559,7 @@ class CameraManager:
     def _close_shared_paddle_ocr_client(self) -> None:
         client = self._shared_paddle_ocr_client
         self._shared_paddle_ocr_client = None
+        self._shared_paddle_ocr_unavailable = False
         if client is None:
             return
         try:

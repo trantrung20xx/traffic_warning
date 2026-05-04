@@ -57,8 +57,6 @@ openpyxl
 # License plate OCR backend mặc định:
 paddleocr
 paddlepaddle
+easyocr
 
 # Nếu chạy GPU, có thể thay `paddlepaddle` bằng `paddlepaddle-gpu` theo môi trường triển khai.
-
-# Optional fallback backend:
-# easyocr

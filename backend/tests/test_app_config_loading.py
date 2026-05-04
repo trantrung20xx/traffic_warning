@@ -94,6 +94,8 @@ def test_load_app_config_reads_grouped_settings_schema(tmp_path: Path) -> None:
             "detector_weights_path": "backend/license_plate_yolov8.pt",
             "detector_confidence_threshold": 0.4,
             "ocr_backend": "paddleocr",
+            "easyocr_lang": "en",
+            "easyocr_use_gpu": False,
             "paddle_ocr_version": "PP-OCRv5",
             "paddle_text_detection_model_name": "PP-OCRv5_mobile_det",
             "paddle_text_recognition_model_name": "PP-OCRv5_mobile_rec",
@@ -140,6 +142,8 @@ def test_load_app_config_reads_grouped_settings_schema(tmp_path: Path) -> None:
     assert cfg.license_plate.enabled is True
     assert cfg.license_plate.detector_confidence_threshold == 0.4
     assert cfg.license_plate.ocr_backend == "paddleocr"
+    assert cfg.license_plate.easyocr_lang == "en"
+    assert cfg.license_plate.easyocr_use_gpu is False
     assert cfg.license_plate.paddle_ocr_version == "PP-OCRv5"
     assert cfg.license_plate.paddle_text_detection_model_name == "PP-OCRv5_mobile_det"
     assert cfg.license_plate.paddle_text_recognition_model_name == "PP-OCRv5_mobile_rec"

@@ -251,6 +251,8 @@ class LicensePlateConfig(BaseModel):
     detector_weights_path: str = "backend/license_plate_yolov8.pt"
     detector_confidence_threshold: float = 0.35
     ocr_backend: str = "paddleocr"
+    easyocr_lang: str = "en"
+    easyocr_use_gpu: bool = False
     paddle_ocr_version: str = "PP-OCRv5"
     paddle_text_detection_model_name: str = "PP-OCRv5_mobile_det"
     paddle_text_recognition_model_name: str = "PP-OCRv5_mobile_rec"
@@ -275,6 +277,14 @@ class LicensePlateConfig(BaseModel):
         normalized = str(value or "").strip().lower()
         if normalized not in {"easyocr", "paddleocr"}:
             raise ValueError("license_plate.ocr_backend must be either 'easyocr' or 'paddleocr'")
+        return normalized
+
+    @field_validator("easyocr_lang", "paddle_lang")
+    @classmethod
+    def validate_ocr_lang(cls, value: str) -> str:
+        normalized = str(value or "").strip().lower()
+        if not normalized:
+            raise ValueError("OCR language must not be empty")
         return normalized
 
 
