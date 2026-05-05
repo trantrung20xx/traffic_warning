@@ -1,9 +1,22 @@
 export const MANEUVERS = ["left", "straight", "right", "u_turn"];
-const LANE_EDIT_TARGETS = ["lane_polygon", "approach_zone", "commit_gate", "commit_line"];
+const LANE_EDIT_TARGETS = [
+  "lane_polygon",
+  "approach_zone",
+  "commit_gate",
+  "commit_line",
+  "direction_path",
+  "direction_check_zone",
+];
 const MANEUVER_EDIT_TARGETS = ["movement_path", "exit_line", "exit_zone"];
-const POLYGON_GEOMETRY_TARGETS = ["lane_polygon", "approach_zone", "commit_gate", "exit_zone"];
+const POLYGON_GEOMETRY_TARGETS = [
+  "lane_polygon",
+  "approach_zone",
+  "commit_gate",
+  "exit_zone",
+  "direction_check_zone",
+];
 const LINE_GEOMETRY_TARGETS = ["commit_line", "exit_line"];
-const POLYLINE_GEOMETRY_TARGETS = ["movement_path"];
+const POLYLINE_GEOMETRY_TARGETS = ["movement_path", "direction_path"];
 export const CORRIDOR_WIDTH_MIN_PX = 16;
 export const CORRIDOR_WIDTH_MAX_PX = 512;
 export const CORRIDOR_WIDTH_STEP_PX = 1;
@@ -27,6 +40,8 @@ const LANE_TARGET_LABELS = {
   approach_zone: "Vùng chuẩn bị rẽ",
   commit_gate: "Vùng bắt đầu rẽ",
   commit_line: "Vạch bắt đầu rẽ",
+  direction_path: "Hướng đúng chiều",
+  direction_check_zone: "Vùng kiểm tra hướng",
 };
 
 const MANEUVER_TARGET_LABELS = {
@@ -46,12 +61,31 @@ const VEHICLE_TYPE_LABELS = {
 
 const VIOLATION_LABELS = {
   wrong_lane: "Đi sai làn",
+  wrong_direction: "Đi ngược chiều",
   vehicle_type_not_allowed: "Loại phương tiện không đúng quy định",
   turn_left_not_allowed: "Rẽ trái không đúng quy định",
   turn_right_not_allowed: "Rẽ phải không đúng quy định",
   turn_straight_not_allowed: "Đi thẳng không đúng quy định",
   turn_u_turn_not_allowed: "Quay đầu không đúng quy định",
 };
+
+const DIRECTION_STATUS_LABELS = {
+  correct_direction: "Đúng chiều",
+  wrong_direction: "Ngược chiều",
+  unknown: "Chưa đủ dữ liệu",
+  not_configured: "Chưa cấu hình",
+};
+
+export const DEFAULT_DIRECTION_RULE = Object.freeze({
+  enabled: false,
+  direction_path: [],
+  check_zone: [],
+  same_direction_cos_threshold: 0.35,
+  opposite_direction_cos_threshold: -0.45,
+  min_duration_ms: 900,
+  min_displacement_px: 12,
+  min_samples: 4,
+});
 
 const CAMERA_TYPE_LABELS = {
   roadside: "Bên đường",
@@ -325,6 +359,13 @@ export function denormalizeLane(lane, frameWidth, frameHeight) {
     approach_zone: denormalizePoints(lane.approach_zone || [], frameWidth, frameHeight),
     commit_gate: denormalizePoints(lane.commit_gate || [], frameWidth, frameHeight),
     commit_line: denormalizePoints(lane.commit_line || [], frameWidth, frameHeight),
+    direction_rule: lane.direction_rule
+      ? {
+          ...lane.direction_rule,
+          direction_path: denormalizePoints(lane.direction_rule.direction_path || [], frameWidth, frameHeight),
+          check_zone: denormalizePoints(lane.direction_rule.check_zone || [], frameWidth, frameHeight),
+        }
+      : null,
     maneuvers,
   };
 }
@@ -554,7 +595,7 @@ export function getEditTargetLabel(target, laneId = null, selectedManeuver = nul
 }
 
 export function getEditTargetMinimumPoints(target) {
-  if (target === "movement_path") return 2;
+  if (target === "movement_path" || target === "direction_path") return 2;
   return isLineEditTarget(target) ? 2 : 3;
 }
 
@@ -562,6 +603,12 @@ export function getTargetPoints({ lane, editTarget, selectedManeuver = null }) {
   const parsed = parseEditTarget(editTarget);
   if (parsed.scope === "lane") {
     if (!lane) return [];
+    if (parsed.key === "direction_path") {
+      return lane.direction_rule?.direction_path || [];
+    }
+    if (parsed.key === "direction_check_zone") {
+      return lane.direction_rule?.check_zone || [];
+    }
     const laneField = parsed.key === "lane_polygon" ? "polygon" : parsed.key;
     return lane[laneField] || [];
   }
@@ -585,6 +632,11 @@ export function getCameraTypeLabel(value) {
 export function getLicensePlateStatusLabel(value) {
   if (!value) return "OCR tắt";
   return LICENSE_PLATE_STATUS_LABELS[value] || value;
+}
+
+export function getDirectionStatusLabel(value) {
+  if (!value) return DIRECTION_STATUS_LABELS.not_configured;
+  return DIRECTION_STATUS_LABELS[value] || value;
 }
 
 export function formatLicensePlateValue(plate, status) {
@@ -635,6 +687,32 @@ function normalizeLaneManeuvers(lane = {}) {
   return maneuvers;
 }
 
+export function normalizeDirectionRuleConfig(rule = {}) {
+  const source = rule || {};
+  const normalizePointsList = (points) =>
+    (points || []).map((point) => [Number(point?.[0] ?? 0), Number(point?.[1] ?? 0)]);
+  return {
+    enabled: Boolean(source.enabled ?? DEFAULT_DIRECTION_RULE.enabled),
+    direction_path: normalizePointsList(source.direction_path),
+    check_zone: normalizePointsList(source.check_zone),
+    same_direction_cos_threshold: Number.isFinite(Number(source.same_direction_cos_threshold))
+      ? Number(source.same_direction_cos_threshold)
+      : DEFAULT_DIRECTION_RULE.same_direction_cos_threshold,
+    opposite_direction_cos_threshold: Number.isFinite(Number(source.opposite_direction_cos_threshold))
+      ? Number(source.opposite_direction_cos_threshold)
+      : DEFAULT_DIRECTION_RULE.opposite_direction_cos_threshold,
+    min_duration_ms: Number.isFinite(Number(source.min_duration_ms))
+      ? Math.max(1, Math.round(Number(source.min_duration_ms)))
+      : DEFAULT_DIRECTION_RULE.min_duration_ms,
+    min_displacement_px: Number.isFinite(Number(source.min_displacement_px))
+      ? Math.max(0.1, Number(source.min_displacement_px))
+      : DEFAULT_DIRECTION_RULE.min_displacement_px,
+    min_samples: Number.isFinite(Number(source.min_samples))
+      ? Math.max(2, Math.round(Number(source.min_samples)))
+      : DEFAULT_DIRECTION_RULE.min_samples,
+  };
+}
+
 export function createEmptyLane(laneId, frameWidth, frameHeight) {
   const left = 80 + (laneId - 1) * 40;
   const top = Math.max(120, Math.round(frameHeight * 0.55));
@@ -657,6 +735,7 @@ export function createEmptyLane(laneId, frameWidth, frameHeight) {
     approach_zone: [],
     commit_gate: [],
     commit_line: [],
+    direction_rule: normalizeDirectionRuleConfig(),
     maneuvers: createDefaultLaneManeuvers({ allowedManeuvers: ["straight"] }),
   };
 }
@@ -715,6 +794,7 @@ export function normalizeCameraDetail(detail) {
         approach_zone: lane.approach_zone || [],
         commit_gate: lane.commit_gate || [],
         commit_line: lane.commit_line || [],
+        direction_rule: normalizeDirectionRuleConfig(lane.direction_rule),
         allowed_maneuvers: derivedAllowedManeuvers,
         allowed_lane_changes: lane.allowed_lane_changes || [lane.lane_id],
         allowed_vehicle_types: lane.allowed_vehicle_types || [...VEHICLE_TYPES],
@@ -736,6 +816,23 @@ export function buildPayload(draft) {
     return normalized.length >= minimumPoints ? normalized : null;
   };
   const lanes = draft.lane_config.lanes.map((lane) => ({
+    direction_rule: (() => {
+      const normalizedRule = normalizeDirectionRuleConfig(lane.direction_rule);
+      const normalizeDirectionGeometry = (points, minimumPoints) => {
+        const normalized = (points || []).map(([x, y]) => [Number(x), Number(y)]);
+        return normalized.length >= minimumPoints ? normalized : null;
+      };
+      return {
+        enabled: Boolean(normalizedRule.enabled),
+        direction_path: normalizeDirectionGeometry(normalizedRule.direction_path, 2),
+        check_zone: normalizeDirectionGeometry(normalizedRule.check_zone, 3),
+        same_direction_cos_threshold: Number(normalizedRule.same_direction_cos_threshold),
+        opposite_direction_cos_threshold: Number(normalizedRule.opposite_direction_cos_threshold),
+        min_duration_ms: Number(normalizedRule.min_duration_ms),
+        min_displacement_px: Number(normalizedRule.min_displacement_px),
+        min_samples: Number(normalizedRule.min_samples),
+      };
+    })(),
     maneuvers: Object.fromEntries(
       MANEUVERS.map((maneuver) => {
         const cfg = lane.maneuvers?.[maneuver] || {};
@@ -887,6 +984,21 @@ export function validatePolygonDraft(draft) {
     }
     if (commitLine.length > 0 && commitLine.length !== 2) {
       errors.push(`Vạch bắt đầu rẽ của làn ${lane.lane_id} phải có đúng 2 điểm.`);
+    }
+
+    const directionRule = normalizeDirectionRuleConfig(lane.direction_rule);
+    const directionPath = directionRule.direction_path || [];
+    const directionCheckZone = directionRule.check_zone || [];
+    if (directionRule.enabled && directionPath.length < 2) {
+      warnings.push(`Làn ${lane.lane_id}: bật hướng đúng chiều nhưng chưa vẽ direction path tối thiểu 2 điểm.`);
+    }
+    if (directionPath.length > 0 && directionPath.length < 2) {
+      errors.push(`Direction path của làn ${lane.lane_id} phải có ít nhất 2 điểm.`);
+    }
+    if (directionCheckZone.length > 0 && directionCheckZone.length < 3) {
+      errors.push(`Vùng kiểm tra hướng của làn ${lane.lane_id} phải có ít nhất 3 điểm.`);
+    } else if (directionCheckZone.length >= 3 && polygonSelfIntersects(directionCheckZone)) {
+      warnings.push(`Vùng kiểm tra hướng của làn ${lane.lane_id} đang tự cắt nhau.`);
     }
 
     MANEUVERS.forEach((maneuver) => {

@@ -343,6 +343,72 @@ class RuntimeManeuverConfig(BaseModel):
     exit_zone: Optional[list[list[float]]] = None
 
 
+class DirectionRuleConfig(BaseModel):
+    enabled: bool = False
+    direction_path: Optional[list[list[float]]] = None
+    check_zone: Optional[list[list[float]]] = None
+    same_direction_cos_threshold: float = 0.35
+    opposite_direction_cos_threshold: float = -0.45
+    min_duration_ms: int = 900
+    min_displacement_px: float = 12.0
+    min_samples: int = 4
+
+    @field_validator("direction_path")
+    @classmethod
+    def validate_direction_path(cls, value: Optional[list[list[float]]]) -> Optional[list[list[float]]]:
+        if value is None:
+            return value
+        return _validate_polyline_points(value, field_name="direction_path")
+
+    @field_validator("check_zone")
+    @classmethod
+    def validate_check_zone(cls, value: Optional[list[list[float]]]) -> Optional[list[list[float]]]:
+        if value is None:
+            return value
+        return _validate_polygon_points(value, field_name="check_zone")
+
+    @field_validator("same_direction_cos_threshold", "opposite_direction_cos_threshold")
+    @classmethod
+    def validate_cos_threshold(cls, value: float) -> float:
+        parsed = float(value)
+        if parsed < -1.0 or parsed > 1.0:
+            raise ValueError("direction cosine thresholds must be within [-1, 1]")
+        return parsed
+
+    @field_validator("min_duration_ms", "min_samples")
+    @classmethod
+    def validate_positive_int(cls, value: int) -> int:
+        parsed = int(value)
+        if parsed <= 0:
+            raise ValueError("direction rule integer values must be > 0")
+        return parsed
+
+    @field_validator("min_displacement_px")
+    @classmethod
+    def validate_non_negative_displacement(cls, value: float) -> float:
+        parsed = float(value)
+        if parsed <= 0.0:
+            raise ValueError("min_displacement_px must be > 0")
+        return parsed
+
+    @model_validator(mode="after")
+    def validate_threshold_order(self):
+        if self.opposite_direction_cos_threshold >= self.same_direction_cos_threshold:
+            raise ValueError("opposite_direction_cos_threshold must be smaller than same_direction_cos_threshold")
+        return self
+
+
+class RuntimeDirectionRuleConfig(BaseModel):
+    enabled: bool = False
+    direction_path: Optional[list[list[float]]] = None
+    check_zone: Optional[list[list[float]]] = None
+    same_direction_cos_threshold: float = 0.35
+    opposite_direction_cos_threshold: float = -0.45
+    min_duration_ms: int = 900
+    min_displacement_px: float = 12.0
+    min_samples: int = 4
+
+
 class LanePolygon(BaseModel):
     lane_id: int
     # Lưu polygon theo tọa độ chuẩn hóa [0, 1] để cấu hình thủ công không bị lệch
@@ -367,6 +433,7 @@ class LanePolygon(BaseModel):
     # Các loại phương tiện được phép đi trong làn này.
     allowed_vehicle_types: Optional[list[str]] = None
     maneuvers: Optional[dict[str, ManeuverConfig]] = None
+    direction_rule: Optional[DirectionRuleConfig] = None
 
     @field_validator("polygon")
     @classmethod
@@ -474,6 +541,7 @@ class RuntimeLanePolygon(BaseModel):
     allowed_lane_changes: Optional[list[int]] = None
     allowed_vehicle_types: Optional[list[str]] = None
     maneuvers: Optional[dict[str, RuntimeManeuverConfig]] = None
+    direction_rule: Optional[RuntimeDirectionRuleConfig] = None
 
 
 class RuntimeCameraLaneConfig(BaseModel):
@@ -682,6 +750,45 @@ def _normalize_lane_maneuvers_payload(
     return normalized or None
 
 
+def _normalize_direction_rule_payload(
+    *,
+    lane_raw: dict[str, Any],
+    frame_width: int,
+    frame_height: int,
+) -> Optional[dict[str, Any]]:
+    raw_rule = lane_raw.get("direction_rule")
+    if not isinstance(raw_rule, dict):
+        return None
+
+    raw_direction_path = raw_rule.get("direction_path")
+    if not isinstance(raw_direction_path, list):
+        raw_direction_path = None
+    raw_check_zone = raw_rule.get("check_zone")
+    if not isinstance(raw_check_zone, list):
+        raw_check_zone = None
+
+    direction_path = normalize_optional_polyline(
+        raw_direction_path,
+        frame_width,
+        frame_height,
+    )
+    check_zone = normalize_optional_polygon(
+        raw_check_zone,
+        frame_width,
+        frame_height,
+    )
+    return {
+        "enabled": bool(raw_rule.get("enabled", False)),
+        "direction_path": direction_path,
+        "check_zone": check_zone,
+        "same_direction_cos_threshold": float(raw_rule.get("same_direction_cos_threshold", 0.35)),
+        "opposite_direction_cos_threshold": float(raw_rule.get("opposite_direction_cos_threshold", -0.45)),
+        "min_duration_ms": int(raw_rule.get("min_duration_ms", 900)),
+        "min_displacement_px": float(raw_rule.get("min_displacement_px", 12.0)),
+        "min_samples": int(raw_rule.get("min_samples", 4)),
+    }
+
+
 def denormalize_lane_config(lane_config: CameraLaneConfig) -> RuntimeCameraLaneConfig:
     """Đổi toàn bộ polygon của camera từ tọa độ chuẩn hóa sang pixel lúc runtime."""
     frame_width = lane_config.frame_width
@@ -702,6 +809,26 @@ def denormalize_lane_config(lane_config: CameraLaneConfig) -> RuntimeCameraLaneC
                     "allowed_maneuvers": lane.allowed_maneuvers,
                     "allowed_lane_changes": lane.allowed_lane_changes,
                     "allowed_vehicle_types": lane.allowed_vehicle_types,
+                    "direction_rule": {
+                        "enabled": lane.direction_rule.enabled,
+                        "direction_path": denormalize_optional_polygon(
+                            lane.direction_rule.direction_path,
+                            frame_width,
+                            frame_height,
+                        ),
+                        "check_zone": denormalize_optional_polygon(
+                            lane.direction_rule.check_zone,
+                            frame_width,
+                            frame_height,
+                        ),
+                        "same_direction_cos_threshold": lane.direction_rule.same_direction_cos_threshold,
+                        "opposite_direction_cos_threshold": lane.direction_rule.opposite_direction_cos_threshold,
+                        "min_duration_ms": lane.direction_rule.min_duration_ms,
+                        "min_displacement_px": lane.direction_rule.min_displacement_px,
+                        "min_samples": lane.direction_rule.min_samples,
+                    }
+                    if lane.direction_rule is not None
+                    else None,
                     "maneuvers": {
                         maneuver: {
                             "enabled": cfg.enabled,
@@ -755,6 +882,11 @@ def _normalize_lane_config_payload(raw: dict[str, Any]) -> dict[str, Any]:
                 "approach_zone": normalize_optional_polygon(lane.get("approach_zone"), frame_width, frame_height),
                 "commit_gate": normalize_optional_polygon(lane.get("commit_gate"), frame_width, frame_height),
                 "commit_line": normalize_optional_polygon(lane.get("commit_line"), frame_width, frame_height),
+                "direction_rule": _normalize_direction_rule_payload(
+                    lane_raw=lane,
+                    frame_width=frame_width,
+                    frame_height=frame_height,
+                ),
                 "maneuvers": _normalize_lane_maneuvers_payload(
                     lane_raw=lane,
                     frame_width=frame_width,
@@ -791,6 +923,29 @@ def _compact_lane_config_for_storage(lane_config: CameraLaneConfig) -> dict[str,
             lane_payload["allowed_lane_changes"] = lane.allowed_lane_changes
         if lane.allowed_vehicle_types is not None:
             lane_payload["allowed_vehicle_types"] = lane.allowed_vehicle_types
+        if lane.direction_rule is not None:
+            direction_cfg = lane.direction_rule
+            compact_direction_cfg: dict[str, Any] = {"enabled": bool(direction_cfg.enabled)}
+            if direction_cfg.direction_path:
+                compact_direction_cfg["direction_path"] = direction_cfg.direction_path
+            if direction_cfg.check_zone:
+                compact_direction_cfg["check_zone"] = direction_cfg.check_zone
+            if float(direction_cfg.same_direction_cos_threshold) != 0.35:
+                compact_direction_cfg["same_direction_cos_threshold"] = float(
+                    direction_cfg.same_direction_cos_threshold
+                )
+            if float(direction_cfg.opposite_direction_cos_threshold) != -0.45:
+                compact_direction_cfg["opposite_direction_cos_threshold"] = float(
+                    direction_cfg.opposite_direction_cos_threshold
+                )
+            if int(direction_cfg.min_duration_ms) != 900:
+                compact_direction_cfg["min_duration_ms"] = int(direction_cfg.min_duration_ms)
+            if float(direction_cfg.min_displacement_px) != 12.0:
+                compact_direction_cfg["min_displacement_px"] = float(direction_cfg.min_displacement_px)
+            if int(direction_cfg.min_samples) != 4:
+                compact_direction_cfg["min_samples"] = int(direction_cfg.min_samples)
+            if compact_direction_cfg != {"enabled": False}:
+                lane_payload["direction_rule"] = compact_direction_cfg
 
         maneuver_payloads: dict[str, Any] = {}
         for maneuver in MANEUVER_ORDER:

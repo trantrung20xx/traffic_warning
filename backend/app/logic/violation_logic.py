@@ -7,6 +7,10 @@ from math import atan2, hypot
 from typing import Optional
 
 from app.core.config import LanePolygon
+from app.logic.direction_logic import (
+    DIRECTION_STATUS_NOT_CONFIGURED,
+    DirectionLogic,
+)
 from app.logic.polygon import (
     PreparedLine,
     PreparedPolygon,
@@ -110,6 +114,8 @@ class VehicleState:
     trajectory: deque[TrajectorySample] = field(default_factory=deque)
     line_crossings: dict[str, LineCrossingState] = field(default_factory=dict)
     violation_lifecycles: dict[str, ViolationLifecycle] = field(default_factory=dict)
+    direction_status: str = DIRECTION_STATUS_NOT_CONFIGURED
+    direction_dot: Optional[float] = None
     last_seen_ts: Optional[datetime] = None
 
 
@@ -267,6 +273,7 @@ class ViolationLogic:
         }
         self._lane_known_maneuvers = self._build_lane_known_maneuvers(lane_polygons)
         self._lane_maneuver_anchor_points = self._build_lane_maneuver_anchor_points(lane_polygons)
+        self._direction_logic = DirectionLogic(lane_polygons)
 
         self._vehicle_states: dict[int, VehicleState] = {}
 
@@ -316,6 +323,32 @@ class ViolationLogic:
                         },
                         violations=violations,
                     )
+
+        direction_eval = self._direction_logic.evaluate(
+            vehicle_id=vehicle_id,
+            lane_id=current_lane_id,
+            lane_started_ts=st.current_lane_started_ts,
+            trajectory_centers=[(sample.ts, sample.center) for sample in st.trajectory],
+            ts=ts,
+        )
+        st.direction_status = direction_eval.status
+        st.direction_dot = direction_eval.dot
+        if direction_eval.should_emit_violation and current_lane_id is not None:
+            lifecycle_key = f"wrong_direction:lane_{current_lane_id}"
+            self._emit_violation_if_needed(
+                st=st,
+                lifecycle_key=lifecycle_key,
+                lane_id=current_lane_id,
+                violation="wrong_direction",
+                ts=ts,
+                evidence_summary={
+                    "rule": "direction_rule",
+                    "lane_id": current_lane_id,
+                    "dot": direction_eval.dot,
+                    "direction_status": direction_eval.status,
+                },
+                violations=violations,
+            )
 
         self._update_turn_state(
             st=st,
@@ -1701,6 +1734,12 @@ class ViolationLogic:
         rows.sort(key=lambda row: row.get("last_seen_ts") or "", reverse=True)
         return rows[: max(int(limit), 1)]
 
+    def get_direction_status_for_vehicle(self, *, vehicle_id: int) -> tuple[str, Optional[float]]:
+        st = self._vehicle_states.get(vehicle_id)
+        if st is None:
+            return self._direction_logic.status_for_vehicle(vehicle_id=vehicle_id)
+        return (st.direction_status, st.direction_dot)
+
     def prune(self, *, current_ts: datetime, max_age_s: float) -> None:
         cutoff_ts = current_ts.timestamp() - float(max_age_s)
         to_delete: list[int] = []
@@ -1723,5 +1762,6 @@ class ViolationLogic:
 
             if st.last_seen_ts.timestamp() < cutoff_ts:
                 to_delete.append(vid)
+        self._direction_logic.prune(current_ts=current_ts, max_age_s=max_age_s)
         for vid in to_delete:
             del self._vehicle_states[vid]

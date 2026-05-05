@@ -334,6 +334,14 @@ export default function CameraCanvas({
           dashed: false,
           geometryType: "line",
         },
+        {
+          key: "direction_check_zone",
+          points: lane.direction_rule?.check_zone || [],
+          strokeStyle: "rgba(26, 188, 156, 0.95)",
+          fillStyle: "rgba(26, 188, 156, 0.14)",
+          label: "vùng kiểm tra hướng",
+          dashed: true,
+        },
       ].forEach((geometry) => {
         if (geometry.points.length < 2) return;
         const isEditableGeometry = editable && lane.lane_id === selectedLaneId && editTarget === geometry.key;
@@ -360,6 +368,31 @@ export default function CameraCanvas({
           ctx.fillText(`${geometry.label} · làn ${lane.lane_id}`, anchor[0] + 6, anchor[1] - 6);
         }
       });
+
+      const directionPath = lane.direction_rule?.direction_path || [];
+      if (directionPath.length >= 2) {
+        const isEditableDirectionPath = editable && lane.lane_id === selectedLaneId && editTarget === "direction_path";
+        drawPolyline(ctx, directionPath, {
+          dashed: false,
+          strokeStyle: isEditableDirectionPath ? "rgba(255, 209, 102, 1)" : "rgba(26, 188, 156, 0.98)",
+          lineWidth: isEditableDirectionPath ? 2.2 : 1.8,
+          showDirection: true,
+          arrowSize: isEditableDirectionPath ? 15 : 12,
+          showVertices: isEditableDirectionPath,
+          isEditableTarget: isEditableDirectionPath,
+          vertexRadius: 3.5,
+          activeVertexRadius: 5,
+          vertexStrokeWidth: 1.2,
+          hoverVertexIndex,
+          selectedVertexIndex,
+        });
+        if (!isMonitoringOverlay) {
+          const anchor = directionPath[0];
+          ctx.fillStyle = "rgba(255,255,255,0.9)";
+          ctx.font = "12px sans-serif";
+          ctx.fillText(`hướng đúng chiều · làn ${lane.lane_id}`, anchor[0] + 6, anchor[1] - 6);
+        }
+      }
 
       Object.entries(lane.maneuvers || {}).forEach(([maneuver, cfg]) => {
         const maneuverLabel = getManeuverLabel(maneuver);

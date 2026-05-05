@@ -371,6 +371,9 @@ class CameraContext:
                     "allowed_lane_changes": lp.allowed_lane_changes or [lp.lane_id],
                     "allowed_vehicle_types": lp.allowed_vehicle_types or ["motorcycle", "car", "truck", "bus"],
                     "maneuvers": lp.maneuvers or {},
+                    "direction_rule": lp.direction_rule.model_dump(mode="json", exclude_none=True)
+                    if lp.direction_rule is not None
+                    else None,
                 }
             )
         return {
@@ -491,6 +494,11 @@ class CameraContext:
                         bbox_xyxy=tr.bbox_xyxy,
                         ts=ts_dt,
                     )
+                    direction_status, direction_dot = self.violation_logic.get_direction_status_for_vehicle(
+                        vehicle_id=tr.vehicle_id
+                    )
+                    vehicles[-1].direction_status = direction_status
+                    vehicles[-1].direction_dot = direction_dot
                     for c in candidates:
                         violation_candidates.append((tr.vehicle_id, vehicle_type, c, list(tr.bbox_xyxy)))
 

@@ -13,6 +13,7 @@ import {
 	formatLicensePlateValue,
 	formatTimestamp,
 	getCameraTypeLabel,
+	getDirectionStatusLabel,
 	getVehicleTypeLabel,
 	getViolationLabel,
 } from "../utils";
@@ -577,16 +578,35 @@ export default function MonitoringView({
 													vehicle.license_plate_status,
 												)}`}
 											</div>
+											{vehicle.direction_status === "wrong_direction" ? (
+												<div className="tracked-vehicle-meta-line">
+													{`Hướng: ${getDirectionStatusLabel(vehicle.direction_status)}`}
+												</div>
+											) : null}
 										</div>
 									</div>
 									<div
 										className={
-											vehicle.bbox
-												? "badge success"
-												: "badge subtle"
+											vehicle.direction_status === "wrong_direction"
+												? "badge danger"
+												: vehicle.bbox
+													? "badge success"
+													: "badge subtle"
 										}>
-										<AppIcon name={vehicle.bbox ? "check-circle" : "clock"} />
-										{vehicle.bbox ? "Đang theo dõi" : "Chờ xử lý"}
+										<AppIcon
+											name={
+												vehicle.direction_status === "wrong_direction"
+													? "shield-alert"
+													: vehicle.bbox
+														? "check-circle"
+														: "clock"
+											}
+										/>
+										{vehicle.direction_status === "wrong_direction"
+											? "Ngược chiều"
+											: vehicle.bbox
+												? "Đang theo dõi"
+												: "Chờ xử lý"}
 									</div>
 								</article>
 							))}

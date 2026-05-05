@@ -17,6 +17,7 @@ VEHICLE_TYPE_LABELS = {
 
 VIOLATION_LABELS = {
     "wrong_lane": "Đi sai làn",
+    "wrong_direction": "Đi ngược chiều",
     "vehicle_type_not_allowed": "Loại phương tiện không đúng quy định",
     "turn_left_not_allowed": "Rẽ trái không đúng quy định",
     "turn_right_not_allowed": "Rẽ phải không đúng quy định",

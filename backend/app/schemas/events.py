@@ -18,6 +18,8 @@ class TrackVehicle(BaseModel):
     vehicle_type: str
     lane_id: Optional[int] = None
     raw_lane_id: Optional[int] = None
+    direction_status: Optional[str] = None
+    direction_dot: Optional[float] = None
     license_plate: Optional[str] = None
     license_plate_status: Optional[str] = None
     license_plate_confidence: Optional[float] = None

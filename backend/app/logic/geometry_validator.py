@@ -130,6 +130,59 @@ def validate_lane_geometry(lane_config: CameraLaneConfig) -> list[dict[str, Any]
                         )
                     )
 
+        direction_rule = getattr(lane, "direction_rule", None)
+        if direction_rule and bool(getattr(direction_rule, "enabled", False)):
+            direction_path = list(getattr(direction_rule, "direction_path", None) or [])
+            check_zone = list(getattr(direction_rule, "check_zone", None) or [])
+
+            if len(direction_path) < 2:
+                issues.append(
+                    _issue(
+                        level="warning",
+                        code="DIRECTION_PATH_MISSING",
+                        message=f"Làn {lane.lane_id}: direction path chưa có hoặc chưa đủ 2 điểm.",
+                        lane_id=lane.lane_id,
+                        suggestion="Vẽ direction path bằng polyline 2+ điểm theo hướng xe đi hợp lệ.",
+                    )
+                )
+            else:
+                direction_path_length = _polyline_length(direction_path)
+                if direction_path_length < 0.05:
+                    issues.append(
+                        _issue(
+                            level="warning",
+                            code="DIRECTION_PATH_TOO_SHORT",
+                            message=f"Làn {lane.lane_id}: direction path quá ngắn, dễ nhiễu.",
+                            lane_id=lane.lane_id,
+                            suggestion="Kéo dài direction path qua đoạn xe chạy ổn định.",
+                        )
+                    )
+
+            if check_zone:
+                check_zone_shape = Polygon([(float(x), float(y)) for x, y in check_zone])
+                if check_zone_shape.is_empty or check_zone_shape.area <= 1e-9:
+                    issues.append(
+                        _issue(
+                            level="warning",
+                            code="DIRECTION_CHECK_ZONE_INVALID",
+                            message=f"Làn {lane.lane_id}: direction check zone rỗng hoặc quá nhỏ.",
+                            lane_id=lane.lane_id,
+                            suggestion="Vẽ vùng kiểm tra hướng tối thiểu 3 điểm.",
+                        )
+                    )
+                else:
+                    overlap_ratio = _safe_overlap_ratio(check_zone_shape, lane_shape)
+                    if overlap_ratio < 0.12:
+                        issues.append(
+                            _issue(
+                                level="warning",
+                                code="DIRECTION_CHECK_ZONE_MISALIGNED",
+                                message=f"Làn {lane.lane_id}: direction check zone lệch khỏi lane.",
+                                lane_id=lane.lane_id,
+                                suggestion="Đưa vùng kiểm tra hướng nằm gọn trong lane để giảm false positive.",
+                            )
+                        )
+
     # Lane overlap checks.
     for lane_a, lane_b in combinations(lane_config.lanes, 2):
         poly_a = lane_shapes.get(lane_a.lane_id)
