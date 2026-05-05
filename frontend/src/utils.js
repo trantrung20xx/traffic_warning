@@ -80,11 +80,6 @@ export const DEFAULT_DIRECTION_RULE = Object.freeze({
   enabled: false,
   direction_path: [],
   check_zone: [],
-  same_direction_cos_threshold: 0.35,
-  opposite_direction_cos_threshold: -0.45,
-  min_duration_ms: 900,
-  min_displacement_px: 12,
-  min_samples: 4,
 });
 
 const CAMERA_TYPE_LABELS = {
@@ -706,21 +701,6 @@ export function normalizeDirectionRuleConfig(rule = {}) {
     enabled: Boolean(source.enabled ?? DEFAULT_DIRECTION_RULE.enabled),
     direction_path: toNumericPointsSafe(source.direction_path),
     check_zone: toNumericPointsSafe(source.check_zone),
-    same_direction_cos_threshold: Number.isFinite(Number(source.same_direction_cos_threshold))
-      ? Number(source.same_direction_cos_threshold)
-      : DEFAULT_DIRECTION_RULE.same_direction_cos_threshold,
-    opposite_direction_cos_threshold: Number.isFinite(Number(source.opposite_direction_cos_threshold))
-      ? Number(source.opposite_direction_cos_threshold)
-      : DEFAULT_DIRECTION_RULE.opposite_direction_cos_threshold,
-    min_duration_ms: Number.isFinite(Number(source.min_duration_ms))
-      ? Math.max(1, Math.round(Number(source.min_duration_ms)))
-      : DEFAULT_DIRECTION_RULE.min_duration_ms,
-    min_displacement_px: Number.isFinite(Number(source.min_displacement_px))
-      ? Math.max(0.1, Number(source.min_displacement_px))
-      : DEFAULT_DIRECTION_RULE.min_displacement_px,
-    min_samples: Number.isFinite(Number(source.min_samples))
-      ? Math.max(2, Math.round(Number(source.min_samples)))
-      : DEFAULT_DIRECTION_RULE.min_samples,
   };
 }
 
@@ -829,11 +809,6 @@ export function buildPayload(draft) {
         enabled: Boolean(normalizedRule.enabled),
         direction_path: toOptionalGeometry(normalizedRule.direction_path, 2),
         check_zone: toOptionalGeometry(normalizedRule.check_zone, 3),
-        same_direction_cos_threshold: Number(normalizedRule.same_direction_cos_threshold),
-        opposite_direction_cos_threshold: Number(normalizedRule.opposite_direction_cos_threshold),
-        min_duration_ms: Number(normalizedRule.min_duration_ms),
-        min_displacement_px: Number(normalizedRule.min_displacement_px),
-        min_samples: Number(normalizedRule.min_samples),
       };
     })(),
     maneuvers: Object.fromEntries(

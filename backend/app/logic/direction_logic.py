@@ -35,11 +35,37 @@ class DirectionRule:
     lane_id: int
     direction_path: list[tuple[float, float]]
     check_shape: PreparedPolygon
+
+
+@dataclass(frozen=True)
+class DirectionDetectionSettings:
     same_direction_cos_threshold: float
     opposite_direction_cos_threshold: float
     min_duration_ms: int
     min_displacement_px: float
     min_samples: int
+
+    @classmethod
+    def from_values(
+        cls,
+        *,
+        same_direction_cos_threshold: float = 0.25,
+        opposite_direction_cos_threshold: float = -0.25,
+        min_duration_ms: int = 600,
+        min_displacement_px: float = 8.0,
+        min_samples: int = 3,
+    ) -> "DirectionDetectionSettings":
+        same_threshold = float(same_direction_cos_threshold)
+        opposite_threshold = float(opposite_direction_cos_threshold)
+        if opposite_threshold >= same_threshold:
+            raise ValueError("opposite_direction_cos_threshold must be smaller than same_direction_cos_threshold")
+        return cls(
+            same_direction_cos_threshold=same_threshold,
+            opposite_direction_cos_threshold=opposite_threshold,
+            min_duration_ms=max(int(min_duration_ms), 1),
+            min_displacement_px=max(float(min_displacement_px), 0.1),
+            min_samples=max(int(min_samples), 2),
+        )
 
 
 class DirectionLogic:
@@ -49,7 +75,13 @@ class DirectionLogic:
     Thiết kế thành component riêng để không trộn với turn-detection rule hiện có.
     """
 
-    def __init__(self, lane_polygons: list[LanePolygon]):
+    def __init__(
+        self,
+        lane_polygons: list[LanePolygon],
+        *,
+        settings: Optional[DirectionDetectionSettings] = None,
+    ):
+        self._settings = settings or DirectionDetectionSettings.from_values()
         self._rules_by_lane: dict[int, DirectionRule] = {}
         for lane in lane_polygons:
             raw_rule = getattr(lane, "direction_rule", None)
@@ -69,11 +101,6 @@ class DirectionLogic:
                 lane_id=lane.lane_id,
                 direction_path=direction_path,
                 check_shape=PreparedPolygon.from_points(check_zone_points),
-                same_direction_cos_threshold=float(raw_rule.same_direction_cos_threshold),
-                opposite_direction_cos_threshold=float(raw_rule.opposite_direction_cos_threshold),
-                min_duration_ms=int(raw_rule.min_duration_ms),
-                min_displacement_px=float(raw_rule.min_displacement_px),
-                min_samples=max(int(raw_rule.min_samples), 2),
             )
 
         self._states: dict[int, DirectionState] = {}
@@ -101,7 +128,7 @@ class DirectionLogic:
             return self._not_configured_result(state)
 
         lane_samples = self._lane_samples_since(trajectory_centers=trajectory_centers, lane_started_ts=lane_started_ts)
-        if len(lane_samples) < rule.min_samples:
+        if len(lane_samples) < self._settings.min_samples:
             return self._unknown_result(state, reset_candidate=True)
 
         current_point = lane_samples[-1][1]
@@ -111,7 +138,7 @@ class DirectionLogic:
         start_point = lane_samples[0][1]
         end_point = lane_samples[-1][1]
         displacement_px = hypot(end_point[0] - start_point[0], end_point[1] - start_point[1])
-        if displacement_px < rule.min_displacement_px:
+        if displacement_px < self._settings.min_displacement_px:
             return self._unknown_result(state, reset_candidate=True)
 
         vehicle_vector = self._normalize_vector(
@@ -128,18 +155,18 @@ class DirectionLogic:
             return self._unknown_result(state, reset_candidate=True)
 
         dot = (vehicle_vector[0] * lane_vector[0]) + (vehicle_vector[1] * lane_vector[1])
-        if dot >= rule.same_direction_cos_threshold:
+        if dot >= self._settings.same_direction_cos_threshold:
             self._reset_candidate(state)
             return self._set_state_result(state, DIRECTION_STATUS_CORRECT, dot, should_emit_violation=False)
 
-        if dot <= rule.opposite_direction_cos_threshold:
+        if dot <= self._settings.opposite_direction_cos_threshold:
             if state.candidate_lane_id != lane_id or state.candidate_started_ts is None:
                 state.candidate_lane_id = lane_id
                 state.candidate_started_ts = ts
                 return self._unknown_result(state, dot=dot, reset_candidate=False)
 
             elapsed_ms = int((ts - state.candidate_started_ts).total_seconds() * 1000.0)
-            if elapsed_ms >= rule.min_duration_ms:
+            if elapsed_ms >= self._settings.min_duration_ms:
                 return self._set_state_result(state, DIRECTION_STATUS_WRONG, dot, should_emit_violation=True)
             return self._unknown_result(state, dot=dot, reset_candidate=False)
 

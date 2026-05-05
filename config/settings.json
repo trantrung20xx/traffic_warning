@@ -10,7 +10,7 @@
   "detection": {
     "weights_path": "backend/yolov8m.pt",
     "device": "auto",
-    "confidence_threshold": 0.28,
+    "confidence_threshold": 0.25,
     "iou_threshold": 0.7
   },
   "tracking": {
@@ -38,7 +38,16 @@
     }
   },
   "wrong_lane": {
-    "min_duration_ms": 1200
+    "min_duration_ms": 900
+  },
+  "direction_detection": {
+    "defaults": {
+      "same_direction_cos_threshold": 0.25,
+      "opposite_direction_cos_threshold": -0.25,
+      "min_duration_ms": 600,
+      "min_displacement_px": 8.0,
+      "min_samples": 3
+    }
   },
   "turn_detection": {
     "turn_region_min_hits": 3,

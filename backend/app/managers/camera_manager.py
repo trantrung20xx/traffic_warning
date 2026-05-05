@@ -25,6 +25,7 @@ from app.core.config import (
 from app.db.repository import query_dashboard_analytics, query_violation_history
 from app.db.database import create_engine_and_session
 from app.managers.camera_context import CameraContext
+from app.logic.direction_logic import DirectionDetectionSettings
 from app.logic.geometry_validator import validate_lane_geometry
 from app.schemas.camera import CameraConfig
 from app.schemas.events import TrackMessage, ViolationEvent
@@ -409,6 +410,9 @@ class CameraManager:
             trajectory_sample_inside_polygon_min_hits=self.cfg.turn_detection_trajectory.sample_inside_polygon_min_hits,
             trajectory_entry_heading_lookback_points=self.cfg.turn_detection_trajectory.entry_heading_lookback_points,
             trajectory_heading_local_window_points=self.cfg.turn_detection_trajectory.heading_local_window_points,
+            direction_detection_settings=DirectionDetectionSettings.from_values(
+                **self.cfg.direction_detection_defaults.model_dump()
+            ),
             state_prune_max_age_s=self.cfg.state_prune_max_age_s,
             rtsp_reconnect_delay_s=self.cfg.rtsp_reconnect_delay_s,
             preview_max_fps=self.cfg.preview_max_fps,

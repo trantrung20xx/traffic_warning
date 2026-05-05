@@ -343,15 +343,48 @@ class RuntimeManeuverConfig(BaseModel):
     exit_zone: Optional[list[list[float]]] = None
 
 
+class DirectionDetectionDefaultsConfig(BaseModel):
+    same_direction_cos_threshold: float = 0.25
+    opposite_direction_cos_threshold: float = -0.25
+    min_duration_ms: int = 600
+    min_displacement_px: float = 8.0
+    min_samples: int = 3
+
+    @field_validator("same_direction_cos_threshold", "opposite_direction_cos_threshold")
+    @classmethod
+    def validate_cos_threshold(cls, value: float) -> float:
+        parsed = float(value)
+        if parsed < -1.0 or parsed > 1.0:
+            raise ValueError("direction cosine thresholds must be within [-1, 1]")
+        return parsed
+
+    @field_validator("min_duration_ms", "min_samples")
+    @classmethod
+    def validate_positive_int(cls, value: int) -> int:
+        parsed = int(value)
+        if parsed <= 0:
+            raise ValueError("direction detection integer values must be > 0")
+        return parsed
+
+    @field_validator("min_displacement_px")
+    @classmethod
+    def validate_positive_displacement(cls, value: float) -> float:
+        parsed = float(value)
+        if parsed <= 0.0:
+            raise ValueError("direction detection min_displacement_px must be > 0")
+        return parsed
+
+    @model_validator(mode="after")
+    def validate_threshold_order(self):
+        if self.opposite_direction_cos_threshold >= self.same_direction_cos_threshold:
+            raise ValueError("opposite_direction_cos_threshold must be smaller than same_direction_cos_threshold")
+        return self
+
+
 class DirectionRuleConfig(BaseModel):
     enabled: bool = False
     direction_path: Optional[list[list[float]]] = None
     check_zone: Optional[list[list[float]]] = None
-    same_direction_cos_threshold: float = 0.35
-    opposite_direction_cos_threshold: float = -0.45
-    min_duration_ms: int = 900
-    min_displacement_px: float = 12.0
-    min_samples: int = 4
 
     @field_validator("direction_path")
     @classmethod
@@ -367,46 +400,11 @@ class DirectionRuleConfig(BaseModel):
             return value
         return _validate_polygon_points(value, field_name="check_zone")
 
-    @field_validator("same_direction_cos_threshold", "opposite_direction_cos_threshold")
-    @classmethod
-    def validate_cos_threshold(cls, value: float) -> float:
-        parsed = float(value)
-        if parsed < -1.0 or parsed > 1.0:
-            raise ValueError("direction cosine thresholds must be within [-1, 1]")
-        return parsed
-
-    @field_validator("min_duration_ms", "min_samples")
-    @classmethod
-    def validate_positive_int(cls, value: int) -> int:
-        parsed = int(value)
-        if parsed <= 0:
-            raise ValueError("direction rule integer values must be > 0")
-        return parsed
-
-    @field_validator("min_displacement_px")
-    @classmethod
-    def validate_non_negative_displacement(cls, value: float) -> float:
-        parsed = float(value)
-        if parsed <= 0.0:
-            raise ValueError("min_displacement_px must be > 0")
-        return parsed
-
-    @model_validator(mode="after")
-    def validate_threshold_order(self):
-        if self.opposite_direction_cos_threshold >= self.same_direction_cos_threshold:
-            raise ValueError("opposite_direction_cos_threshold must be smaller than same_direction_cos_threshold")
-        return self
-
 
 class RuntimeDirectionRuleConfig(BaseModel):
     enabled: bool = False
     direction_path: Optional[list[list[float]]] = None
     check_zone: Optional[list[list[float]]] = None
-    same_direction_cos_threshold: float = 0.35
-    opposite_direction_cos_threshold: float = -0.45
-    min_duration_ms: int = 900
-    min_displacement_px: float = 12.0
-    min_samples: int = 4
 
 
 class LanePolygon(BaseModel):
@@ -588,6 +586,7 @@ class AppConfig(BaseModel):
     turn_detection_curvature: TurnDetectionCurvatureConfig = TurnDetectionCurvatureConfig()
     turn_detection_opposite_direction: TurnDetectionOppositeDirectionConfig = TurnDetectionOppositeDirectionConfig()
     turn_detection_trajectory: TurnDetectionTrajectoryConfig = TurnDetectionTrajectoryConfig()
+    direction_detection_defaults: DirectionDetectionDefaultsConfig = DirectionDetectionDefaultsConfig()
     line_crossing_side_tolerance_px: float = 2.0
     line_crossing_min_pre_frames: int = 2
     line_crossing_min_post_frames: int = 2
@@ -761,10 +760,10 @@ def _normalize_direction_rule_payload(
         return None
 
     raw_direction_path = raw_rule.get("direction_path")
-    if not isinstance(raw_direction_path, list):
+    if not isinstance(raw_direction_path, list) or len(raw_direction_path) < 2:
         raw_direction_path = None
     raw_check_zone = raw_rule.get("check_zone")
-    if not isinstance(raw_check_zone, list):
+    if not isinstance(raw_check_zone, list) or len(raw_check_zone) < 3:
         raw_check_zone = None
 
     direction_path = normalize_optional_polyline(
@@ -781,11 +780,6 @@ def _normalize_direction_rule_payload(
         "enabled": bool(raw_rule.get("enabled", False)),
         "direction_path": direction_path,
         "check_zone": check_zone,
-        "same_direction_cos_threshold": float(raw_rule.get("same_direction_cos_threshold", 0.35)),
-        "opposite_direction_cos_threshold": float(raw_rule.get("opposite_direction_cos_threshold", -0.45)),
-        "min_duration_ms": int(raw_rule.get("min_duration_ms", 900)),
-        "min_displacement_px": float(raw_rule.get("min_displacement_px", 12.0)),
-        "min_samples": int(raw_rule.get("min_samples", 4)),
     }
 
 
@@ -821,11 +815,6 @@ def denormalize_lane_config(lane_config: CameraLaneConfig) -> RuntimeCameraLaneC
                             frame_width,
                             frame_height,
                         ),
-                        "same_direction_cos_threshold": lane.direction_rule.same_direction_cos_threshold,
-                        "opposite_direction_cos_threshold": lane.direction_rule.opposite_direction_cos_threshold,
-                        "min_duration_ms": lane.direction_rule.min_duration_ms,
-                        "min_displacement_px": lane.direction_rule.min_displacement_px,
-                        "min_samples": lane.direction_rule.min_samples,
                     }
                     if lane.direction_rule is not None
                     else None,
@@ -930,20 +919,6 @@ def _compact_lane_config_for_storage(lane_config: CameraLaneConfig) -> dict[str,
                 compact_direction_cfg["direction_path"] = direction_cfg.direction_path
             if direction_cfg.check_zone:
                 compact_direction_cfg["check_zone"] = direction_cfg.check_zone
-            if float(direction_cfg.same_direction_cos_threshold) != 0.35:
-                compact_direction_cfg["same_direction_cos_threshold"] = float(
-                    direction_cfg.same_direction_cos_threshold
-                )
-            if float(direction_cfg.opposite_direction_cos_threshold) != -0.45:
-                compact_direction_cfg["opposite_direction_cos_threshold"] = float(
-                    direction_cfg.opposite_direction_cos_threshold
-                )
-            if int(direction_cfg.min_duration_ms) != 900:
-                compact_direction_cfg["min_duration_ms"] = int(direction_cfg.min_duration_ms)
-            if float(direction_cfg.min_displacement_px) != 12.0:
-                compact_direction_cfg["min_displacement_px"] = float(direction_cfg.min_displacement_px)
-            if int(direction_cfg.min_samples) != 4:
-                compact_direction_cfg["min_samples"] = int(direction_cfg.min_samples)
             if compact_direction_cfg != {"enabled": False}:
                 lane_payload["direction_rule"] = compact_direction_cfg
 
@@ -1062,6 +1037,9 @@ def load_app_config(repo_root: Path) -> AppConfig:
         ),
         turn_detection_trajectory=TurnDetectionTrajectoryConfig.model_validate(
             _setting(settings, ("turn_detection", "trajectory"), {}) or {}
+        ),
+        direction_detection_defaults=DirectionDetectionDefaultsConfig.model_validate(
+            _setting(settings, ("direction_detection", "defaults"), {}) or {}
         ),
         line_crossing_side_tolerance_px=float(
             _setting(settings, ("evidence_fusion", "line_crossing", "side_tolerance_px"), 2.0)

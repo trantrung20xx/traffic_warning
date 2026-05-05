@@ -9,6 +9,7 @@ from typing import Callable, Optional, TypeVar
 from app.core.config import LanePolygon
 from app.logic.direction_logic import (
     DIRECTION_STATUS_NOT_CONFIGURED,
+    DirectionDetectionSettings,
     DirectionLogic,
 )
 from app.logic.polygon import (
@@ -184,6 +185,7 @@ class ViolationLogic:
         trajectory_sample_inside_min_hits: int = 2,
         trajectory_entry_heading_lookback_points: int = 4,
         trajectory_heading_local_window_points: int = 3,
+        direction_detection_settings: Optional[DirectionDetectionSettings] = None,
     ):
         if not lane_polygons:
             raise ValueError("lane_polygons must be non-empty")
@@ -275,7 +277,10 @@ class ViolationLogic:
         }
         self._lane_known_maneuvers = self._build_lane_known_maneuvers(lane_polygons)
         self._lane_maneuver_anchor_points = self._build_lane_maneuver_anchor_points(lane_polygons)
-        self._direction_logic = DirectionLogic(lane_polygons)
+        self._direction_logic = DirectionLogic(
+            lane_polygons,
+            settings=direction_detection_settings,
+        )
 
         self._vehicle_states: dict[int, VehicleState] = {}
 

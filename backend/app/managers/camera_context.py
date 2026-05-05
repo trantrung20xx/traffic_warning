@@ -18,6 +18,7 @@ from app.logic.lane_logic import LaneLogic, TemporalLaneAssigner
 from app.logic.license_plate_logic import LicensePlateSnapshot, LicensePlateTemporalResolver
 from app.logic.track_id_logic import StableTrackIdAssigner
 from app.logic.vehicle_type_logic import TemporalVehicleTypeAssigner
+from app.logic.direction_logic import DirectionDetectionSettings
 from app.logic.violation_logic import ViolationLogic
 from app.schemas.camera import CameraLocation
 from app.schemas.events import (
@@ -116,6 +117,7 @@ class CameraContext:
         trajectory_sample_inside_polygon_min_hits: int = 2,
         trajectory_entry_heading_lookback_points: int = 4,
         trajectory_heading_local_window_points: int = 3,
+        direction_detection_settings: Optional[DirectionDetectionSettings] = None,
         state_prune_max_age_s: float = 60.0,
         rtsp_reconnect_delay_s: float = 2.0,
         preview_max_fps: float = 15.0,
@@ -246,6 +248,7 @@ class CameraContext:
             trajectory_sample_inside_min_hits=trajectory_sample_inside_polygon_min_hits,
             trajectory_entry_heading_lookback_points=trajectory_entry_heading_lookback_points,
             trajectory_heading_local_window_points=trajectory_heading_local_window_points,
+            direction_detection_settings=direction_detection_settings,
         )
 
         self.stats = StatisticsEngine()
