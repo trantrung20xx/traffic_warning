@@ -52,8 +52,6 @@ def _normalized_center_distance(box_a: list[float], box_b: list[float]) -> float
 class StableTrackState:
     stable_vehicle_id: int
     bbox_xyxy: list[float]
-    vehicle_type: str
-    confidence: float
     last_seen_ts: datetime
 
 
@@ -65,6 +63,8 @@ class StableTrackIdAssigner:
     - Ưu tiên giữ nguyên ánh xạ raw id -> stable id nếu hình học vẫn hợp lý.
     - Nếu raw id bị đổi, thử nối lại với track ổn định gần nhất bằng IoU và độ liên tục vị trí
       trước khi cấp một stable id mới.
+    - Không dùng nhãn loại xe để quyết định identity vì nhãn detector có thể đổi trong lúc
+      vẫn là cùng một đối tượng đang được theo dõi.
     - Xóa trạng thái cũ sớm để tránh tái sử dụng nhầm id cho xe khác.
     """
 
@@ -123,9 +123,7 @@ class StableTrackIdAssigner:
                 distance = _normalized_center_distance(track.bbox_xyxy, state.bbox_xyxy)
                 if iou < self._min_iou_for_rebind and distance > self._max_normalized_distance:
                     continue
-                type_bonus = 0.12 if track.vehicle_type == state.vehicle_type else 0.0
-                confidence_bonus = min(track.confidence, 1.0) * 0.08
-                score = iou * 1.4 + max(0.0, 1.0 - distance) + type_bonus + confidence_bonus
+                score = iou * 1.4 + max(0.0, 1.0 - distance)
                 candidate_matches.append((score, track, stable_vehicle_id))
 
         matched_raw_ids: set[int] = set()
@@ -152,8 +150,6 @@ class StableTrackIdAssigner:
         self._stable_states[stable_vehicle_id] = StableTrackState(
             stable_vehicle_id=stable_vehicle_id,
             bbox_xyxy=list(track.bbox_xyxy),
-            vehicle_type=track.vehicle_type,
-            confidence=track.confidence,
             last_seen_ts=ts,
         )
         self._raw_to_stable[track.vehicle_id] = stable_vehicle_id

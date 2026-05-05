@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import numpy as np
 
-from app.vision.detector import YoloV8VehicleDetector
+if TYPE_CHECKING:
+    from app.vision.detector import YoloV8VehicleDetector
 
 
 @dataclass(frozen=True)
