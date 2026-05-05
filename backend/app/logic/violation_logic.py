@@ -4,7 +4,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
 from math import atan2, hypot
-from typing import Optional
+from typing import Callable, Optional, TypeVar
 
 from app.core.config import LanePolygon
 from app.logic.direction_logic import (
@@ -17,6 +17,8 @@ from app.logic.polygon import (
     bbox_bottom_contact_points,
     signed_distance_to_line,
 )
+
+TGeometry = TypeVar("TGeometry")
 
 
 @dataclass
@@ -1389,22 +1391,11 @@ class ViolationLogic:
         lane_polygons: list[LanePolygon],
         geometry_field: str,
     ) -> dict[int, dict[str, PreparedPolygon]]:
-        by_lane: dict[int, dict[str, PreparedPolygon]] = {}
-        for lane in lane_polygons:
-            maneuvers = getattr(lane, "maneuvers", None) or {}
-            if not isinstance(maneuvers, dict):
-                continue
-            lane_map: dict[str, PreparedPolygon] = {}
-            for maneuver, maneuver_cfg in maneuvers.items():
-                if not self._maneuver_is_enabled(maneuver_cfg):
-                    continue
-                points = self._extract_maneuver_points(maneuver_cfg=maneuver_cfg, field=geometry_field)
-                if not points:
-                    continue
-                lane_map[maneuver] = PreparedPolygon.from_points(points)
-            if lane_map:
-                by_lane[lane.lane_id] = lane_map
-        return by_lane
+        return self._build_lane_geometry_collection(
+            lane_polygons=lane_polygons,
+            geometry_field=geometry_field,
+            geometry_builder=PreparedPolygon.from_points,
+        )
 
     def _build_lane_line_collection(
         self,
@@ -1412,19 +1403,32 @@ class ViolationLogic:
         lane_polygons: list[LanePolygon],
         geometry_field: str,
     ) -> dict[int, dict[str, PreparedLine]]:
-        by_lane: dict[int, dict[str, PreparedLine]] = {}
+        return self._build_lane_geometry_collection(
+            lane_polygons=lane_polygons,
+            geometry_field=geometry_field,
+            geometry_builder=PreparedLine.from_points,
+        )
+
+    def _build_lane_geometry_collection(
+        self,
+        *,
+        lane_polygons: list[LanePolygon],
+        geometry_field: str,
+        geometry_builder: Callable[[list[list[float]]], TGeometry],
+    ) -> dict[int, dict[str, TGeometry]]:
+        by_lane: dict[int, dict[str, TGeometry]] = {}
         for lane in lane_polygons:
             maneuvers = getattr(lane, "maneuvers", None) or {}
             if not isinstance(maneuvers, dict):
                 continue
-            lane_map: dict[str, PreparedLine] = {}
+            lane_map: dict[str, TGeometry] = {}
             for maneuver, maneuver_cfg in maneuvers.items():
                 if not self._maneuver_is_enabled(maneuver_cfg):
                     continue
                 points = self._extract_maneuver_points(maneuver_cfg=maneuver_cfg, field=geometry_field)
                 if not points:
                     continue
-                lane_map[maneuver] = PreparedLine.from_points(points)
+                lane_map[maneuver] = geometry_builder(points)
             if lane_map:
                 by_lane[lane.lane_id] = lane_map
         return by_lane

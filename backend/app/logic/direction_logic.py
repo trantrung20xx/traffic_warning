@@ -94,30 +94,25 @@ class DirectionLogic:
         state.last_seen_ts = ts
 
         if lane_id is None:
-            self._reset_candidate(state)
-            return self._set_state_result(state, DIRECTION_STATUS_UNKNOWN, None, should_emit_violation=False)
+            return self._unknown_result(state, reset_candidate=True)
 
         rule = self._rules_by_lane.get(lane_id)
         if rule is None:
-            self._reset_candidate(state)
-            return self._set_state_result(state, DIRECTION_STATUS_NOT_CONFIGURED, None, should_emit_violation=False)
+            return self._not_configured_result(state)
 
         lane_samples = self._lane_samples_since(trajectory_centers=trajectory_centers, lane_started_ts=lane_started_ts)
         if len(lane_samples) < rule.min_samples:
-            self._reset_candidate(state)
-            return self._set_state_result(state, DIRECTION_STATUS_UNKNOWN, None, should_emit_violation=False)
+            return self._unknown_result(state, reset_candidate=True)
 
         current_point = lane_samples[-1][1]
         if not rule.check_shape.contains_xy(current_point[0], current_point[1]):
-            self._reset_candidate(state)
-            return self._set_state_result(state, DIRECTION_STATUS_UNKNOWN, None, should_emit_violation=False)
+            return self._unknown_result(state, reset_candidate=True)
 
         start_point = lane_samples[0][1]
         end_point = lane_samples[-1][1]
         displacement_px = hypot(end_point[0] - start_point[0], end_point[1] - start_point[1])
         if displacement_px < rule.min_displacement_px:
-            self._reset_candidate(state)
-            return self._set_state_result(state, DIRECTION_STATUS_UNKNOWN, None, should_emit_violation=False)
+            return self._unknown_result(state, reset_candidate=True)
 
         vehicle_vector = self._normalize_vector(
             (
@@ -126,13 +121,11 @@ class DirectionLogic:
             )
         )
         if vehicle_vector is None:
-            self._reset_candidate(state)
-            return self._set_state_result(state, DIRECTION_STATUS_UNKNOWN, None, should_emit_violation=False)
+            return self._unknown_result(state, reset_candidate=True)
 
         lane_vector = self._direction_vector_for_point(rule=rule, point=current_point)
         if lane_vector is None:
-            self._reset_candidate(state)
-            return self._set_state_result(state, DIRECTION_STATUS_UNKNOWN, None, should_emit_violation=False)
+            return self._unknown_result(state, reset_candidate=True)
 
         dot = (vehicle_vector[0] * lane_vector[0]) + (vehicle_vector[1] * lane_vector[1])
         if dot >= rule.same_direction_cos_threshold:
@@ -143,15 +136,14 @@ class DirectionLogic:
             if state.candidate_lane_id != lane_id or state.candidate_started_ts is None:
                 state.candidate_lane_id = lane_id
                 state.candidate_started_ts = ts
-                return self._set_state_result(state, DIRECTION_STATUS_UNKNOWN, dot, should_emit_violation=False)
+                return self._unknown_result(state, dot=dot, reset_candidate=False)
 
             elapsed_ms = int((ts - state.candidate_started_ts).total_seconds() * 1000.0)
             if elapsed_ms >= rule.min_duration_ms:
                 return self._set_state_result(state, DIRECTION_STATUS_WRONG, dot, should_emit_violation=True)
-            return self._set_state_result(state, DIRECTION_STATUS_UNKNOWN, dot, should_emit_violation=False)
+            return self._unknown_result(state, dot=dot, reset_candidate=False)
 
-        self._reset_candidate(state)
-        return self._set_state_result(state, DIRECTION_STATUS_UNKNOWN, dot, should_emit_violation=False)
+        return self._unknown_result(state, dot=dot, reset_candidate=True)
 
     def status_for_vehicle(self, *, vehicle_id: int) -> tuple[str, Optional[float]]:
         state = self._states.get(vehicle_id)
@@ -185,6 +177,23 @@ class DirectionLogic:
     def _reset_candidate(state: DirectionState) -> None:
         state.candidate_lane_id = None
         state.candidate_started_ts = None
+
+    @classmethod
+    def _unknown_result(
+        cls,
+        state: DirectionState,
+        *,
+        dot: Optional[float] = None,
+        reset_candidate: bool,
+    ) -> DirectionEvaluation:
+        if reset_candidate:
+            cls._reset_candidate(state)
+        return cls._set_state_result(state, DIRECTION_STATUS_UNKNOWN, dot, should_emit_violation=False)
+
+    @classmethod
+    def _not_configured_result(cls, state: DirectionState) -> DirectionEvaluation:
+        cls._reset_candidate(state)
+        return cls._set_state_result(state, DIRECTION_STATUS_NOT_CONFIGURED, None, should_emit_violation=False)
 
     @staticmethod
     def _lane_samples_since(

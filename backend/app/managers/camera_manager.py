@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import WebSocket
 from app.core.background_images import (
@@ -170,34 +170,18 @@ class CameraManager:
 
     def _on_track(self, msg: TrackMessage) -> None:
         # Hàm này chạy trong event loop của CameraContext nên chỉ dùng thao tác không chặn.
-        dead: list[asyncio.Queue] = []
-        for q in list(self._track_listeners):
-            try:
-                q.put_nowait(msg)
-            except asyncio.QueueFull:
-                dead.append(q)
-        for q in dead:
-            self._track_listeners.discard(q)
+        self._broadcast_to_listeners(listeners=self._track_listeners, message=msg)
 
     def _on_violation(self, ev: ViolationEvent) -> None:
-        dead: list[asyncio.Queue] = []
-        for q in list(self._violation_listeners):
-            try:
-                q.put_nowait(ev)
-            except asyncio.QueueFull:
-                dead.append(q)
-        for q in dead:
-            self._violation_listeners.discard(q)
+        self._broadcast_to_listeners(listeners=self._violation_listeners, message=ev)
 
     def create_track_listener(self, *, maxsize: Optional[int] = None) -> asyncio.Queue[TrackMessage | None]:
-        queue_size = int(maxsize) if maxsize is not None else int(self.cfg.websocket_listener_queue_maxsize)
-        q: asyncio.Queue[TrackMessage | None] = asyncio.Queue(maxsize=max(queue_size, 1))
+        q: asyncio.Queue[TrackMessage | None] = self._create_listener_queue(maxsize=maxsize)
         self._track_listeners.add(q)
         return q
 
     def create_violation_listener(self, *, maxsize: Optional[int] = None) -> asyncio.Queue[ViolationEvent | None]:
-        queue_size = int(maxsize) if maxsize is not None else int(self.cfg.websocket_listener_queue_maxsize)
-        q: asyncio.Queue[ViolationEvent | None] = asyncio.Queue(maxsize=max(queue_size, 1))
+        q: asyncio.Queue[ViolationEvent | None] = self._create_listener_queue(maxsize=maxsize)
         self._violation_listeners.add(q)
         return q
 
@@ -509,5 +493,20 @@ class CameraManager:
         sockets = list(self._track_websockets) + list(self._violation_websockets)
         if sockets:
             await asyncio.gather(*(close_one(ws) for ws in sockets), return_exceptions=True)
+
+    def _create_listener_queue(self, *, maxsize: Optional[int] = None) -> asyncio.Queue[Any]:
+        queue_size = int(maxsize) if maxsize is not None else int(self.cfg.websocket_listener_queue_maxsize)
+        return asyncio.Queue(maxsize=max(queue_size, 1))
+
+    @staticmethod
+    def _broadcast_to_listeners(*, listeners: set[asyncio.Queue[Any]], message: Any) -> None:
+        dead: list[asyncio.Queue[Any]] = []
+        for queue in list(listeners):
+            try:
+                queue.put_nowait(message)
+            except asyncio.QueueFull:
+                dead.append(queue)
+        for queue in dead:
+            listeners.discard(queue)
 
 

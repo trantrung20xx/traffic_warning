@@ -332,6 +332,19 @@ function denormalizePoint([x, y], frameWidth, frameHeight) {
   return [Number(x) * frameWidth, Number(y) * frameHeight];
 }
 
+function toNumericPoints(points) {
+  return (points || []).map(([x, y]) => [Number(x), Number(y)]);
+}
+
+function toNumericPointsSafe(points) {
+  return (points || []).map((point) => [Number(point?.[0] ?? 0), Number(point?.[1] ?? 0)]);
+}
+
+function toOptionalGeometry(points, minimumPoints) {
+  const normalized = toNumericPoints(points);
+  return normalized.length >= minimumPoints ? normalized : null;
+}
+
 function normalizePoints(points, frameWidth, frameHeight) {
   return (points || []).map((point) => normalizePoint(point, frameWidth, frameHeight));
 }
@@ -689,12 +702,10 @@ function normalizeLaneManeuvers(lane = {}) {
 
 export function normalizeDirectionRuleConfig(rule = {}) {
   const source = rule || {};
-  const normalizePointsList = (points) =>
-    (points || []).map((point) => [Number(point?.[0] ?? 0), Number(point?.[1] ?? 0)]);
   return {
     enabled: Boolean(source.enabled ?? DEFAULT_DIRECTION_RULE.enabled),
-    direction_path: normalizePointsList(source.direction_path),
-    check_zone: normalizePointsList(source.check_zone),
+    direction_path: toNumericPointsSafe(source.direction_path),
+    check_zone: toNumericPointsSafe(source.check_zone),
     same_direction_cos_threshold: Number.isFinite(Number(source.same_direction_cos_threshold))
       ? Number(source.same_direction_cos_threshold)
       : DEFAULT_DIRECTION_RULE.same_direction_cos_threshold,
@@ -811,21 +822,13 @@ export function normalizeCameraDetail(detail) {
 export function buildPayload(draft) {
   const frameWidth = Number(draft.camera.frame_width) || 1280;
   const frameHeight = Number(draft.camera.frame_height) || 720;
-  const normalizeOptionalGeometry = (points, minimumPoints) => {
-    const normalized = (points || []).map(([x, y]) => [Number(x), Number(y)]);
-    return normalized.length >= minimumPoints ? normalized : null;
-  };
   const lanes = draft.lane_config.lanes.map((lane) => ({
     direction_rule: (() => {
       const normalizedRule = normalizeDirectionRuleConfig(lane.direction_rule);
-      const normalizeDirectionGeometry = (points, minimumPoints) => {
-        const normalized = (points || []).map(([x, y]) => [Number(x), Number(y)]);
-        return normalized.length >= minimumPoints ? normalized : null;
-      };
       return {
         enabled: Boolean(normalizedRule.enabled),
-        direction_path: normalizeDirectionGeometry(normalizedRule.direction_path, 2),
-        check_zone: normalizeDirectionGeometry(normalizedRule.check_zone, 3),
+        direction_path: toOptionalGeometry(normalizedRule.direction_path, 2),
+        check_zone: toOptionalGeometry(normalizedRule.check_zone, 3),
         same_direction_cos_threshold: Number(normalizedRule.same_direction_cos_threshold),
         opposite_direction_cos_threshold: Number(normalizedRule.opposite_direction_cos_threshold),
         min_duration_ms: Number(normalizedRule.min_duration_ms),
@@ -837,19 +840,15 @@ export function buildPayload(draft) {
       MANEUVERS.map((maneuver) => {
         const cfg = lane.maneuvers?.[maneuver] || {};
         const enabled = Boolean(cfg.enabled ?? true);
-        const normalizeManeuverGeometry = (points, minimumPoints) => {
-          const normalized = (points || []).map(([x, y]) => [Number(x), Number(y)]);
-          return normalized.length >= minimumPoints ? normalized : null;
-        };
         return [
           maneuver,
           {
             enabled,
             allowed: enabled && Boolean(cfg.allowed ?? false),
-            movement_path: normalizeManeuverGeometry(cfg.movement_path, 2),
+            movement_path: toOptionalGeometry(cfg.movement_path, 2),
             corridor_width_px: normalizeCorridorWidthPx(cfg.corridor_width_px, maneuver),
-            exit_line: normalizeManeuverGeometry(cfg.exit_line, 2),
-            exit_zone: normalizeManeuverGeometry(cfg.exit_zone, 3),
+            exit_line: toOptionalGeometry(cfg.exit_line, 2),
+            exit_zone: toOptionalGeometry(cfg.exit_zone, 3),
           },
         ];
       }),
@@ -857,10 +856,10 @@ export function buildPayload(draft) {
     lane_id: Number(lane.lane_id),
     // Giữ polygon ở dạng chuẩn hóa ngay trong state và payload để cấu hình không phụ thuộc độ phân giải.
     // Khi vẽ lên canvas mới đổi ngược về pixel.
-    polygon: (lane.polygon || []).map(([x, y]) => [Number(x), Number(y)]),
-    approach_zone: normalizeOptionalGeometry(lane.approach_zone, 3),
-    commit_gate: normalizeOptionalGeometry(lane.commit_gate, 3),
-    commit_line: normalizeOptionalGeometry(lane.commit_line, 2),
+    polygon: toNumericPoints(lane.polygon),
+    approach_zone: toOptionalGeometry(lane.approach_zone, 3),
+    commit_gate: toOptionalGeometry(lane.commit_gate, 3),
+    commit_line: toOptionalGeometry(lane.commit_line, 2),
     allowed_maneuvers: MANEUVERS.filter((maneuver) => {
       const cfg = lane.maneuvers?.[maneuver];
       if (!cfg) return (lane.allowed_maneuvers || []).includes(maneuver);
