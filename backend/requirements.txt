@@ -10,7 +10,7 @@ uvicorn[standard]
 opencv-python
 # Thư viện xử lý ảnh và video (đọc frame từ camera, xử lý hình ảnh)
 
-numpy
+numpy>=1.24,<2.4
 # Thư viện tính toán số học, xử lý ma trận (dùng trong xử lý ảnh)
 
 shapely
@@ -56,7 +56,7 @@ openpyxl
 
 # License plate OCR backend mặc định:
 paddleocr
-paddlepaddle
+paddlepaddle==3.2.2
 easyocr
 
 # Nếu chạy GPU, có thể thay `paddlepaddle` bằng `paddlepaddle-gpu` theo môi trường triển khai.

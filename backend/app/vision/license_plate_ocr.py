@@ -81,6 +81,25 @@ def _extract_best_from_paddle_payload(payload) -> Optional[OcrReadout]:
     return OcrReadout(text=best_text, confidence=min(max(best_conf, 0.0), 1.0))
 
 
+def _run_paddleocr_inference(engine, image_rgb):
+    predict = getattr(engine, "predict", None)
+    if callable(predict):
+        return predict(image_rgb)
+
+    ocr = getattr(engine, "ocr", None)
+    if not callable(ocr):
+        raise RuntimeError("PaddleOCR engine exposes neither predict() nor ocr().")
+
+    # PaddleOCR 2.x uses cls=False; PaddleOCR 3.x rejects that legacy keyword.
+    try:
+        return ocr(image_rgb, cls=False)
+    except TypeError as exc:
+        message = str(exc)
+        if "cls" not in message or "unexpected keyword" not in message:
+            raise
+        return ocr(image_rgb)
+
+
 def _create_paddle_ocr_engine(
     *,
     ocr_version: str,
@@ -89,9 +108,9 @@ def _create_paddle_ocr_engine(
     lang: str,
     use_gpu: bool,
 ):
+    os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
     from paddleocr import PaddleOCR
 
-    os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
     device = "gpu:0" if bool(use_gpu) else "cpu"
     kwargs = {
         "use_doc_orientation_classify": False,
@@ -234,7 +253,7 @@ class LicensePlateOcr:
         return OcrReadout(text=best_text, confidence=min(max(best_conf, 0.0), 1.0))
 
     def _read_paddleocr(self, image_rgb) -> Optional[OcrReadout]:
-        results = self._engine.ocr(image_rgb, cls=False)
+        results = _run_paddleocr_inference(self._engine, image_rgb)
         if not results:
             return None
         return _extract_best_from_paddle_payload(results)
