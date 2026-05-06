@@ -103,6 +103,7 @@ def test_load_app_config_reads_grouped_settings_schema(tmp_path: Path) -> None:
             "enabled": True,
             "detector_weights_path": "backend/license_plate_yolov8.pt",
             "detector_confidence_threshold": 0.4,
+            "detector_allowed_classes": ["license_plate", "License Plates"],
             "ocr_backend": "paddleocr",
             "easyocr_lang": "en",
             "easyocr_use_gpu": False,
@@ -153,6 +154,7 @@ def test_load_app_config_reads_grouped_settings_schema(tmp_path: Path) -> None:
     assert cfg.evidence_jpeg_quality == 88
     assert cfg.license_plate.enabled is True
     assert cfg.license_plate.detector_confidence_threshold == 0.4
+    assert cfg.license_plate.detector_allowed_classes == ["license_plate", "License Plates"]
     assert cfg.license_plate.ocr_backend == "paddleocr"
     assert cfg.license_plate.easyocr_lang == "en"
     assert cfg.license_plate.easyocr_use_gpu is False

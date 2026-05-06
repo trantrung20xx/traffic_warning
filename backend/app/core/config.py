@@ -268,6 +268,9 @@ class LicensePlateConfig(BaseModel):
     enabled: bool = False
     detector_weights_path: str = "backend/license_plate_yolov8.pt"
     detector_confidence_threshold: float = 0.35
+    detector_allowed_classes: list[str] = Field(
+        default_factory=lambda: ["license_plate", "License Plates"]
+    )
     ocr_backend: str = "paddleocr"
     easyocr_lang: str = "en"
     easyocr_use_gpu: bool = False
@@ -284,6 +287,15 @@ class LicensePlateConfig(BaseModel):
     crop_expand_x_ratio: float = 0.10
     crop_expand_y_ratio: float = 0.08
     image_jpeg_quality: int = 92
+
+    @field_validator("detector_allowed_classes")
+    @classmethod
+    def validate_detector_allowed_classes(cls, value: Any) -> list[str]:
+        raw_value = ["license_plate", "License Plates"] if value is None else value
+        return _normalize_string_list(
+            raw_value,
+            field_name="license_plate.detector_allowed_classes",
+        )
 
     @field_validator("ocr_backend")
     @classmethod

@@ -109,6 +109,7 @@ backend/license_plate_yolov8.pt
 ```
 
 Đây là model detector biển số của dự án. OCR text sau đó do `paddleocr` hoặc `easyocr` xử lý tùy `license_plate.ocr_backend`.
+Nếu model detector biển số có nhiều class, cấu hình `license_plate.detector_allowed_classes` để backend chỉ giữ bbox biển số và bỏ qua bbox khác như xe.
 
 Nếu thay model biển số:
 
@@ -185,7 +186,7 @@ Tọa độ trong file lane config là tọa độ chuẩn hóa `[0, 1]`. Backen
 | `performance` | `preview`, `processing` | FPS preview, chất lượng ảnh preview và cách tính FPS xử lý. |
 | `websocket` | `track_push_interval_ms`, `listener_queue_maxsize` | Chu kỳ push realtime và queue listener. |
 | `ui.monitoring` | `trajectory`, `violation`, `processing_fps` | Tham số frontend dùng cho màn hình giám sát. |
-| `license_plate` | detector, OCR, voting, crop | Cấu hình nhận diện biển số. |
+| `license_plate` | detector, `detector_allowed_classes`, OCR, voting, crop | Cấu hình nhận diện biển số và lọc class bbox biển số. |
 | `analytics.chart` | granularity, ticks, markers | Cấu hình biểu đồ thống kê. |
 | `logging` | `level`, `verbose_violation_trace` | Key log dự phòng trong settings hiện tại. |
 

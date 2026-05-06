@@ -429,6 +429,7 @@ class CameraManager:
                 (self.repo_root / self.cfg.license_plate.detector_weights_path).resolve()
             ),
             license_plate_detector_conf_threshold=self.cfg.license_plate.detector_confidence_threshold,
+            license_plate_detector_allowed_classes=self.cfg.license_plate.detector_allowed_classes,
             license_plate_ocr_backend=self.cfg.license_plate.ocr_backend,
             license_plate_easyocr_lang=self.cfg.license_plate.easyocr_lang,
             license_plate_easyocr_use_gpu=self.cfg.license_plate.easyocr_use_gpu,

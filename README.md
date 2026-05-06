@@ -160,7 +160,7 @@ File `backend/license_plate_yolov8.pt` không được commit vào Git vì là f
 |---|---|---|
 | `Koushim/yolov8-license-plate-detection/best.pt` | [Tải best.pt](https://huggingface.co/Koushim/yolov8-license-plate-detection/resolve/main/best.pt?download=true) | **Khuyến nghị cho hệ thống hiện tại.** YOLOv8n, 1 class `license_plate`, nhẹ khoảng 6.25 MB, license MIT. Phù hợp vì code hiện crop vùng xe rồi detect biển số, không cần lọc nhiều class. Nhược điểm: là model generic, vẫn nên kiểm thử lại với biển số Việt Nam, góc camera và điều kiện ánh sáng thực tế. |
 | `Murd0ck/LicensePlateDetector_YOLOv8n/best.pt` | [Tải best.pt](https://huggingface.co/Murd0ck/LicensePlateDetector_YOLOv8n/resolve/main/best.pt?download=true) | YOLOv8n một class, có công bố metric tốt trên tập validation và có cả bản ONNX. Nhược điểm: fine-tune chủ yếu cho biển số Ukraine/AUTO.RIA, license CC BY 4.0, cần kiểm thử domain Việt Nam trước khi dùng production. |
-| `orionwambert/yolov8-license-plate-detection/best.pt` | [Tải best.pt](https://huggingface.co/orionwambert/yolov8-license-plate-detection/resolve/main/best.pt?download=true) | Có thể dùng để thử nghiệm vì nhận diện cả biển số và xe. Nhược điểm quan trọng: model có nhiều class (`License Plates`, `Vehicles`), trong khi detector biển số hiện tại lấy bbox confidence cao nhất mà chưa lọc class; vì vậy có thể chọn nhầm bbox xe làm biển số nếu dùng trực tiếp. Chỉ nên dùng sau khi chỉnh code lọc class hoặc retrain còn 1 class biển số. |
+| `orionwambert/yolov8-license-plate-detection/best.pt` | [Tải best.pt](https://huggingface.co/orionwambert/yolov8-license-plate-detection/resolve/main/best.pt?download=true) | Có thể dùng để thử nghiệm vì nhận diện cả biển số và xe. Vì model có nhiều class (`License Plates`, `Vehicles`), cần giữ `license_plate.detector_allowed_classes` trỏ đúng class biển số, ví dụ `"License Plates"`, để backend bỏ qua bbox xe. |
 
 Tải nhanh model khuyến nghị về đúng tên file mặc định:
 
@@ -176,10 +176,13 @@ Sau khi tải, giữ cấu hình mặc định hoặc trỏ lại đúng đườ
     "enabled": true,
     "detector_weights_path": "backend/license_plate_yolov8.pt",
     "detector_confidence_threshold": 0.35,
+    "detector_allowed_classes": ["license_plate", "License Plates"],
     "ocr_backend": "paddleocr"
   }
 }
 ```
+
+`license_plate.detector_allowed_classes` là allowlist class của model detector biển số. Backend so khớp không phân biệt hoa/thường/khoảng trắng/gạch dưới, nên `license_plate`, `License Plates` và `license-plate` đều có thể được cấu hình theo tên class của model. Nếu dùng model nhiều class, bắt buộc để class biển số trong danh sách này và không đưa class xe vào.
 
 ### Cài PyTorch
 
@@ -392,6 +395,7 @@ Mỗi `lanes[].maneuvers.<maneuver>` gồm:
 | `license_plate.enabled` | Bật/tắt pipeline biển số. |
 | `license_plate.detector_weights_path` | File `.pt` dùng để detect vùng biển số trong crop xe. |
 | `license_plate.detector_confidence_threshold` | Ngưỡng tin cậy tối thiểu của detector biển số. |
+| `license_plate.detector_allowed_classes` | Danh sách class detector biển số được giữ lại. Dùng để tránh model nhiều class chọn nhầm bbox xe thay vì bbox biển số. |
 | `license_plate.ocr_backend` | OCR engine: `paddleocr` hoặc `easyocr`. |
 | `license_plate.easyocr_lang` | Ngôn ngữ EasyOCR nếu chọn backend `easyocr`. |
 | `license_plate.easyocr_use_gpu` | Bật GPU cho EasyOCR. |

@@ -132,6 +132,7 @@ class CameraContext:
         license_plate_enabled: bool = False,
         license_plate_detector_weights_path: str = "backend/license_plate_yolov8.pt",
         license_plate_detector_conf_threshold: float = 0.35,
+        license_plate_detector_allowed_classes: Optional[list[str]] = None,
         license_plate_ocr_backend: str = "paddleocr",
         license_plate_easyocr_lang: str = "en",
         license_plate_easyocr_use_gpu: bool = False,
@@ -280,6 +281,7 @@ class CameraContext:
                     conf_threshold=license_plate_detector_conf_threshold,
                     iou_threshold=detector_iou_threshold,
                     device=detector_device,
+                    allowed_classes=license_plate_detector_allowed_classes,
                 )
             except Exception as exc:
                 self._license_plate_enabled = False
@@ -329,7 +331,8 @@ class CameraContext:
                         )
                     self.on_log(
                         f"[{self.camera_id}] license_plate enabled backend={license_plate_ocr_backend} "
-                        f"detector={license_plate_detector_weights_path}{ocr_extra}"
+                        f"detector={license_plate_detector_weights_path} "
+                        f"detector_allowed_classes={self._license_plate_detector.allowed_classes}{ocr_extra}"
                     )
 
         self._db_session_factory = db_session_factory
