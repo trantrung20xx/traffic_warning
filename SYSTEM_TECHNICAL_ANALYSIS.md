@@ -341,9 +341,9 @@ Chức năng:
   - thêm/xóa lane.
   - `allowed_lane_changes`.
   - `allowed_vehicle_types`.
-  - chọn edit target: lane polygon, approach zone, commit line, movement path, exit line, exit zone.
+  - chọn edit target: lane polygon, approach zone, commit line, turn zone, exit line, exit zone.
   - chọn maneuver: left, straight, right, u_turn.
-  - chỉnh `enabled`, `allowed`, `corridor_width_px`.
+  - chỉnh `enabled`, `allowed`.
 - Upload/xóa background image qua `uploadBackgroundImage`, `deleteBackgroundImage`.
 - Undo/redo thao tác geometry bằng `undoStackRef`, `redoStackRef`.
 - Validate local bằng `validatePolygonDraft`.
@@ -355,7 +355,7 @@ Chức năng:
 - State frontend giữ tọa độ normalized `[0,1]`.
 - `CameraCanvas` denormalize sang pixel khi vẽ.
 - Khi save, `buildPayload` gửi normalized points xuống backend.
-- Frontend không gửi `turn_corridor`; nó gửi `movement_path`, `corridor_width_px`, `exit_line`, `exit_zone`. Backend tự dựng `turn_corridor` từ `movement_path`.
+- Frontend gửi trực tiếp `turn_zone`, `exit_line`, `exit_zone` cho từng maneuver.
 
 ### Canvas/editor
 
@@ -366,8 +366,7 @@ File: `frontend/src/components/CameraCanvas.jsx`
   - lane polygon.
   - approach zone.
   - commit gate/commit line.
-  - movement path.
-  - corridor preview.
+  - turn zone.
   - exit zone/exit line.
   - trajectory overlay.
   - bbox và label xe.
@@ -382,7 +381,7 @@ File: `frontend/src/components/CameraCanvas.jsx`
 
 File `frontend/src/components/canvas/PolygonLayer.js`:
 
-- `drawPolygon`, `drawPolyline`, `drawCorridorPreview`, hướng mũi tên movement path.
+- `drawPolygon`, `drawPolyline` và vertex handles cho các geometry cần chỉnh sửa.
 
 File `frontend/src/components/canvas/BackgroundImageLayer.js`:
 
@@ -450,7 +449,7 @@ File: `config/lane_configs/cam_01.json`
   - Có polygon và `commit_line`.
   - `allowed_lane_changes: [2]`.
   - Chỉ cho `motorcycle`, `truck`, `bus`; không cho `car`.
-  - `straight.enabled=true`, `straight.allowed=false`, có `movement_path`.
+  - `straight.enabled=true`, `straight.allowed=false`, có `turn_zone`.
   - `right.enabled=true`, `right.allowed=true`.
   - left/u_turn disabled.
 - Lane 3:
@@ -458,14 +457,14 @@ File: `config/lane_configs/cam_01.json`
   - `allowed_lane_changes: [3]`.
   - Cho phép cả 4 loại xe.
   - straight/right/left/u_turn đều enabled và allowed.
-  - Chưa thấy movement_path/exit geometry trong file cho các maneuver lane 3.
+  - Chưa thấy `turn_zone`/exit geometry trong file cho các maneuver lane 3.
 
 File: `config/lane_configs/cam_02.json` và `cam_03.json`
 
 - Mỗi camera có 1 lane polygon hình chữ nhật.
 - `straight` enabled/allowed.
 - `right`, `left`, `u_turn` enabled nhưng `allowed=false`.
-- Chưa thấy movement_path/exit line/exit zone cho các maneuver trong file.
+- Chưa thấy `turn_zone`/exit line/exit zone cho các maneuver trong file.
 
 ### Backend load và dùng config
 
@@ -474,10 +473,10 @@ File: `config/lane_configs/cam_02.json` và `cam_03.json`
 - `load_lane_config_for_camera(repo_root, camera_id)` đọc lane config, gọi `_normalize_lane_config_payload`.
 - `_normalize_maneuver_config_payload`:
   - normalize geometry về `[0,1]`.
-  - nếu có `movement_path`, tự dựng `turn_corridor` bằng `_build_turn_corridor_from_movement_path`.
+  - giữ các geometry maneuver ở schema mới: `turn_zone`, `exit_line`, `exit_zone`.
   - `allowed = enabled and raw.allowed`.
 - `denormalize_lane_config` đổi normalized sang pixel để runtime dùng trong `CameraContext`.
-- `save_lane_config_for_camera` ghi JSON compact bằng `_compact_lane_config_for_storage`; không lưu `turn_corridor` vào file, vì có thể dựng lại từ `movement_path`.
+- `save_lane_config_for_camera` ghi JSON compact bằng `_compact_lane_config_for_storage` theo schema `turn_zone`.
 
 ### Frontend lưu config xuống backend
 
@@ -754,7 +753,7 @@ Input:
 - Trajectory sample.
 - Line crossing events.
 - `approach_zone`, `commit_gate`, `commit_line`.
-- Per-lane maneuver config: `turn_corridor`, `exit_zone`, `exit_line`, `allowed_maneuvers`.
+- Per-lane maneuver config: `turn_zone`, `exit_zone`, `exit_line`, `allowed_maneuvers`.
 
 Xử lý:
 
@@ -764,7 +763,7 @@ Xử lý:
 - `_update_turn_confirmation` thu thập:
   - `exit_line_matches`
   - `exit_zone_matches`
-  - `corridor_matches`
+  - `turn_zone_matches`
   - motion features.
 - Chấm điểm từng maneuver bằng `_score_maneuver_evidence`.
 - Xác nhận bằng `_evidence_confirms_maneuver`.
@@ -1078,13 +1077,13 @@ Luồng:
 Luồng:
 
 1. Straight cũng là một maneuver trong config.
-2. Nếu có movement path/corridor/exit cho straight và evidence xác nhận `straight`.
+2. Nếu có `turn_zone`/exit cho straight và evidence xác nhận `straight`.
 3. `_heading_support_for_maneuver("straight")` yêu cầu heading change nhỏ và curvature thấp.
 4. Nếu source lane không cho phép straight, emit `turn_straight_not_allowed`.
 
 Điểm cần chú ý:
 
-- Nếu lane cấm straight nhưng không có geometry đủ cho straight, hệ thống có thể không xác nhận được straight để emit. Ví dụ lane 2 `cam_01` có `straight.allowed=false` và có `movement_path`, nên backend có thể dựng corridor từ path.
+- Nếu lane cấm straight nhưng không có geometry đủ cho straight, hệ thống có thể không xác nhận được straight để emit. Ví dụ lane 2 `cam_01` có `straight.allowed=false` nhưng thiếu `turn_zone`/exit geometry cho straight.
 
 ### Đổi làn rồi rẽ
 
@@ -1151,7 +1150,7 @@ Phạm vi:
 - Tách module tốt: detector, tracker, lane logic, violation logic, repository, API, frontend views.
 - Config lane-centric/maneuver-centric linh hoạt cho nhiều nút giao.
 - Backend tự normalize/denormalize geometry, giảm lỗi phụ thuộc độ phân giải.
-- Movement path tự sinh corridor, frontend không phải vẽ `turn_corridor` trực tiếp.
+- Cấu hình maneuver nhất quán theo `turn_zone`, giảm nhầm lẫn schema.
 - Lane assignment dùng đáy bbox và overlap segment, tốt hơn single point.
 - Có smoothing cho lane, vehicle type và stable track ID.
 - Turn detection không dựa vào một signal; có evidence fusion, line crossing state, heading, curvature, opposite direction.
@@ -1183,13 +1182,13 @@ Phạm vi:
 - Lane polygon overlap hoặc vẽ sai biên lane.
 - Bbox YOLO rung làm đáy bbox nhảy lane, dù đã có smoothing.
 - Exit line đặt quá gần vùng nhiễu hoặc có crossing do jitter.
-- Movement path/corridor overlap giữa left/right/u_turn.
+- `turn_zone` overlap giữa left/right/u_turn.
 - Vehicle type smoothing vẫn có thể sai nếu YOLO nhầm nhất quán trong vài giây.
 
 ### False negative tiềm ẩn
 
-- Maneuver bị cấm nhưng thiếu movement_path/exit_line/exit_zone.
-- Xe vi phạm nhưng không đi qua corridor/exit geometry đã vẽ.
+- Maneuver bị cấm nhưng thiếu `turn_zone`/exit_line/exit_zone.
+- Xe vi phạm nhưng không đi qua `turn_zone`/exit geometry đã vẽ.
 - Track mất ID ngay trước/sau commit khiến lifecycle/trajectory reset.
 - U-turn thiếu opposite-direction rõ do góc camera hoặc path quá ngắn.
 - YOLO miss xe nhỏ/xa nếu confidence threshold cao hoặc model nhẹ.

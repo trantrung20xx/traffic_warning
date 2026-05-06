@@ -1,7 +1,7 @@
 {
   "camera_id": "cam_03",
-  "frame_width": 3840,
-  "frame_height": 2160,
+  "frame_width": 1920,
+  "frame_height": 1080,
   "lanes": [
     {
       "lane_id": 1,
@@ -67,6 +67,24 @@
             0.4421875,
             0.32083333333333336
           ]
+        ],
+        "check_zone": [
+          [
+            0.26171875,
+            0.7444444444444445
+          ],
+          [
+            0.43046875,
+            0.7444444444444445
+          ],
+          [
+            0.38984375,
+            0.49537037037037035
+          ],
+          [
+            0.20703125,
+            0.5592592592592592
+          ]
         ]
       },
       "maneuvers": {
@@ -95,14 +113,6 @@
         "right": {
           "enabled": true,
           "allowed": true
-        },
-        "left": {
-          "enabled": true,
-          "allowed": false
-        },
-        "u_turn": {
-          "enabled": true,
-          "allowed": false
         }
       }
     },
@@ -206,18 +216,6 @@
               0.9873601354384389
             ]
           ]
-        },
-        "right": {
-          "enabled": true,
-          "allowed": false
-        },
-        "left": {
-          "enabled": true,
-          "allowed": false
-        },
-        "u_turn": {
-          "enabled": true,
-          "allowed": false
         }
       }
     }

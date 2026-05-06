@@ -252,10 +252,7 @@ Mỗi `lanes[].maneuvers.<maneuver>` gồm:
 |---|---|
 | `enabled` | Bật/tắt nhận diện maneuver này. |
 | `allowed` | Cho phép hoặc cấm maneuver này theo luật. |
-| `movement_path` | Quỹ đạo kỳ vọng của xe, dạng polyline. |
-| `corridor_preset` | Preset độ rộng corridor: `narrow`, `normal`, `wide`. |
-| `corridor_width_px` | Độ rộng corridor theo pixel. Nếu để trống, backend có thể suy theo preset. |
-| `turn_corridor` | Vùng corridor để nhận biết xe đang thực hiện maneuver. Có thể tự sinh từ `movement_path`. |
+| `turn_zone` | Vùng rẽ (polygon) dùng để khớp trajectory và tích lũy evidence cho maneuver. |
 | `exit_line` | Vạch xác nhận xe đi ra đúng nhánh của maneuver. |
 | `exit_zone` | Vùng xác nhận xe đi ra đúng nhánh của maneuver. |
 

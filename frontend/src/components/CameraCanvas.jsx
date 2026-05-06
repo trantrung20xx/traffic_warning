@@ -15,8 +15,14 @@ import {
 	parseEditTarget,
 } from "../utils";
 
-const VERTEX_HIT_RADIUS = 12;
-const EDGE_HIT_DISTANCE = 10;
+const VERTEX_HIT_RADIUS = 20;
+const EDGE_HIT_DISTANCE = 16;
+const EDITABLE_LINE_WIDTH = 1.76;
+const EDITABLE_VERTEX_RADIUS = 3.03;
+const EDITABLE_ACTIVE_VERTEX_RADIUS = 4.51;
+const EDITABLE_VERTEX_STROKE_WIDTH = 0.88;
+const EDITABLE_ARROW_SIZE = 18;
+const EDGE_INSERT_MARKER_RADIUS = 6;
 const MONITOR_OVERLAY = {
 	boxStrokePx: 1.5,
 	labelFontPx: 11,
@@ -38,8 +44,8 @@ function clampPoint([x, y], frameWidth, frameHeight) {
 	return [clamp(Math.round(x), 0, frameWidth), clamp(Math.round(y), 0, frameHeight)];
 }
 
-function getCanvasDisplayScale(canvas, frameWidth, frameHeight, overlay) {
-	if (!overlay || !canvas || frameWidth <= 0 || frameHeight <= 0) return 1;
+function getCanvasDisplayScale(canvas, frameWidth, frameHeight) {
+	if (!canvas || frameWidth <= 0 || frameHeight <= 0) return 1;
 	const rect = canvas.getBoundingClientRect();
 	const scaleX = rect.width / frameWidth;
 	const scaleY = rect.height / frameHeight;
@@ -47,8 +53,8 @@ function getCanvasDisplayScale(canvas, frameWidth, frameHeight, overlay) {
 	return Number.isFinite(scale) && scale > 0 ? scale : 1;
 }
 
-function createDisplayMetrics(canvas, frameWidth, frameHeight, overlay) {
-	const displayScale = getCanvasDisplayScale(canvas, frameWidth, frameHeight, overlay);
+function createDisplayMetrics(canvas, frameWidth, frameHeight) {
+	const displayScale = getCanvasDisplayScale(canvas, frameWidth, frameHeight);
 	return {
 		displayScale,
 		px(value) {
@@ -97,12 +103,12 @@ function projectPointToSegment(point, start, end) {
 	return { point: projected, distance: distanceBetween(point, projected) };
 }
 
-function findClosestVertex(points, point) {
+function findClosestVertex(points, point, hitRadius = VERTEX_HIT_RADIUS) {
 	if (!points?.length) return null;
 	let best = null;
 	points.forEach((candidate, index) => {
 		const distance = distanceBetween(candidate, point);
-		if (distance <= VERTEX_HIT_RADIUS && (!best || distance < best.distance)) {
+		if (distance <= hitRadius && (!best || distance < best.distance)) {
 			best = { index, distance };
 		}
 	});
@@ -112,6 +118,8 @@ function findClosestVertex(points, point) {
 function findClosestEdge(points, point, options = {}) {
 	if (!points || points.length < 2) return null;
 	const closed = Boolean(options.closed && points.length >= 3);
+	const hitDistance =
+		Number(options.hitDistance) > 0 ? Number(options.hitDistance) : EDGE_HIT_DISTANCE;
 	const edgeCount = closed ? points.length : points.length - 1;
 	let best = null;
 
@@ -120,7 +128,7 @@ function findClosestEdge(points, point, options = {}) {
 		const end = closed ? points[(index + 1) % points.length] : points[index + 1];
 		const projection = projectPointToSegment(point, start, end);
 		if (
-			projection.distance <= EDGE_HIT_DISTANCE &&
+			projection.distance <= hitDistance &&
 			(!best || projection.distance < best.distance)
 		) {
 			best = { index, distance: projection.distance, point: projection.point };
@@ -314,8 +322,19 @@ export default function CameraCanvas({
 			setHoverVertexIndex(null);
 			return;
 		}
+		const interactionMetrics = createDisplayMetrics(
+			canvasRef.current,
+			frameWidth,
+			frameHeight,
+		);
+		const vertexHitRadius = interactionMetrics.px(VERTEX_HIT_RADIUS);
+		const edgeHitDistance = interactionMetrics.px(EDGE_HIT_DISTANCE);
 
-		const vertex = findClosestVertex(editablePointsRef.current, point);
+		const vertex = findClosestVertex(
+			editablePointsRef.current,
+			point,
+			vertexHitRadius,
+		);
 		if (vertex) {
 			setHoverVertexIndex(vertex.index);
 			setHoverEdge(null);
@@ -330,6 +349,7 @@ export default function CameraCanvas({
 		setHoverEdge(
 			findClosestEdge(editablePointsRef.current, point, {
 				closed: isPolygonEditTarget(editTarget),
+				hitDistance: edgeHitDistance,
 			}),
 		);
 	};
@@ -346,12 +366,17 @@ export default function CameraCanvas({
 		ctx.clearRect(0, 0, frameWidth, frameHeight);
 		drawBackgroundImage(ctx, backgroundImage, frameWidth, frameHeight);
 		const isMonitoringOverlay = Boolean(overlay && !editable);
-		const displayMetrics = createDisplayMetrics(
-			canvas,
-			frameWidth,
-			frameHeight,
-			overlay,
+		const displayMetrics = createDisplayMetrics(canvas, frameWidth, frameHeight);
+		const editableLineWidth = displayMetrics.px(EDITABLE_LINE_WIDTH);
+		const editableVertexRadius = displayMetrics.px(EDITABLE_VERTEX_RADIUS);
+		const editableActiveVertexRadius = displayMetrics.px(
+			EDITABLE_ACTIVE_VERTEX_RADIUS,
 		);
+		const editableVertexStrokeWidth = displayMetrics.px(
+			EDITABLE_VERTEX_STROKE_WIDTH,
+		);
+		const editableArrowSize = displayMetrics.px(EDITABLE_ARROW_SIZE);
+		const edgeInsertMarkerRadius = displayMetrics.px(EDGE_INSERT_MARKER_RADIUS);
 
 		renderedLanes.forEach((lane) => {
 			const pts = lane.polygon;
@@ -370,13 +395,17 @@ export default function CameraCanvas({
 					lane.lane_id === selectedLaneId
 						? "rgba(255,255,255,1)"
 						: "rgba(255,255,255,0.85)",
-				lineWidth: lane.lane_id === selectedLaneId ? 2.2 : 1.4,
+				lineWidth: isEditableLane
+					? editableLineWidth
+					: lane.lane_id === selectedLaneId
+						? displayMetrics.px(2.2)
+						: displayMetrics.px(1.4),
 				showStroke: !isMonitoringOverlay,
 				showVertices: isEditableLane,
 				isEditableTarget: isEditableLane,
-				vertexRadius: 3.5,
-				activeVertexRadius: 5,
-				vertexStrokeWidth: 1.2,
+				vertexRadius: editableVertexRadius,
+				activeVertexRadius: editableActiveVertexRadius,
+				vertexStrokeWidth: editableVertexStrokeWidth,
 				hoverVertexIndex,
 				selectedVertexIndex,
 			});
@@ -437,13 +466,15 @@ export default function CameraCanvas({
 					strokeStyle: isEditableGeometry
 						? "rgba(255, 209, 102, 1)"
 						: geometry.strokeStyle,
-					lineWidth: isEditableGeometry ? 2 : 1.4,
+					lineWidth: isEditableGeometry
+						? editableLineWidth
+						: displayMetrics.px(1.4),
 					showStroke: isLineGeometry || !isMonitoringOverlay,
 					showVertices: isEditableGeometry,
 					isEditableTarget: isEditableGeometry,
-					vertexRadius: 3.5,
-					activeVertexRadius: 5,
-					vertexStrokeWidth: 1.2,
+					vertexRadius: editableVertexRadius,
+					activeVertexRadius: editableActiveVertexRadius,
+					vertexStrokeWidth: editableVertexStrokeWidth,
 					hoverVertexIndex,
 					selectedVertexIndex,
 				});
@@ -470,14 +501,18 @@ export default function CameraCanvas({
 					strokeStyle: isEditableDirectionPath
 						? "rgba(255, 209, 102, 1)"
 						: "rgba(26, 188, 156, 0.98)",
-					lineWidth: isEditableDirectionPath ? 2.2 : 1.8,
+					lineWidth: isEditableDirectionPath
+						? editableLineWidth
+						: displayMetrics.px(1.8),
 					showDirection: true,
-					arrowSize: isEditableDirectionPath ? 15 : 12,
+					arrowSize: isEditableDirectionPath
+						? editableArrowSize
+						: displayMetrics.px(12),
 					showVertices: isEditableDirectionPath,
 					isEditableTarget: isEditableDirectionPath,
-					vertexRadius: 3.5,
-					activeVertexRadius: 5,
-					vertexStrokeWidth: 1.2,
+					vertexRadius: editableVertexRadius,
+					activeVertexRadius: editableActiveVertexRadius,
+					vertexStrokeWidth: editableVertexStrokeWidth,
 					hoverVertexIndex,
 					selectedVertexIndex,
 				});
@@ -510,16 +545,18 @@ export default function CameraCanvas({
 						strokeStyle: isEditableTurnZone
 							? "rgba(255, 209, 102, 1)"
 							: "rgba(52, 152, 219, 0.95)",
-						lineWidth: isEditableTurnZone ? 2 : 1.4,
+						lineWidth: isEditableTurnZone
+							? editableLineWidth
+							: displayMetrics.px(1.4),
 						fillStyle: isMonitoringOverlay
 							? "rgba(52, 152, 219, 0.18)"
 							: null,
 						showStroke: !isMonitoringOverlay,
 						showVertices: isEditableTurnZone,
 						isEditableTarget: isEditableTurnZone,
-						vertexRadius: 3.5,
-						activeVertexRadius: 5,
-						vertexStrokeWidth: 1.2,
+						vertexRadius: editableVertexRadius,
+						activeVertexRadius: editableActiveVertexRadius,
+						vertexStrokeWidth: editableVertexStrokeWidth,
 						hoverVertexIndex,
 						selectedVertexIndex,
 					});
@@ -543,16 +580,18 @@ export default function CameraCanvas({
 						strokeStyle: isEditableExitZone
 							? "rgba(255, 209, 102, 1)"
 							: "rgba(155, 89, 182, 0.95)",
-						lineWidth: isEditableExitZone ? 2 : 1.4,
+						lineWidth: isEditableExitZone
+							? editableLineWidth
+							: displayMetrics.px(1.4),
 						fillStyle: isMonitoringOverlay
 							? "rgba(155, 89, 182, 0.18)"
 							: null,
 						showStroke: !isMonitoringOverlay,
 						showVertices: isEditableExitZone,
 						isEditableTarget: isEditableExitZone,
-						vertexRadius: 3.5,
-						activeVertexRadius: 5,
-						vertexStrokeWidth: 1.2,
+						vertexRadius: editableVertexRadius,
+						activeVertexRadius: editableActiveVertexRadius,
+						vertexStrokeWidth: editableVertexStrokeWidth,
 						hoverVertexIndex,
 						selectedVertexIndex,
 					});
@@ -566,13 +605,15 @@ export default function CameraCanvas({
 						strokeStyle: isEditableExitLine
 							? "rgba(255, 209, 102, 1)"
 							: "rgba(230, 126, 34, 0.95)",
-						lineWidth: isEditableExitLine ? 2 : 1.4,
+						lineWidth: isEditableExitLine
+							? editableLineWidth
+							: displayMetrics.px(1.4),
 						showStroke: true,
 						showVertices: isEditableExitLine,
 						isEditableTarget: isEditableExitLine,
-						vertexRadius: 3.5,
-						activeVertexRadius: 5,
-						vertexStrokeWidth: 1.2,
+						vertexRadius: editableVertexRadius,
+						activeVertexRadius: editableActiveVertexRadius,
+						vertexStrokeWidth: editableVertexStrokeWidth,
 						hoverVertexIndex,
 						selectedVertexIndex,
 					});
@@ -587,20 +628,16 @@ export default function CameraCanvas({
 		) {
 			const [hx, hy] = hoverEdge.point;
 			ctx.beginPath();
-			ctx.arc(hx, hy, 4.2, 0, Math.PI * 2);
+			ctx.arc(hx, hy, edgeInsertMarkerRadius, 0, Math.PI * 2);
 			ctx.fillStyle = "rgba(255, 209, 102, 0.95)";
 			ctx.fill();
-			ctx.lineWidth = 1.2;
+			ctx.lineWidth = editableVertexStrokeWidth;
 			ctx.strokeStyle = "rgba(7, 19, 31, 0.9)";
 			ctx.stroke();
 		}
 
 		trajectoryOverlays.forEach((row) => {
-			drawTrajectory(
-				ctx,
-				row?.points || [],
-				isMonitoringOverlay ? displayMetrics : null,
-			);
+			drawTrajectory(ctx, row?.points || [], displayMetrics);
 		});
 
 		vehicles.forEach((v) => {
@@ -738,7 +775,14 @@ export default function CameraCanvas({
 		if (!editable) return;
 		const point = getCanvasPoint(event);
 		const points = editablePointsRef.current;
-		const vertex = findClosestVertex(points, point);
+		const interactionMetrics = createDisplayMetrics(
+			canvasRef.current,
+			frameWidth,
+			frameHeight,
+		);
+		const vertexHitRadius = interactionMetrics.px(VERTEX_HIT_RADIUS);
+		const edgeHitDistance = interactionMetrics.px(EDGE_HIT_DISTANCE);
+		const vertex = findClosestVertex(points, point, vertexHitRadius);
 		const targetIsLine = isLineEditTarget(editTarget);
 		const targetIsPolygon = isPolygonEditTarget(editTarget);
 		const targetIsPolyline = isPolylineEditTarget(editTarget);
@@ -750,7 +794,10 @@ export default function CameraCanvas({
 			return;
 		}
 
-		const edge = findClosestEdge(points, point, { closed: targetIsPolygon });
+		const edge = findClosestEdge(points, point, {
+			closed: targetIsPolygon,
+			hitDistance: edgeHitDistance,
+		});
 		if (edge && onPolygonReplace && (targetIsPolygon || targetIsPolyline)) {
 			const nextPoint = clampPoint(edge.point, frameWidth, frameHeight);
 			const nextPoints = [
