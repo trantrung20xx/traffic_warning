@@ -552,6 +552,65 @@ class LaneFeatureTests(unittest.TestCase):
             [{"lane_id": 1, "violation": "wrong_direction"}],
         )
 
+    def test_direction_centerline_fallback_works_without_direction_path(self) -> None:
+        lane_config = CameraLaneConfig.model_validate(
+            {
+                "camera_id": "cam_direction_centerline_fallback",
+                "frame_width": 100,
+                "frame_height": 100,
+                "lanes": [
+                    {
+                        "lane_id": 1,
+                        "polygon": [[0.35, 0.05], [0.65, 0.05], [0.65, 0.95], [0.35, 0.95]],
+                        "commit_gate": [[0.40, 0.72], [0.60, 0.72], [0.60, 0.88], [0.40, 0.88]],
+                        "allowed_maneuvers": ["straight"],
+                        "allowed_lane_changes": [1],
+                        "allowed_vehicle_types": ["car"],
+                        "direction_rule": {
+                            "enabled": True,
+                        },
+                    }
+                ],
+            }
+        )
+        runtime_lane_config = denormalize_lane_config(lane_config)
+        logic = ViolationLogic(
+            runtime_lane_config.lanes,
+            wrong_lane_min_duration_ms=9999,
+            turn_region_min_hits=99,
+            direction_detection_settings=DirectionDetectionSettings.from_values(min_duration_ms=250),
+        )
+        ts = datetime(2026, 5, 1, 8, 10, 0, tzinfo=timezone.utc)
+
+        emitted: list[dict] = []
+        for idx, bbox in enumerate(
+            (
+                [45, 66, 55, 78],
+                [45, 56, 55, 68],
+                [45, 46, 55, 58],
+                [45, 34, 55, 46],
+                [45, 22, 55, 34],
+                [45, 10, 55, 22],
+            )
+        ):
+            emitted.extend(
+                logic.update_and_maybe_generate_violation(
+                    vehicle_id=81011,
+                    vehicle_type="car",
+                    lane_id=1,
+                    bbox_xyxy=bbox,
+                    ts=ts + timedelta(milliseconds=idx * 120),
+                )
+            )
+
+        status, dot = logic.get_direction_status_for_vehicle(vehicle_id=81011)
+        self.assertEqual(status, "wrong_direction")
+        self.assertTrue(dot is not None and dot <= -0.25)
+        self.assertEqual(
+            self._normalize_violation_rows(emitted),
+            [{"lane_id": 1, "violation": "wrong_direction"}],
+        )
+
     def test_direction_path_uses_local_segment_for_curved_lane(self) -> None:
         lane_config = CameraLaneConfig.model_validate(
             {

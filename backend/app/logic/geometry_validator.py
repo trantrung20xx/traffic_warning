@@ -139,11 +139,11 @@ def validate_lane_geometry(lane_config: CameraLaneConfig) -> list[dict[str, Any]
             if len(direction_path) < 2:
                 issues.append(
                     _issue(
-                        level="warning",
-                        code="DIRECTION_PATH_MISSING",
-                        message=f"Làn {lane.lane_id}: direction path chưa có hoặc chưa đủ 2 điểm.",
+                        level="info",
+                        code="DIRECTION_PATH_AUTO_FALLBACK",
+                        message=f"Làn {lane.lane_id}: direction path thiếu, runtime sẽ dùng centerline tự sinh từ lane.",
                         lane_id=lane.lane_id,
-                        suggestion="Vẽ direction path bằng polyline 2+ điểm theo hướng xe đi hợp lệ.",
+                        suggestion="Vẽ direction path nếu cần kiểm soát hướng tham chiếu chính xác hơn centerline tự sinh.",
                     )
                 )
             else:

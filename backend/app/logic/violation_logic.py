@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
-from math import atan2, hypot
+from math import atan2, hypot, sqrt
 from typing import Callable, Optional, TypeVar
 
 from app.core.config import LanePolygon
@@ -1649,6 +1649,100 @@ class ViolationLogic:
                 return vec
         return None
 
+    def _auto_centerline_endpoints(
+        self,
+        *,
+        lane: LanePolygon,
+        preferred_point: Optional[tuple[float, float]] = None,
+    ) -> Optional[tuple[tuple[float, float], tuple[float, float]]]:
+        points = [point for point in (self._point_tuple_or_none(raw) for raw in (lane.polygon or [])) if point is not None]
+        if len(points) < 3:
+            return None
+
+        center_x = sum(point[0] for point in points) / len(points)
+        center_y = sum(point[1] for point in points) / len(points)
+
+        cov_xx = 0.0
+        cov_xy = 0.0
+        cov_yy = 0.0
+        for px, py in points:
+            dx = px - center_x
+            dy = py - center_y
+            cov_xx += dx * dx
+            cov_xy += dx * dy
+            cov_yy += dy * dy
+        cov_xx /= len(points)
+        cov_xy /= len(points)
+        cov_yy /= len(points)
+
+        trace = cov_xx + cov_yy
+        det = (cov_xx * cov_yy) - (cov_xy * cov_xy)
+        disc = max((trace * trace * 0.25) - det, 0.0)
+        lambda_major = (trace * 0.5) + sqrt(disc)
+        if abs(cov_xy) > 1e-9:
+            axis = (lambda_major - cov_yy, cov_xy)
+        elif cov_xx >= cov_yy:
+            axis = (1.0, 0.0)
+        else:
+            axis = (0.0, 1.0)
+
+        axis = self._normalize_vector(axis)
+        if axis is None:
+            return None
+
+        if preferred_point is not None:
+            preferred_vec = self._normalize_vector((preferred_point[0] - center_x, preferred_point[1] - center_y))
+            if preferred_vec is not None:
+                alt_axis = (-axis[1], axis[0])
+                align_axis = abs((axis[0] * preferred_vec[0]) + (axis[1] * preferred_vec[1]))
+                align_alt = abs((alt_axis[0] * preferred_vec[0]) + (alt_axis[1] * preferred_vec[1]))
+                if align_alt > align_axis:
+                    axis = alt_axis
+
+        projections = [((px - center_x) * axis[0]) + ((py - center_y) * axis[1]) for px, py in points]
+        t_min = min(projections)
+        t_max = max(projections)
+        if (t_max - t_min) <= 1e-6:
+            return None
+
+        start = (center_x + (axis[0] * t_min), center_y + (axis[1] * t_min))
+        end = (center_x + (axis[0] * t_max), center_y + (axis[1] * t_max))
+        return (start, end)
+
+    @staticmethod
+    def _projection_factor_to_segment(
+        *,
+        point: tuple[float, float],
+        start: tuple[float, float],
+        end: tuple[float, float],
+    ) -> float:
+        px, py = point
+        x1, y1 = start
+        x2, y2 = end
+        dx = x2 - x1
+        dy = y2 - y1
+        length_sq = (dx * dx) + (dy * dy)
+        if length_sq <= 1e-9:
+            return 0.0
+        t = ((px - x1) * dx + (py - y1) * dy) / length_sq
+        return max(0.0, min(1.0, t))
+
+    def _auto_centerline_vector(
+        self,
+        *,
+        lane: LanePolygon,
+        reference_point: tuple[float, float],
+    ) -> Optional[tuple[float, float]]:
+        endpoints = self._auto_centerline_endpoints(lane=lane, preferred_point=reference_point)
+        if endpoints is None:
+            return None
+
+        start, end = endpoints
+        progress = self._projection_factor_to_segment(point=reference_point, start=start, end=end)
+        if progress < 0.5:
+            start, end = end, start
+        return self._normalize_vector((end[0] - start[0], end[1] - start[1]))
+
     def _lane_direction_vector(self, lane: LanePolygon) -> tuple[float, float]:
         commit_point = self._lane_commit_points.get(lane.lane_id)
         if commit_point is None:
@@ -1661,26 +1755,9 @@ class ViolationLogic:
         if direction_path_vec is not None:
             return direction_path_vec
 
-        if lane.approach_zone:
-            approach_center = self._centroid_of_points(lane.approach_zone)
-            vec = self._normalize_vector(
-                (
-                    commit_point[0] - approach_center[0],
-                    commit_point[1] - approach_center[1],
-                )
-            )
-            if vec is not None:
-                return vec
-
-        lane_center = self._centroid_of_points(lane.polygon)
-        vec = self._normalize_vector(
-            (
-                commit_point[0] - lane_center[0],
-                commit_point[1] - lane_center[1],
-            )
-        )
-        if vec is not None:
-            return vec
+        auto_vec = self._auto_centerline_vector(lane=lane, reference_point=commit_point)
+        if auto_vec is not None:
+            return auto_vec
         return (0.0, 1.0)
 
     def _build_lane_known_maneuvers(
