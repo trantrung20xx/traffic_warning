@@ -1336,6 +1336,23 @@ select {
   object-position: center;
 }
 
+.violation-media-frame.violation-media-frame-plate {
+  min-height: unset;
+  padding: 10px 12px;
+  border-style: solid;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.violation-media-image.violation-media-image-plate {
+  width: 100%;
+  height: auto;
+  max-width: 100%;
+  max-height: 360px;
+  margin: 0 auto;
+  object-fit: contain;
+  object-position: center;
+}
+
 .violation-media-empty {
   display: flex;
   flex-direction: column;

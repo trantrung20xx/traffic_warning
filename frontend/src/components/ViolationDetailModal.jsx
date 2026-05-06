@@ -37,7 +37,7 @@ function ViolationEvidence({ imageSrc, licensePlateImageSrc }) {
         )}
       </div>
       {licensePlateImageSrc ? (
-        <div className="violation-media-frame">
+        <div className="violation-media-frame violation-media-frame-plate">
           {hasPlateImageError ? (
             <div className="violation-media-empty">
               <AppIcon name="image-off" size={28} />
@@ -46,7 +46,7 @@ function ViolationEvidence({ imageSrc, licensePlateImageSrc }) {
             </div>
           ) : (
             <img
-              className="violation-media-image"
+              className="violation-media-image violation-media-image-plate"
               alt="Ảnh crop biển số"
               src={licensePlateImageSrc}
               onError={() => setHasPlateImageError(true)}
