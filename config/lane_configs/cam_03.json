@@ -73,32 +73,36 @@
         "straight": {
           "enabled": true,
           "allowed": false,
-          "movement_path": [
+          "turn_zone": [
             [
-              0.4421875,
-              0.3194444444444444
+              0.22495156466781072,
+              0.9554043723134488
             ],
             [
-              0.28671875,
+              0.3484859353321893,
               1.0
+            ],
+            [
+              0.5039546853321892,
+              0.36404007213099565
+            ],
+            [
+              0.38042031466781073,
+              0.27484881675789324
             ]
-          ],
-          "corridor_width_px": 512
+          ]
         },
         "right": {
           "enabled": true,
-          "allowed": true,
-          "corridor_width_px": 82
+          "allowed": true
         },
         "left": {
           "enabled": true,
-          "allowed": false,
-          "corridor_width_px": 82
+          "allowed": false
         },
         "u_turn": {
           "enabled": true,
-          "allowed": false,
-          "corridor_width_px": 104
+          "allowed": false
         }
       }
     },
@@ -176,36 +180,44 @@
         "straight": {
           "enabled": true,
           "allowed": true,
-          "movement_path": [
+          "turn_zone": [
             [
-              0.67734375,
-              0.9902777777777778
+              0.669205008966244,
+              0.6161776182553317
             ],
             [
-              0.6546875,
-              0.625
+              0.5690239400047867,
+              0.32499877936912086
             ],
             [
-              0.55625,
-              0.3388888888888889
+              0.5434760599952132,
+              0.35277899840865695
+            ],
+            [
+              0.640169991033756,
+              0.6338223817446683
+            ],
+            [
+              0.6624600012560015,
+              0.9931954201171167
+            ],
+            [
+              0.6922274987439985,
+              0.9873601354384389
             ]
-          ],
-          "corridor_width_px": 115
+          ]
         },
         "right": {
           "enabled": true,
-          "allowed": false,
-          "corridor_width_px": 82
+          "allowed": false
         },
         "left": {
           "enabled": true,
-          "allowed": false,
-          "corridor_width_px": 82
+          "allowed": false
         },
         "u_turn": {
           "enabled": true,
-          "allowed": false,
-          "corridor_width_px": 104
+          "allowed": false
         }
       }
     }

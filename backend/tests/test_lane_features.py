@@ -34,22 +34,22 @@ class LaneFeatureTests(unittest.TestCase):
         Chuẩn hóa fixture test cũ về lane-centric maneuver geometry.
         Runtime đã bỏ legacy global collections; helper này chỉ dùng trong test.
         """
-        turn_corridors = payload.get("turn_corridors")
+        turn_zones = payload.get("turn_zones")
         exit_zones = payload.get("exit_zones")
         exit_lines = payload.get("exit_lines")
-        if not isinstance(turn_corridors, dict):
-            turn_corridors = {}
+        if not isinstance(turn_zones, dict):
+            turn_zones = {}
         if not isinstance(exit_zones, dict):
             exit_zones = {}
         if not isinstance(exit_lines, dict):
             exit_lines = {}
-        if not (turn_corridors or exit_zones or exit_lines):
+        if not (turn_zones or exit_zones or exit_lines):
             return payload
 
         normalized = {
             key: value
             for key, value in payload.items()
-            if key not in {"turn_corridors", "exit_zones", "exit_lines"}
+            if key not in {"turn_zones", "exit_zones", "exit_lines"}
         }
         lanes: list[dict] = []
         for lane in normalized.get("lanes", []):
@@ -62,13 +62,13 @@ class LaneFeatureTests(unittest.TestCase):
                 for key, value in (lane_payload.get("maneuvers") or {}).items()
                 if isinstance(value, dict)
             }
-            maneuver_keys = set(maneuvers.keys()) | set(allowed) | set(turn_corridors) | set(exit_zones) | set(exit_lines)
+            maneuver_keys = set(maneuvers.keys()) | set(allowed) | set(turn_zones) | set(exit_zones) | set(exit_lines)
             for maneuver in maneuver_keys:
                 cfg = dict(maneuvers.get(maneuver) or {})
                 cfg.setdefault("enabled", True)
                 cfg.setdefault("allowed", maneuver in allowed)
-                if maneuver in turn_corridors and "turn_corridor" not in cfg:
-                    cfg["turn_corridor"] = turn_corridors[maneuver]
+                if maneuver in turn_zones and "turn_zone" not in cfg:
+                    cfg["turn_zone"] = turn_zones[maneuver]
                 if maneuver in exit_zones and "exit_zone" not in cfg:
                     cfg["exit_zone"] = exit_zones[maneuver]
                 if maneuver in exit_lines and "exit_line" not in cfg:
@@ -202,7 +202,7 @@ class LaneFeatureTests(unittest.TestCase):
                             "right": {
                                 "enabled": False,
                                 "allowed": False,
-                                "turn_corridor": [[0.20, 0.72], [0.45, 0.72], [0.45, 0.95], [0.20, 0.95]],
+                                "turn_zone": [[0.20, 0.72], [0.45, 0.72], [0.45, 0.95], [0.20, 0.95]],
                             },
                         },
                     }
@@ -903,7 +903,7 @@ class LaneFeatureTests(unittest.TestCase):
                 "camera_id": "cam_test",
                 "frame_width": 100,
                 "frame_height": 100,
-                "turn_corridors": {
+                "turn_zones": {
                     "right": [[0.20, 0.72], [0.45, 0.72], [0.45, 0.95], [0.20, 0.95]]
                 },
                 "lanes": [
@@ -968,7 +968,7 @@ class LaneFeatureTests(unittest.TestCase):
                 "camera_id": "cam_test",
                 "frame_width": 100,
                 "frame_height": 100,
-                "turn_corridors": {
+                "turn_zones": {
                     "right": [[0.20, 0.72], [0.45, 0.72], [0.45, 0.95], [0.20, 0.95]]
                 },
                 "lanes": [
@@ -1023,7 +1023,7 @@ class LaneFeatureTests(unittest.TestCase):
                 "camera_id": "cam_test",
                 "frame_width": 100,
                 "frame_height": 100,
-                "turn_corridors": {
+                "turn_zones": {
                     "right": [[0.20, 0.72], [0.45, 0.72], [0.45, 0.95], [0.20, 0.95]]
                 },
                 "lanes": [
@@ -1066,7 +1066,7 @@ class LaneFeatureTests(unittest.TestCase):
             self._normalize_violation_rows(emitted_first),
         )
 
-        # Cùng lifecycle, thêm frame overlap/corridor tiếp theo không được emit lại.
+        # Cùng lifecycle, thêm frame overlap/turn_zone tiếp theo không được emit lại.
         no_duplicate = logic.update_and_maybe_generate_violation(
             vehicle_id=404,
             vehicle_type="car",
@@ -1110,7 +1110,7 @@ class LaneFeatureTests(unittest.TestCase):
                 "camera_id": "cam_test",
                 "frame_width": 100,
                 "frame_height": 100,
-                "turn_corridors": {
+                "turn_zones": {
                     "right": [[0.55, 0.72], [0.90, 0.72], [0.90, 0.95], [0.55, 0.95]]
                 },
                 "lanes": [
@@ -1170,7 +1170,7 @@ class LaneFeatureTests(unittest.TestCase):
                 "camera_id": "cam_test",
                 "frame_width": 100,
                 "frame_height": 100,
-                "turn_corridors": {
+                "turn_zones": {
                     "right": [[0.55, 0.72], [0.90, 0.72], [0.90, 0.95], [0.55, 0.95]]
                 },
                 "lanes": [
@@ -1255,7 +1255,7 @@ class LaneFeatureTests(unittest.TestCase):
                 "camera_id": "cam_test",
                 "frame_width": 100,
                 "frame_height": 100,
-                "turn_corridors": {
+                "turn_zones": {
                     "right": [[0.18, 0.76], [0.48, 0.76], [0.48, 0.98], [0.18, 0.98]]
                 },
                 "lanes": [
@@ -1323,13 +1323,13 @@ class LaneFeatureTests(unittest.TestCase):
             [],
         )
 
-    def test_hybrid_turn_uses_source_lane_even_when_corridor_is_on_other_lane(self) -> None:
+    def test_hybrid_turn_uses_source_lane_even_when_turn_zone_is_on_other_lane(self) -> None:
         logic = self._build_hybrid_logic(
             {
                 "camera_id": "cam_test",
                 "frame_width": 100,
                 "frame_height": 100,
-                "turn_corridors": {
+                "turn_zones": {
                     "right": [[0.60, 0.76], [0.92, 0.76], [0.92, 0.98], [0.60, 0.98]]
                 },
                 "lanes": [
@@ -1403,7 +1403,7 @@ class LaneFeatureTests(unittest.TestCase):
                 "camera_id": "cam_test",
                 "frame_width": 100,
                 "frame_height": 100,
-                "turn_corridors": {
+                "turn_zones": {
                     "right": [[0.60, 0.76], [0.92, 0.76], [0.92, 0.98], [0.60, 0.98]]
                 },
                 "lanes": [
@@ -1491,13 +1491,13 @@ class LaneFeatureTests(unittest.TestCase):
             [],
         )
 
-    def test_exit_line_confirms_turn_without_waiting_for_corridor_hits(self) -> None:
+    def test_exit_line_confirms_turn_without_waiting_for_turn_zone_hits(self) -> None:
         logic = self._build_hybrid_logic(
             {
                 "camera_id": "cam_test",
                 "frame_width": 100,
                 "frame_height": 100,
-                "turn_corridors": {
+                "turn_zones": {
                     "right": [[0.60, 0.70], [0.92, 0.70], [0.92, 0.98], [0.60, 0.98]]
                 },
                 "exit_lines": {
@@ -1712,7 +1712,7 @@ class LaneFeatureTests(unittest.TestCase):
                 "camera_id": "cam_test",
                 "frame_width": 100,
                 "frame_height": 100,
-                "turn_corridors": {
+                "turn_zones": {
                     "right": [[0.60, 0.70], [0.92, 0.70], [0.92, 0.98], [0.60, 0.98]]
                 },
                 "exit_lines": {
@@ -1778,13 +1778,13 @@ class LaneFeatureTests(unittest.TestCase):
             [],
         )
 
-    def test_turn_corridor_can_confirm_with_progress_when_frame_count_is_low(self) -> None:
+    def test_turn_zone_can_confirm_with_progress_when_frame_count_is_low(self) -> None:
         logic = self._build_hybrid_logic(
             {
                 "camera_id": "cam_test",
                 "frame_width": 100,
                 "frame_height": 100,
-                "turn_corridors": {
+                "turn_zones": {
                     "right": [[0.20, 0.72], [0.55, 0.72], [0.55, 0.98], [0.20, 0.98]]
                 },
                 "lanes": [
@@ -1844,7 +1844,7 @@ class LaneFeatureTests(unittest.TestCase):
                 "camera_id": "cam_uturn",
                 "frame_width": 100,
                 "frame_height": 100,
-                "turn_corridors": {
+                "turn_zones": {
                     "left": [[0.10, 0.70], [0.32, 0.70], [0.32, 0.95], [0.10, 0.95]],
                     "u_turn": [[0.35, 0.60], [0.70, 0.60], [0.70, 0.92], [0.35, 0.92]],
                 },
@@ -1871,7 +1871,7 @@ class LaneFeatureTests(unittest.TestCase):
         frames = [
             [28, 45, 38, 60],  # approach
             [30, 58, 40, 74],  # commit
-            [40, 66, 50, 84],  # inside u_turn corridor
+            [40, 66, 50, 84],  # inside u_turn turn_zone
             [46, 62, 56, 80],  # start bending back
             [46, 52, 56, 70],  # heading reversed toward top
             [43, 46, 53, 64],  # cross u_turn exit line
@@ -1899,7 +1899,7 @@ class LaneFeatureTests(unittest.TestCase):
                 "camera_id": "cam_reject",
                 "frame_width": 100,
                 "frame_height": 100,
-                "turn_corridors": {
+                "turn_zones": {
                     "u_turn": [[0.36, 0.64], [0.64, 0.64], [0.64, 0.96], [0.36, 0.96]]
                 },
                 "lanes": [
@@ -1952,7 +1952,7 @@ class LaneFeatureTests(unittest.TestCase):
                 "camera_id": "cam_semantic",
                 "frame_width": 1280,
                 "frame_height": 720,
-                "turn_corridors": {
+                "turn_zones": {
                     "left": [[0.10, 0.70], [0.18, 0.70], [0.18, 0.74], [0.10, 0.74]],
                     "u_turn": [[0.11, 0.70], [0.19, 0.70], [0.19, 0.74], [0.11, 0.74]],
                 },
@@ -1985,3 +1985,5 @@ class LaneFeatureTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+

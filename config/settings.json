@@ -93,7 +93,7 @@
 		"turn_scoring": {
 			"decay_per_frame": 0.18,
 			"score_cap": 30.0,
-			"corridor_hit_weight": 2.1,
+			"turn_zone_hit_weight": 2.1,
 			"exit_zone_hit_weight": 4.1,
 			"exit_line_hit_weight": 5.2,
 			"heading_support_weight": 1.3,
@@ -103,7 +103,7 @@
 			"no_signal_penalty": 0.35,
 			"temporal_hits_min": 2,
 			"strong_exit_min_temporal_hits": 2,
-			"strong_exit_min_corridor_hits": 2,
+			"strong_exit_min_turn_zone_hits": 2,
 			"threshold_turn": 4.2,
 			"threshold_turn_with_exit": 4.2,
 			"threshold_u_turn": 7.2,

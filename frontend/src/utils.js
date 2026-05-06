@@ -7,26 +7,17 @@ const LANE_EDIT_TARGETS = [
   "direction_path",
   "direction_check_zone",
 ];
-const MANEUVER_EDIT_TARGETS = ["movement_path", "exit_line", "exit_zone"];
+const MANEUVER_EDIT_TARGETS = ["turn_zone", "exit_line", "exit_zone"];
 const POLYGON_GEOMETRY_TARGETS = [
   "lane_polygon",
   "approach_zone",
   "commit_gate",
+  "turn_zone",
   "exit_zone",
   "direction_check_zone",
 ];
 const LINE_GEOMETRY_TARGETS = ["commit_line", "exit_line"];
-const POLYLINE_GEOMETRY_TARGETS = ["movement_path", "direction_path"];
-export const CORRIDOR_WIDTH_MIN_PX = 16;
-export const CORRIDOR_WIDTH_MAX_PX = 512;
-export const CORRIDOR_WIDTH_STEP_PX = 1;
-
-const CORRIDOR_DEFAULT_WIDTH_BY_MANEUVER = {
-  straight: 72,
-  left: 82,
-  right: 82,
-  u_turn: 104,
-};
+const POLYLINE_GEOMETRY_TARGETS = ["direction_path"];
 
 const MANEUVER_LABELS = {
   left: "Rẽ trái",
@@ -45,7 +36,7 @@ const LANE_TARGET_LABELS = {
 };
 
 const MANEUVER_TARGET_LABELS = {
-  movement_path: "Đường đi",
+  turn_zone: "Vùng rẽ",
   exit_line: "Vạch xác nhận đầu ra",
   exit_zone: "Vùng xác nhận đầu ra",
 };
@@ -129,19 +120,6 @@ const VIETNAM_TIMESTAMP_FORMATTER = new Intl.DateTimeFormat("vi-VN", {
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
-}
-
-export function getDefaultCorridorWidthPx(maneuver = "straight") {
-  return CORRIDOR_DEFAULT_WIDTH_BY_MANEUVER[maneuver] || CORRIDOR_DEFAULT_WIDTH_BY_MANEUVER.straight;
-}
-
-export function normalizeCorridorWidthPx(value, maneuver = "straight") {
-  const fallback = getDefaultCorridorWidthPx(maneuver);
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) {
-    return fallback;
-  }
-  return clamp(Math.round(parsed), CORRIDOR_WIDTH_MIN_PX, CORRIDOR_WIDTH_MAX_PX);
 }
 
 function pad2(value) {
@@ -354,8 +332,7 @@ export function denormalizeLane(lane, frameWidth, frameHeight) {
       maneuver,
       {
         ...cfg,
-        movement_path: denormalizePoints(cfg.movement_path || [], frameWidth, frameHeight),
-        turn_corridor: denormalizePoints(cfg.turn_corridor || [], frameWidth, frameHeight),
+        turn_zone: denormalizePoints(cfg.turn_zone || [], frameWidth, frameHeight),
         exit_line: denormalizePoints(cfg.exit_line || [], frameWidth, frameHeight),
         exit_zone: denormalizePoints(cfg.exit_zone || [], frameWidth, frameHeight),
       },
@@ -603,7 +580,7 @@ export function getEditTargetLabel(target, laneId = null, selectedManeuver = nul
 }
 
 export function getEditTargetMinimumPoints(target) {
-  if (target === "movement_path" || target === "direction_path") return 2;
+  if (target === "direction_path") return 2;
   return isLineEditTarget(target) ? 2 : 3;
 }
 
@@ -656,11 +633,11 @@ export function formatLicensePlateValue(plate, status) {
 }
 
 function createDefaultManeuverConfig(maneuver, { allowed = false } = {}) {
+  void maneuver;
   return {
     enabled: true,
     allowed,
-    movement_path: [],
-    corridor_width_px: getDefaultCorridorWidthPx(maneuver),
+    turn_zone: [],
     exit_line: [],
     exit_zone: [],
   };
@@ -686,8 +663,7 @@ function normalizeLaneManeuvers(lane = {}) {
       ...base,
       enabled,
       allowed: enabled ? raw.allowed ?? allowedSet.has(maneuver) : false,
-      movement_path: raw.movement_path || [],
-      corridor_width_px: normalizeCorridorWidthPx(raw.corridor_width_px, maneuver),
+      turn_zone: raw.turn_zone || [],
       exit_line: raw.exit_line || [],
       exit_zone: raw.exit_zone || [],
     };
@@ -815,17 +791,16 @@ export function buildPayload(draft) {
       MANEUVERS.map((maneuver) => {
         const cfg = lane.maneuvers?.[maneuver] || {};
         const enabled = Boolean(cfg.enabled ?? true);
-        return [
-          maneuver,
-          {
-            enabled,
-            allowed: enabled && Boolean(cfg.allowed ?? false),
-            movement_path: toOptionalGeometry(cfg.movement_path, 2),
-            corridor_width_px: normalizeCorridorWidthPx(cfg.corridor_width_px, maneuver),
-            exit_line: toOptionalGeometry(cfg.exit_line, 2),
-            exit_zone: toOptionalGeometry(cfg.exit_zone, 3),
-          },
-        ];
+          return [
+            maneuver,
+            {
+              enabled,
+              allowed: enabled && Boolean(cfg.allowed ?? false),
+              turn_zone: toOptionalGeometry(cfg.turn_zone, 3),
+              exit_line: toOptionalGeometry(cfg.exit_line, 2),
+              exit_zone: toOptionalGeometry(cfg.exit_zone, 3),
+            },
+          ];
       }),
     ),
     lane_id: Number(lane.lane_id),
@@ -977,14 +952,16 @@ export function validatePolygonDraft(draft) {
 
     MANEUVERS.forEach((maneuver) => {
       const cfg = lane.maneuvers?.[maneuver] || {};
-      const movementPath = cfg.movement_path || [];
+      const turnZone = cfg.turn_zone || [];
       const exitZone = cfg.exit_zone || [];
       const exitLine = cfg.exit_line || [];
       const isEnabled = Boolean(cfg.enabled ?? true);
       const isAllowed = isEnabled && Boolean(cfg.allowed ?? false);
 
-      if (movementPath.length > 0 && movementPath.length < 2) {
-        errors.push(`Đường đi "${getManeuverLabel(maneuver)}" của làn ${lane.lane_id} phải có ít nhất 2 điểm.`);
+      if (turnZone.length > 0 && turnZone.length < 3) {
+        errors.push(`Vùng rẽ "${getManeuverLabel(maneuver)}" của làn ${lane.lane_id} phải có ít nhất 3 điểm.`);
+      } else if (turnZone.length >= 4 && polygonSelfIntersects(turnZone)) {
+        warnings.push(`Vùng rẽ "${getManeuverLabel(maneuver)}" của làn ${lane.lane_id} đang tự cắt nhau.`);
       }
       if (exitZone.length > 0 && exitZone.length < 3) {
         errors.push(`Vùng xác nhận đầu ra "${getManeuverLabel(maneuver)}" của làn ${lane.lane_id} phải có ít nhất 3 điểm.`);
@@ -995,10 +972,10 @@ export function validatePolygonDraft(draft) {
       if (isAllowed && !isEnabled) {
         warnings.push(`Làn ${lane.lane_id}: ${getManeuverLabel(maneuver)} đang cho phép nhưng trạng thái đang tắt.`);
       }
-      if (isEnabled && !movementPath.length && !exitZone.length && !exitLine.length) {
-        warnings.push(`Làn ${lane.lane_id}: ${getManeuverLabel(maneuver)} chưa có hình học xác nhận (đường đi/exit).`);
+      if (isEnabled && !turnZone.length && !exitZone.length && !exitLine.length) {
+        warnings.push(`Làn ${lane.lane_id}: ${getManeuverLabel(maneuver)} chưa có hình học xác nhận (vùng rẽ/exit).`);
       }
-      if (!isEnabled && (movementPath.length || exitZone.length || exitLine.length)) {
+      if (!isEnabled && (turnZone.length || exitZone.length || exitLine.length)) {
         warnings.push(`Làn ${lane.lane_id}: ${getManeuverLabel(maneuver)} đang tắt nhưng vẫn có geometry cấu hình.`);
       }
     });

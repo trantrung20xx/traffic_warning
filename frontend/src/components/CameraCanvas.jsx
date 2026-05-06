@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { drawBackgroundImage, useBackgroundImage } from "./canvas/BackgroundImageLayer";
-import { drawCorridorPreview, drawPolygon, drawPolyline } from "./canvas/PolygonLayer";
+import { drawPolygon, drawPolyline } from "./canvas/PolygonLayer";
 import {
 	denormalizeLane,
 	getEditTargetGeometryNoun,
@@ -17,12 +17,6 @@ import {
 
 const VERTEX_HIT_RADIUS = 12;
 const EDGE_HIT_DISTANCE = 10;
-const CORRIDOR_BASE_WIDTH_BY_MANEUVER = {
-	straight: 72,
-	left: 82,
-	right: 82,
-	u_turn: 104,
-};
 const MONITOR_OVERLAY = {
 	boxStrokePx: 1.5,
 	labelFontPx: 11,
@@ -134,14 +128,6 @@ function findClosestEdge(points, point, options = {}) {
 	}
 
 	return best;
-}
-
-function getPreviewCorridorWidthPx(maneuver, cfg) {
-	const configuredWidth = Number(cfg?.corridor_width_px);
-	if (Number.isFinite(configuredWidth) && configuredWidth > 0) {
-		return configuredWidth;
-	}
-	return CORRIDOR_BASE_WIDTH_BY_MANEUVER[maneuver] || 82;
 }
 
 function drawTrajectory(ctx, points, metrics = null) {
@@ -509,45 +495,35 @@ export default function CameraCanvas({
 
 			Object.entries(lane.maneuvers || {}).forEach(([maneuver, cfg]) => {
 				const maneuverLabel = getManeuverLabel(maneuver);
-				const movementPath = cfg.movement_path || [];
+				const turnZone = cfg.turn_zone || [];
 				const exitZone = cfg.exit_zone || [];
 				const exitLine = cfg.exit_line || [];
 
 				const isSelectedManeuver =
 					lane.lane_id === selectedLaneId && maneuver === selectedManeuver;
 
-				if (movementPath.length >= 2) {
-					const isEditablePath =
-						editable && isSelectedManeuver && editTarget === "movement_path";
-					drawCorridorPreview(
-						ctx,
-						movementPath,
-						getPreviewCorridorWidthPx(maneuver, cfg),
-						{
-							strokeStyle: isEditablePath
-								? "rgba(255, 209, 102, 0.18)"
-								: "rgba(52, 152, 219, 0.18)",
-						},
-					);
-					if (!isMonitoringOverlay) {
-						drawPolyline(ctx, movementPath, {
-							dashed: true,
-							strokeStyle: isEditablePath
-								? "rgba(255, 209, 102, 1)"
-								: "rgba(52, 152, 219, 0.95)",
-							lineWidth: isEditablePath ? 2 : 1.4,
-							showVertices: isEditablePath,
-							isEditableTarget: isEditablePath,
-							vertexRadius: 3.5,
-							activeVertexRadius: 5,
-							vertexStrokeWidth: 1.2,
-							hoverVertexIndex,
-							selectedVertexIndex,
-							showDirection: true,
-							arrowSize: isEditablePath ? 14 : 11,
-						});
-					}
-					const anchor = movementPath[0];
+				if (turnZone.length >= 3) {
+					const isEditableTurnZone =
+						editable && isSelectedManeuver && editTarget === "turn_zone";
+					drawPolygon(ctx, turnZone, {
+						dashed: true,
+						strokeStyle: isEditableTurnZone
+							? "rgba(255, 209, 102, 1)"
+							: "rgba(52, 152, 219, 0.95)",
+						lineWidth: isEditableTurnZone ? 2 : 1.4,
+						fillStyle: isMonitoringOverlay
+							? "rgba(52, 152, 219, 0.18)"
+							: null,
+						showStroke: !isMonitoringOverlay,
+						showVertices: isEditableTurnZone,
+						isEditableTarget: isEditableTurnZone,
+						vertexRadius: 3.5,
+						activeVertexRadius: 5,
+						vertexStrokeWidth: 1.2,
+						hoverVertexIndex,
+						selectedVertexIndex,
+					});
+					const anchor = turnZone[0];
 					if (anchor && !isMonitoringOverlay) {
 						ctx.fillStyle = "rgba(255,255,255,0.88)";
 						ctx.font = "12px sans-serif";

@@ -128,7 +128,7 @@ Màn hình quản lý hỗ trợ:
 - Upload/xóa ảnh nền để căn chỉnh hình học.
 - Vẽ/sửa `lane_polygon`, `approach_zone`, `commit_gate`, `commit_line`.
 - Vẽ/sửa `direction_path` và `direction_check_zone` cho phát hiện đi ngược chiều.
-- Vẽ/sửa `movement_path`, `exit_line`, `exit_zone` cho từng maneuver.
+- Vẽ/sửa `turn_zone`, `exit_line`, `exit_zone` cho từng maneuver.
 - Cấu hình loại phương tiện được phép trong lane.
 - Cấu hình lane được phép chuyển sang.
 - Cấu hình hướng đi được phép/cấm.
@@ -164,8 +164,7 @@ Màn hình quản lý hỗ trợ:
 |---|---|
 | `enabled` | Bật/tắt nhận diện hướng này. |
 | `allowed` | Hướng này có được phép theo luật hay không. |
-| `movement_path` | Đường đi kỳ vọng, frontend vẽ dạng polyline. |
-| `corridor_preset`, `corridor_width_px` | Độ rộng corridor backend dùng để nhận biết xe đang đi theo hướng đó. |
+| `turn_zone` | Vùng rẽ dùng để khớp trajectory của xe theo từng hướng. |
 | `exit_line` | Vạch xác nhận xe ra đúng nhánh. |
 | `exit_zone` | Vùng xác nhận xe ra đúng nhánh. |
 
@@ -217,7 +216,7 @@ Frontend hiển thị các trạng thái OCR do backend trả:
 | `src/views/AnalyticsView.jsx` | Dashboard, lịch sử, export. |
 | `src/views/ManagementView.jsx` | Quản lý camera/lane/maneuver. |
 | `src/components/CameraCanvas.jsx` | Canvas video overlay và editor hình học. |
-| `src/components/canvas/PolygonLayer.js` | Hàm vẽ polygon, polyline, corridor preview. |
+| `src/components/canvas/PolygonLayer.js` | Hàm vẽ polygon, polyline và marker chỉnh sửa. |
 
 ## Build Production
 

@@ -74,24 +74,6 @@ export function drawPolyline(ctx, points, options = {}) {
   ctx.restore();
 }
 
-export function drawCorridorPreview(ctx, points, widthPx, options = {}) {
-  if (!points || points.length < 2) return;
-  const lineWidth = Math.max(Number(widthPx) || 1, 1);
-  ctx.save();
-  ctx.beginPath();
-  ctx.moveTo(points[0][0], points[0][1]);
-  for (let i = 1; i < points.length; i += 1) {
-    ctx.lineTo(points[i][0], points[i][1]);
-  }
-  ctx.strokeStyle = options.strokeStyle || "rgba(52, 152, 219, 0.18)";
-  ctx.lineWidth = lineWidth;
-  ctx.lineCap = "butt";
-  ctx.lineJoin = "miter";
-  ctx.miterLimit = options.miterLimit || 10;
-  ctx.stroke();
-  ctx.restore();
-}
-
 export function drawPolygon(ctx, points, options = {}) {
   if (!points || points.length < 2) return;
   ctx.save();

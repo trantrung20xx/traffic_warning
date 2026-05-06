@@ -99,7 +99,7 @@ class CameraContext:
         motion_window_samples: int = 8,
         turn_evidence_decay_per_frame: float = 0.18,
         turn_evidence_score_cap: float = 30.0,
-        turn_evidence_corridor_hit_weight: float = 2.1,
+        turn_evidence_turn_zone_hit_weight: float = 2.1,
         turn_evidence_exit_zone_hit_weight: float = 4.1,
         turn_evidence_exit_line_hit_weight: float = 5.2,
         turn_evidence_heading_support_weight: float = 1.3,
@@ -109,7 +109,7 @@ class CameraContext:
         turn_evidence_no_signal_penalty: float = 0.35,
         turn_evidence_temporal_hits_min: int = 2,
         turn_evidence_strong_exit_min_temporal_hits: int = 2,
-        turn_evidence_strong_exit_min_corridor_hits: int = 2,
+        turn_evidence_strong_exit_min_turn_zone_hits: int = 2,
         turn_score_threshold: float = 4.2,
         turn_score_threshold_with_exit: float = 4.2,
         u_turn_score_threshold: float = 7.2,
@@ -232,7 +232,7 @@ class CameraContext:
             motion_window_samples=motion_window_samples,
             evidence_decay_per_frame=turn_evidence_decay_per_frame,
             evidence_score_cap=turn_evidence_score_cap,
-            evidence_weight_corridor=turn_evidence_corridor_hit_weight,
+            evidence_weight_turn_zone=turn_evidence_turn_zone_hit_weight,
             evidence_weight_exit_zone=turn_evidence_exit_zone_hit_weight,
             evidence_weight_exit_line=turn_evidence_exit_line_hit_weight,
             evidence_weight_heading_support=turn_evidence_heading_support_weight,
@@ -242,7 +242,7 @@ class CameraContext:
             evidence_penalty_no_signal=turn_evidence_no_signal_penalty,
             evidence_temporal_hits_min=turn_evidence_temporal_hits_min,
             evidence_strong_exit_min_temporal_hits=turn_evidence_strong_exit_min_temporal_hits,
-            evidence_strong_exit_min_corridor_hits=turn_evidence_strong_exit_min_corridor_hits,
+            evidence_strong_exit_min_turn_zone_hits=turn_evidence_strong_exit_min_turn_zone_hits,
             threshold_turn_score=turn_score_threshold,
             threshold_turn_score_with_exit=turn_score_threshold_with_exit,
             threshold_u_turn_score=u_turn_score_threshold,
@@ -870,3 +870,4 @@ class CameraContext:
         """Lưu một sự kiện vi phạm xuống cơ sở dữ liệu."""
         with self._db_session_factory() as session:
             event.id = insert_violation(session, event)
+

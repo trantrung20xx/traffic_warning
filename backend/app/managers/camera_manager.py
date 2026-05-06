@@ -392,7 +392,7 @@ class CameraManager:
             motion_window_samples=self.cfg.motion_window_samples,
             turn_evidence_decay_per_frame=self.cfg.evidence_fusion_turn_scoring.decay_per_frame,
             turn_evidence_score_cap=self.cfg.evidence_fusion_turn_scoring.score_cap,
-            turn_evidence_corridor_hit_weight=self.cfg.evidence_fusion_turn_scoring.corridor_hit_weight,
+            turn_evidence_turn_zone_hit_weight=self.cfg.evidence_fusion_turn_scoring.turn_zone_hit_weight,
             turn_evidence_exit_zone_hit_weight=self.cfg.evidence_fusion_turn_scoring.exit_zone_hit_weight,
             turn_evidence_exit_line_hit_weight=self.cfg.evidence_fusion_turn_scoring.exit_line_hit_weight,
             turn_evidence_heading_support_weight=self.cfg.evidence_fusion_turn_scoring.heading_support_weight,
@@ -402,7 +402,7 @@ class CameraManager:
             turn_evidence_no_signal_penalty=self.cfg.evidence_fusion_turn_scoring.no_signal_penalty,
             turn_evidence_temporal_hits_min=self.cfg.evidence_fusion_turn_scoring.temporal_hits_min,
             turn_evidence_strong_exit_min_temporal_hits=self.cfg.evidence_fusion_turn_scoring.strong_exit_min_temporal_hits,
-            turn_evidence_strong_exit_min_corridor_hits=self.cfg.evidence_fusion_turn_scoring.strong_exit_min_corridor_hits,
+            turn_evidence_strong_exit_min_turn_zone_hits=self.cfg.evidence_fusion_turn_scoring.strong_exit_min_turn_zone_hits,
             turn_score_threshold=self.cfg.evidence_fusion_turn_scoring.threshold_turn,
             turn_score_threshold_with_exit=self.cfg.evidence_fusion_turn_scoring.threshold_turn_with_exit,
             u_turn_score_threshold=self.cfg.evidence_fusion_turn_scoring.threshold_u_turn,
@@ -514,5 +514,6 @@ class CameraManager:
                 dead.append(queue)
         for queue in dead:
             listeners.discard(queue)
+
 
 

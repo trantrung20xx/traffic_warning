@@ -164,7 +164,7 @@ Backend đọc cấu hình từ thư mục `config`.
 | `lanes[].allowed_lane_changes` | Lane được phép chuyển tới. |
 | `lanes[].allowed_vehicle_types` | Loại xe được phép trong lane. |
 | `lanes[].direction_rule` | Quy tắc đi đúng chiều gồm `enabled`, `direction_path`, `check_zone`. |
-| `lanes[].maneuvers.straight/left/right/u_turn` | Cấu hình hướng đi gồm `enabled`, `allowed`, `movement_path`, `exit_line`, `exit_zone`, corridor. |
+| `lanes[].maneuvers.straight/left/right/u_turn` | Cấu hình hướng đi gồm `enabled`, `allowed`, `turn_zone`, `exit_line`, `exit_zone`. |
 
 Tọa độ trong file lane config là tọa độ chuẩn hóa `[0, 1]`. Backend sẽ đổi sang pixel theo `frame_width`/`frame_height` khi chạy.
 

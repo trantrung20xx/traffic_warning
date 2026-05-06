@@ -4,7 +4,7 @@ from itertools import combinations
 from math import hypot
 from typing import Any, Literal, Optional
 
-from shapely.geometry import LineString, Point, Polygon
+from shapely.geometry import LineString, Polygon
 
 from app.core.config import CameraLaneConfig
 
@@ -200,7 +200,7 @@ def validate_lane_geometry(lane_config: CameraLaneConfig) -> list[dict[str, Any]
                 )
             )
 
-    lane_maneuver_corridors: dict[tuple[int, str], Polygon] = {}
+    lane_maneuver_turn_zones: dict[tuple[int, str], Polygon] = {}
     lane_maneuver_exit_zones: dict[tuple[int, str], Polygon] = {}
     lane_maneuver_exit_lines: dict[tuple[int, str], LineString] = {}
 
@@ -232,12 +232,11 @@ def validate_lane_geometry(lane_config: CameraLaneConfig) -> list[dict[str, Any]
             )
 
         for maneuver, cfg in maneuvers.items():
-            movement_path = list(cfg.movement_path or [])
-            corridor = list(cfg.turn_corridor or [])
+            turn_zone = list(cfg.turn_zone or [])
             exit_zone = list(cfg.exit_zone or [])
             exit_line = list(cfg.exit_line or [])
 
-            has_any_geometry = bool(movement_path or corridor or exit_zone or exit_line)
+            has_any_geometry = bool(turn_zone or exit_zone or exit_line)
 
             enabled = bool(cfg.enabled)
             allowed = bool(cfg.allowed)
@@ -247,10 +246,10 @@ def validate_lane_geometry(lane_config: CameraLaneConfig) -> list[dict[str, Any]
                     _issue(
                         level="warning",
                         code="MANEUVER_ENABLED_BUT_MISSING_GEOMETRY",
-                        message=f"Làn {lane.lane_id} - {maneuver}: đã bật nhưng chưa có movement path/exit geometry.",
+                        message=f"Làn {lane.lane_id} - {maneuver}: đã bật nhưng chưa có turn zone/exit geometry.",
                         lane_id=lane.lane_id,
                         maneuver=maneuver,
-                        suggestion="Vẽ movement path và ít nhất một exit line/exit zone.",
+                        suggestion="Vẽ turn zone và ít nhất một exit line/exit zone.",
                     )
                 )
             if not enabled and has_any_geometry:
@@ -276,68 +275,30 @@ def validate_lane_geometry(lane_config: CameraLaneConfig) -> list[dict[str, Any]
                     )
                 )
 
-            if movement_path and len(movement_path) < 2:
-                issues.append(
-                    _issue(
-                        level="error",
-                        code="MOVEMENT_PATH_TOO_SHORT",
-                        message=f"Làn {lane.lane_id} - {maneuver}: movement path quá ngắn.",
-                        lane_id=lane.lane_id,
-                        maneuver=maneuver,
-                        suggestion="Vẽ movement path tối thiểu 2 điểm theo quỹ đạo xe thực.",
-                    )
-                )
-            if movement_path and len(movement_path) >= 2:
-                path_length = _polyline_length(movement_path)
-                if path_length < 0.05:
+            turn_zone_shape: Optional[Polygon] = None
+            if turn_zone:
+                turn_zone_shape = Polygon([(float(x), float(y)) for x, y in turn_zone])
+                lane_maneuver_turn_zones[(lane.lane_id, maneuver)] = turn_zone_shape
+                if turn_zone_shape.is_empty or turn_zone_shape.area <= 1e-9:
                     issues.append(
                         _issue(
                             level="warning",
-                            code="MOVEMENT_PATH_TOO_SHORT",
-                            message=f"Làn {lane.lane_id} - {maneuver}: movement path quá ngắn, khó suy hướng.",
+                            code="TURN_ZONE_INVALID",
+                            message=f"Làn {lane.lane_id} - {maneuver}: turn zone rỗng hoặc quá nhỏ.",
                             lane_id=lane.lane_id,
                             maneuver=maneuver,
-                            suggestion="Kéo dài movement path từ trước commit tới nhánh ra.",
+                            suggestion="Mở rộng turn zone phủ theo vùng xe ổn định khi thực hiện maneuver.",
                         )
                     )
-                if lane_shape is not None and not lane_shape.is_empty:
-                    start_pt = Point(float(movement_path[0][0]), float(movement_path[0][1]))
-                    if lane_shape.distance(start_pt) > 0.12:
-                        issues.append(
-                            _issue(
-                                level="warning",
-                                code="MOVEMENT_PATH_START_FAR_FROM_LANE",
-                                message=f"Làn {lane.lane_id} - {maneuver}: đầu movement path nằm xa lane nguồn.",
-                                lane_id=lane.lane_id,
-                                maneuver=maneuver,
-                                suggestion="Đặt điểm đầu movement path gần approach/commit của lane nguồn.",
-                            )
-                        )
-
-            corridor_shape: Optional[Polygon] = None
-            if corridor:
-                corridor_shape = Polygon([(float(x), float(y)) for x, y in corridor])
-                lane_maneuver_corridors[(lane.lane_id, maneuver)] = corridor_shape
-                if corridor_shape.is_empty or corridor_shape.area <= 1e-9:
+                elif lane_shape is not None and not lane_shape.is_empty and turn_zone_shape.distance(lane_shape) > 0.15:
                     issues.append(
                         _issue(
                             level="warning",
-                            code="TURN_CORRIDOR_INVALID",
-                            message=f"Làn {lane.lane_id} - {maneuver}: turn corridor rỗng hoặc quá nhỏ.",
+                            code="TURN_ZONE_FAR_FROM_LANE",
+                            message=f"Làn {lane.lane_id} - {maneuver}: turn zone xa lane nguồn.",
                             lane_id=lane.lane_id,
                             maneuver=maneuver,
-                            suggestion="Tăng độ dài movement path hoặc tăng corridor_width_px.",
-                        )
-                    )
-                elif lane_shape is not None and not lane_shape.is_empty and corridor_shape.distance(lane_shape) > 0.15:
-                    issues.append(
-                        _issue(
-                            level="warning",
-                            code="TURN_CORRIDOR_FAR_FROM_LANE",
-                            message=f"Làn {lane.lane_id} - {maneuver}: corridor xa lane nguồn.",
-                            lane_id=lane.lane_id,
-                            maneuver=maneuver,
-                            suggestion="Dịch movement path gần lane nguồn và nhánh rẽ thực tế.",
+                            suggestion="Dịch turn zone gần lane nguồn và nhánh rẽ thực tế.",
                         )
                     )
 
@@ -355,15 +316,15 @@ def validate_lane_geometry(lane_config: CameraLaneConfig) -> list[dict[str, Any]
                             suggestion="Mở rộng exit zone quanh vị trí xe ổn định sau khi rẽ.",
                         )
                     )
-                if corridor_shape is not None and not corridor_shape.is_empty and corridor_shape.distance(exit_zone_shape) > 0.08:
+                if turn_zone_shape is not None and not turn_zone_shape.is_empty and turn_zone_shape.distance(exit_zone_shape) > 0.08:
                     issues.append(
                         _issue(
                             level="warning",
-                            code="EXIT_ZONE_FAR_FROM_PATH",
-                            message=f"Làn {lane.lane_id} - {maneuver}: exit zone nằm xa corridor/path.",
+                            code="EXIT_ZONE_FAR_FROM_TURN_ZONE",
+                            message=f"Làn {lane.lane_id} - {maneuver}: exit zone nằm xa turn zone.",
                             lane_id=lane.lane_id,
                             maneuver=maneuver,
-                            suggestion="Đặt exit zone gần cuối movement path.",
+                            suggestion="Đặt exit zone gần turn zone để tăng độ nhất quán tín hiệu xác nhận.",
                         )
                     )
 
@@ -381,17 +342,17 @@ def validate_lane_geometry(lane_config: CameraLaneConfig) -> list[dict[str, Any]
                             suggestion="Vẽ exit line bằng 2 điểm nằm trên nhánh ra thực tế.",
                         )
                     )
-                if corridor_shape is not None and not corridor_shape.is_empty:
+                if turn_zone_shape is not None and not turn_zone_shape.is_empty:
                     midpoint = exit_line_shape.interpolate(0.5, normalized=True)
-                    if corridor_shape.distance(midpoint) > 0.08:
+                    if turn_zone_shape.distance(midpoint) > 0.08:
                         issues.append(
                             _issue(
                                 level="warning",
-                                code="EXIT_LINE_FAR_FROM_PATH",
-                                message=f"Làn {lane.lane_id} - {maneuver}: exit line nằm xa corridor/path.",
+                                code="EXIT_LINE_FAR_FROM_TURN_ZONE",
+                                message=f"Làn {lane.lane_id} - {maneuver}: exit line nằm xa turn zone.",
                                 lane_id=lane.lane_id,
                                 maneuver=maneuver,
-                                suggestion="Đặt exit line gần điểm xe rời nhánh và ổn định hướng.",
+                                suggestion="Đặt exit line gần turn zone và nhánh rời để tăng độ chắc chắn.",
                             )
                         )
 
@@ -408,25 +369,27 @@ def validate_lane_geometry(lane_config: CameraLaneConfig) -> list[dict[str, Any]
                 )
 
             # U-turn sanity: cần dấu hiệu đảo hướng rõ ràng.
-            if maneuver == "u_turn" and movement_path and len(movement_path) >= 2:
+            if maneuver == "u_turn" and turn_zone and len(turn_zone) >= 3:
                 lane_dir = lane_direction_vectors.get(lane.lane_id)
-                path_dir = _normalize_vector(
+                lane_center = _polygon_centroid(lane_shape)
+                turn_zone_center = _polygon_centroid(turn_zone_shape) if turn_zone_shape is not None else _centroid(turn_zone)
+                zone_dir = _normalize_vector(
                     (
-                        float(movement_path[-1][0]) - float(movement_path[0][0]),
-                        float(movement_path[-1][1]) - float(movement_path[0][1]),
+                        float(turn_zone_center[0]) - float(lane_center[0]),
+                        float(turn_zone_center[1]) - float(lane_center[1]),
                     )
                 )
-                if lane_dir is not None and path_dir is not None:
-                    dot = (lane_dir[0] * path_dir[0]) + (lane_dir[1] * path_dir[1])
+                if lane_dir is not None and zone_dir is not None:
+                    dot = (lane_dir[0] * zone_dir[0]) + (lane_dir[1] * zone_dir[1])
                     if dot > -0.15:
                         issues.append(
                             _issue(
                                 level="warning",
-                                code="UTURN_PATH_NOT_OPPOSITE",
-                                message=f"Làn {lane.lane_id}: u_turn path chưa thể hiện rõ hướng đảo chiều.",
+                                code="UTURN_ZONE_NOT_OPPOSITE",
+                                message=f"Làn {lane.lane_id}: u_turn zone chưa thể hiện rõ hướng đảo chiều.",
                                 lane_id=lane.lane_id,
                                 maneuver=maneuver,
-                                suggestion="Kéo u_turn path quay về hướng gần đối diện hướng vào.",
+                                suggestion="Dời u_turn zone về vùng thể hiện rõ quỹ đạo đảo chiều.",
                             )
                         )
                 if not (exit_line or exit_zone):
@@ -441,15 +404,15 @@ def validate_lane_geometry(lane_config: CameraLaneConfig) -> list[dict[str, Any]
                         )
                     )
 
-    # Corridor overlap ambiguity checks per lane.
-    corridors_by_lane: dict[int, dict[str, Polygon]] = {}
-    for (lane_id, maneuver), shape in lane_maneuver_corridors.items():
-        corridors_by_lane.setdefault(lane_id, {})[maneuver] = shape
+    # Turn zone overlap ambiguity checks per lane.
+    turn_zones_by_lane: dict[int, dict[str, Polygon]] = {}
+    for (lane_id, maneuver), shape in lane_maneuver_turn_zones.items():
+        turn_zones_by_lane.setdefault(lane_id, {})[maneuver] = shape
 
-    for lane_id, lane_corridors in corridors_by_lane.items():
-        for maneuver_a, maneuver_b in combinations(sorted(lane_corridors.keys()), 2):
-            shape_a = lane_corridors[maneuver_a]
-            shape_b = lane_corridors[maneuver_b]
+    for lane_id, lane_turn_zones in turn_zones_by_lane.items():
+        for maneuver_a, maneuver_b in combinations(sorted(lane_turn_zones.keys()), 2):
+            shape_a = lane_turn_zones[maneuver_a]
+            shape_b = lane_turn_zones[maneuver_b]
             if shape_a.is_empty or shape_b.is_empty:
                 continue
             overlap_ratio = _safe_overlap_ratio(shape_a, shape_b)
@@ -457,10 +420,10 @@ def validate_lane_geometry(lane_config: CameraLaneConfig) -> list[dict[str, Any]
                 issues.append(
                     _issue(
                         level="warning",
-                        code="PATH_OVERLAP_AMBIGUOUS",
-                        message=f"Làn {lane_id}: '{maneuver_a}' và '{maneuver_b}' overlap mạnh, dễ ambiguity.",
+                        code="TURN_ZONE_OVERLAP_AMBIGUOUS",
+                        message=f"Làn {lane_id}: '{maneuver_a}' và '{maneuver_b}' overlap turn zone mạnh, dễ ambiguity.",
                         lane_id=lane_id,
-                        suggestion="Tách movement path hoặc thêm exit line riêng cho từng maneuver.",
+                        suggestion="Tách turn zone hoặc thêm exit line riêng cho từng maneuver.",
                     )
                 )
             if "u_turn" in {maneuver_a, maneuver_b} and overlap_ratio >= 0.20:
@@ -468,13 +431,13 @@ def validate_lane_geometry(lane_config: CameraLaneConfig) -> list[dict[str, Any]
                 issues.append(
                     _issue(
                         level="warning",
-                        code="UTURN_OVERLAP_HIGH",
-                        message=f"Làn {lane_id}: u_turn overlap cao với '{other}'.",
-                        lane_id=lane_id,
-                        maneuver="u_turn",
-                        suggestion="Điều chỉnh u_turn path tách rõ khỏi left/right.",
+                            code="UTURN_OVERLAP_HIGH",
+                            message=f"Làn {lane_id}: u_turn overlap cao với '{other}'.",
+                            lane_id=lane_id,
+                            maneuver="u_turn",
+                            suggestion="Điều chỉnh u_turn turn zone tách rõ khỏi left/right.",
+                        )
                     )
-                )
 
     level_order = {"error": 0, "warning": 1, "info": 2}
     issues.sort(key=lambda item: (level_order.get(str(item.get("level")), 99), str(item.get("code", "")), str(item.get("message", ""))))
@@ -521,6 +484,22 @@ def _polyline_length(points: list[list[float]]) -> float:
         x2, y2 = points[idx]
         total += hypot(float(x2) - float(x1), float(y2) - float(y1))
     return float(total)
+
+
+def _centroid(points: list[list[float]]) -> tuple[float, float]:
+    if not points:
+        return (0.0, 0.0)
+    sx = sum(float(point[0]) for point in points)
+    sy = sum(float(point[1]) for point in points)
+    size = max(len(points), 1)
+    return (sx / size, sy / size)
+
+
+def _polygon_centroid(shape: Optional[Polygon]) -> tuple[float, float]:
+    if shape is None or shape.is_empty:
+        return (0.0, 0.0)
+    center = shape.centroid
+    return (float(center.x), float(center.y))
 
 
 def _normalize_vector(vector: tuple[float, float]) -> Optional[tuple[float, float]]:

@@ -36,7 +36,7 @@ class TurnEvidence:
     score: float = 0.0
     first_seen_ts: Optional[datetime] = None
     last_seen_ts: Optional[datetime] = None
-    corridor_hits: int = 0
+    turn_zone_hits: int = 0
     exit_zone_hits: int = 0
     exit_line_hits: int = 0
     heading_support_hits: int = 0
@@ -166,7 +166,7 @@ class ViolationLogic:
         opposite_direction_cos_threshold: float = -0.3,
         evidence_decay_per_frame: float = 0.18,
         evidence_score_cap: float = 30.0,
-        evidence_weight_corridor: float = 2.1,
+        evidence_weight_turn_zone: float = 2.1,
         evidence_weight_exit_zone: float = 4.1,
         evidence_weight_exit_line: float = 5.2,
         evidence_weight_heading_support: float = 1.3,
@@ -176,7 +176,7 @@ class ViolationLogic:
         evidence_penalty_no_signal: float = 0.35,
         evidence_temporal_hits_min: int = 2,
         evidence_strong_exit_min_temporal_hits: int = 2,
-        evidence_strong_exit_min_corridor_hits: int = 2,
+        evidence_strong_exit_min_turn_zone_hits: int = 2,
         threshold_turn_score: float = 4.2,
         threshold_turn_score_with_exit: float = 4.2,
         threshold_u_turn_score: float = 7.2,
@@ -203,9 +203,9 @@ class ViolationLogic:
             lp.lane_id: PreparedLine.from_points(lp.commit_line) if lp.commit_line else None
             for lp in lane_polygons
         }
-        self._lane_turn_corridors = self._build_lane_zone_collection(
+        self._lane_turn_zones = self._build_lane_zone_collection(
             lane_polygons=lane_polygons,
-            geometry_field="turn_corridor",
+            geometry_field="turn_zone",
         )
         self._lane_exit_zones = self._build_lane_zone_collection(
             lane_polygons=lane_polygons,
@@ -250,7 +250,7 @@ class ViolationLogic:
         self._opposite_direction_cos_threshold = float(opposite_direction_cos_threshold)
         self._evidence_decay_per_frame = float(evidence_decay_per_frame)
         self._evidence_score_cap = max(float(evidence_score_cap), 0.0)
-        self._evidence_weight_corridor = float(evidence_weight_corridor)
+        self._evidence_weight_turn_zone = float(evidence_weight_turn_zone)
         self._evidence_weight_exit_zone = float(evidence_weight_exit_zone)
         self._evidence_weight_exit_line = float(evidence_weight_exit_line)
         self._evidence_weight_heading_support = float(evidence_weight_heading_support)
@@ -260,7 +260,7 @@ class ViolationLogic:
         self._evidence_penalty_no_signal = float(evidence_penalty_no_signal)
         self._evidence_temporal_hits_min = max(int(evidence_temporal_hits_min), 1)
         self._evidence_strong_exit_min_temporal_hits = max(int(evidence_strong_exit_min_temporal_hits), 1)
-        self._evidence_strong_exit_min_corridor_hits = max(int(evidence_strong_exit_min_corridor_hits), 1)
+        self._evidence_strong_exit_min_turn_zone_hits = max(int(evidence_strong_exit_min_turn_zone_hits), 1)
         self._turn_score_threshold = float(threshold_turn_score)
         self._turn_score_threshold_with_exit = float(threshold_turn_score_with_exit)
         self._u_turn_score_threshold = float(threshold_u_turn_score)
@@ -514,7 +514,7 @@ class ViolationLogic:
             self._enter_committed(st=st, turn_state=turn_state, ts=ts)
 
         # Fallback: cho phép vào pha committed nếu lane chưa cấu hình commit gate/line,
-        # nhưng đã có bằng chứng turn theo corridor/exit ngay trong lane hiện tại.
+        # nhưng đã có bằng chứng turn theo turn-zone/exit ngay trong lane hiện tại.
         if (
             turn_state.phase != "committed"
             and current_lane_id is not None
@@ -627,14 +627,14 @@ class ViolationLogic:
             )
         )
 
-        corridor_matches = set(
+        turn_zone_matches = set(
             self._match_lane_zone_collection(
-                self._lane_turn_corridors,
+                self._lane_turn_zones,
                 lane_id=source_lane_id,
                 sample=sample,
             )
         )
-        if not (exit_line_matches or exit_zone_matches or corridor_matches or turn_state.evidences):
+        if not (exit_line_matches or exit_zone_matches or turn_zone_matches or turn_state.evidences):
             return None
 
         self._decay_turn_evidence(turn_state=turn_state, ts=ts)
@@ -643,7 +643,7 @@ class ViolationLogic:
             set(turn_state.evidences)
             | exit_line_matches
             | exit_zone_matches
-            | corridor_matches
+            | turn_zone_matches
             | self._maneuver_set_for_lane(source_lane_id=source_lane_id)
         )
         maneuvers_to_score = {m for m in maneuvers_to_score if m}
@@ -666,7 +666,7 @@ class ViolationLogic:
                 motion=motion,
                 turn_state=turn_state,
                 ts=ts,
-                corridor_matches=corridor_matches,
+                turn_zone_matches=turn_zone_matches,
                 exit_zone_matches=exit_zone_matches,
                 exit_line_matches=exit_line_matches,
             )
@@ -724,17 +724,17 @@ class ViolationLogic:
         motion: MotionFeatures,
         turn_state: TurnState,
         ts: datetime,
-        corridor_matches: set[str],
+        turn_zone_matches: set[str],
         exit_zone_matches: set[str],
         exit_line_matches: set[str],
     ) -> float:
         frame_score = 0.0
         signal_hit = False
 
-        if maneuver in corridor_matches:
-            evidence.corridor_hits += 1
+        if maneuver in turn_zone_matches:
+            evidence.turn_zone_hits += 1
             signal_hit = True
-            frame_score += self._evidence_weight_corridor
+            frame_score += self._evidence_weight_turn_zone
         if maneuver in exit_zone_matches:
             evidence.exit_zone_hits += 1
             signal_hit = True
@@ -788,7 +788,7 @@ class ViolationLogic:
     ) -> bool:
         evidence.last_reject_reason = None
         has_path_evidence = (
-            evidence.corridor_hits > 0
+            evidence.turn_zone_hits > 0
             or evidence.exit_zone_hits > 0
             or evidence.exit_line_hits > 0
         )
@@ -817,10 +817,10 @@ class ViolationLogic:
                     evidence=evidence,
                     reason="u_turn_curvature_too_low",
                 )
-            if not strong_exit and evidence.corridor_hits < self._turn_region_min_hits:
+            if not strong_exit and evidence.turn_zone_hits < self._turn_region_min_hits:
                 return self._reject_evidence(
                     evidence=evidence,
-                    reason="u_turn_corridor_support_too_low",
+                    reason="u_turn_turn_zone_support_too_low",
                 )
             score_threshold = (
                 self._u_turn_score_threshold_with_exit
@@ -843,10 +843,10 @@ class ViolationLogic:
                     evidence=evidence,
                     reason="straight_heading_not_supported",
                 )
-            if not strong_exit and evidence.corridor_hits < self._turn_region_min_hits:
+            if not strong_exit and evidence.turn_zone_hits < self._turn_region_min_hits:
                 return self._reject_evidence(
                     evidence=evidence,
-                    reason="straight_corridor_support_too_low",
+                    reason="straight_turn_zone_support_too_low",
                 )
             return self._confirm_with_threshold(
                 evidence=evidence,
@@ -858,7 +858,7 @@ class ViolationLogic:
             if (
                 evidence.heading_support_hits <= 0
                 and not strong_exit
-                and evidence.corridor_hits < self._turn_region_min_hits
+                and evidence.turn_zone_hits < self._turn_region_min_hits
             ):
                 return self._reject_evidence(
                     evidence=evidence,
@@ -872,16 +872,16 @@ class ViolationLogic:
             if (
                 strong_exit
                 and evidence.temporal_hits < self._evidence_strong_exit_min_temporal_hits
-                and evidence.corridor_hits < self._evidence_strong_exit_min_corridor_hits
+                and evidence.turn_zone_hits < self._evidence_strong_exit_min_turn_zone_hits
             ):
                 return self._reject_evidence(
                     evidence=evidence,
                     reason=f"{maneuver}_weak_exit_without_temporal_support",
                 )
-            if not strong_exit and evidence.corridor_hits < self._turn_region_min_hits:
+            if not strong_exit and evidence.turn_zone_hits < self._turn_region_min_hits:
                 return self._reject_evidence(
                     evidence=evidence,
-                    reason=f"{maneuver}_corridor_support_too_low",
+                    reason=f"{maneuver}_turn_zone_support_too_low",
                 )
             score_threshold = (
                 self._turn_score_threshold_with_exit
@@ -945,7 +945,7 @@ class ViolationLogic:
             "source_lane_id": source_lane_id,
             "maneuver": maneuver,
             "score": round(float(evidence.score), 3),
-            "corridor_hits": int(evidence.corridor_hits),
+            "turn_zone_hits": int(evidence.turn_zone_hits),
             "exit_zone_hits": int(evidence.exit_zone_hits),
             "exit_line_hits": int(evidence.exit_line_hits),
             "heading_support_hits": int(evidence.heading_support_hits),
@@ -1152,7 +1152,7 @@ class ViolationLogic:
             return True
         if self._match_lane_zone_collection(self._lane_exit_zones, lane_id=lane_id, sample=sample):
             return True
-        if self._match_lane_zone_collection(self._lane_turn_corridors, lane_id=lane_id, sample=sample):
+        if self._match_lane_zone_collection(self._lane_turn_zones, lane_id=lane_id, sample=sample):
             return True
         return False
 
@@ -1660,13 +1660,9 @@ class ViolationLogic:
                 if exit_zone:
                     lane_anchors[maneuver] = self._centroid_of_points(exit_zone)
                     continue
-                corridor = self._extract_maneuver_points(maneuver_cfg=maneuver_cfg, field="turn_corridor")
-                if corridor:
-                    lane_anchors[maneuver] = self._centroid_of_points(corridor)
-                    continue
-                movement_path = self._extract_maneuver_points(maneuver_cfg=maneuver_cfg, field="movement_path")
-                if movement_path:
-                    lane_anchors[maneuver] = movement_path[-1]
+                turn_zone = self._extract_maneuver_points(maneuver_cfg=maneuver_cfg, field="turn_zone")
+                if turn_zone:
+                    lane_anchors[maneuver] = self._centroid_of_points(turn_zone)
             if lane_anchors:
                 anchors_by_lane[lane.lane_id] = lane_anchors
         return anchors_by_lane
@@ -1774,3 +1770,4 @@ class ViolationLogic:
         self._direction_logic.prune(current_ts=current_ts, max_age_s=max_age_s)
         for vid in to_delete:
             del self._vehicle_states[vid]
+

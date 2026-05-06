@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Any, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
-from shapely.geometry import LineString, MultiPolygon, Polygon
 
 from app.schemas.camera import CameraConfig
 
@@ -13,7 +12,6 @@ DEFAULT_DETECTOR_ALLOWED_CLASSES = ("motorcycle", "car", "truck", "bus")
 ALLOWED_VEHICLE_TYPES = set(DEFAULT_DETECTOR_ALLOWED_CLASSES)
 ALLOWED_MANEUVERS = {"straight", "left", "right", "u_turn"}
 MANEUVER_ORDER = ("straight", "right", "left", "u_turn")
-CORRIDOR_WIDTH_PRESETS = {"narrow", "normal", "wide"}
 
 
 def _validate_polygon_points(value: list[list[float]], *, field_name: str) -> list[list[float]]:
@@ -67,78 +65,6 @@ def _validate_polyline_points(value: list[list[float]], *, field_name: str) -> l
         if not (0.0 <= x <= 1.0 and 0.0 <= y <= 1.0):
             raise ValueError(f"{field_name} points must be normalized to [0, 1]")
     return value
-
-
-def _normalize_corridor_preset(value: Optional[str]) -> str:
-    preset = str(value or "normal").strip().lower()
-    if preset not in CORRIDOR_WIDTH_PRESETS:
-        raise ValueError(f"unsupported corridor preset: {preset}")
-    return preset
-
-
-def _default_corridor_width_px(*, maneuver: str, preset: str) -> int:
-    base_by_maneuver = {
-        "straight": 72.0,
-        "left": 82.0,
-        "right": 82.0,
-        "u_turn": 104.0,
-    }
-    factor_by_preset = {"narrow": 0.78, "normal": 1.0, "wide": 1.32}
-    base = base_by_maneuver.get(maneuver, 82.0)
-    factor = factor_by_preset.get(preset, 1.0)
-    return max(int(round(base * factor)), 16)
-
-
-def _safe_point_pair(point: list[float]) -> list[float]:
-    x = float(point[0])
-    y = float(point[1])
-    x = min(max(x, 0.0), 1.0)
-    y = min(max(y, 0.0), 1.0)
-    return [x, y]
-
-
-def _largest_polygon(shape: Polygon | MultiPolygon) -> Optional[Polygon]:
-    if isinstance(shape, Polygon):
-        return shape
-    if isinstance(shape, MultiPolygon):
-        polygons = list(shape.geoms)
-        if not polygons:
-            return None
-        polygons.sort(key=lambda item: item.area, reverse=True)
-        return polygons[0]
-    return None
-
-
-def _build_turn_corridor_from_movement_path(
-    *,
-    movement_path: list[list[float]],
-    corridor_width_px: int,
-    frame_width: int,
-    frame_height: int,
-) -> Optional[list[list[float]]]:
-    if len(movement_path) < 2:
-        return None
-    px_path = denormalize_polygon(movement_path, frame_width, frame_height)
-    line = LineString([(float(x), float(y)) for x, y in px_path])
-    if line.length <= 1e-6:
-        return None
-
-    width_px = max(int(corridor_width_px), 1)
-    buffered = line.buffer(width_px / 2.0, cap_style=2, join_style=2)
-    polygon = _largest_polygon(buffered)
-    if polygon is None or polygon.is_empty:
-        return None
-
-    coords = list(polygon.exterior.coords)
-    if len(coords) <= 3:
-        return None
-    if coords and coords[0] == coords[-1]:
-        coords = coords[:-1]
-    normalized = normalize_polygon([[float(x), float(y)] for x, y in coords], frame_width, frame_height)
-    clipped = [_safe_point_pair(point) for point in normalized]
-    if len(clipped) < 3:
-        return None
-    return clipped
 
 
 def _normalize_allowed_maneuvers(value: Optional[list[str]]) -> Optional[list[str]]:
@@ -217,7 +143,7 @@ class TurnDetectionTrajectoryConfig(BaseModel):
 class EvidenceFusionTurnScoringConfig(BaseModel):
     decay_per_frame: float = 0.18
     score_cap: float = 30.0
-    corridor_hit_weight: float = 2.1
+    turn_zone_hit_weight: float = 2.1
     exit_zone_hit_weight: float = 4.1
     exit_line_hit_weight: float = 5.2
     heading_support_weight: float = 1.3
@@ -227,7 +153,7 @@ class EvidenceFusionTurnScoringConfig(BaseModel):
     no_signal_penalty: float = 0.35
     temporal_hits_min: int = 2
     strong_exit_min_temporal_hits: int = 2
-    strong_exit_min_corridor_hits: int = 2
+    strong_exit_min_turn_zone_hits: int = 2
     threshold_turn: float = 4.2
     threshold_turn_with_exit: float = 4.2
     threshold_u_turn: float = 7.2
@@ -317,23 +243,11 @@ class LicensePlateConfig(BaseModel):
 class ManeuverConfig(BaseModel):
     enabled: bool = True
     allowed: bool = False
-    movement_path: Optional[list[list[float]]] = None
-    corridor_width_px: Optional[int] = None
-    corridor_preset: str = "normal"
-    # `turn_corridor` là hình học nội bộ để runtime check nhanh.
-    # Nếu có `movement_path`, corridor sẽ được dựng tự động từ path + corridor_width.
-    turn_corridor: Optional[list[list[float]]] = None
+    turn_zone: Optional[list[list[float]]] = None
     exit_line: Optional[list[list[float]]] = None
     exit_zone: Optional[list[list[float]]] = None
 
-    @field_validator("movement_path")
-    @classmethod
-    def validate_movement_path(cls, value: Optional[list[list[float]]]) -> Optional[list[list[float]]]:
-        if value is None:
-            return value
-        return _validate_polyline_points(value, field_name="movement_path")
-
-    @field_validator("turn_corridor", "exit_zone")
+    @field_validator("turn_zone", "exit_zone")
     @classmethod
     def validate_optional_polygon(cls, value: Optional[list[list[float]]], info) -> Optional[list[list[float]]]:
         if value is None:
@@ -347,28 +261,11 @@ class ManeuverConfig(BaseModel):
             return value
         return _validate_line_points(value, field_name="exit_line")
 
-    @field_validator("corridor_width_px")
-    @classmethod
-    def validate_corridor_width(cls, value: Optional[int]) -> Optional[int]:
-        if value is None:
-            return value
-        if int(value) <= 0:
-            raise ValueError("corridor_width_px must be > 0")
-        return int(value)
-
-    @field_validator("corridor_preset")
-    @classmethod
-    def validate_corridor_preset(cls, value: str) -> str:
-        return _normalize_corridor_preset(value)
-
 
 class RuntimeManeuverConfig(BaseModel):
     enabled: bool = True
     allowed: bool = False
-    movement_path: Optional[list[list[float]]] = None
-    corridor_width_px: Optional[int] = None
-    corridor_preset: str = "normal"
-    turn_corridor: Optional[list[list[float]]] = None
+    turn_zone: Optional[list[list[float]]] = None
     exit_line: Optional[list[list[float]]] = None
     exit_zone: Optional[list[list[float]]] = None
 
@@ -532,13 +429,10 @@ class LanePolygon(BaseModel):
             cfg = self.maneuvers.get(maneuver)
             if cfg is None:
                 continue
-            width = cfg.corridor_width_px
-            if width is None:
-                width = _default_corridor_width_px(maneuver=maneuver, preset=cfg.corridor_preset)
-            updates = {"corridor_width_px": int(width)}
+            updates: dict[str, Any] = {}
             if not bool(cfg.enabled):
                 updates["allowed"] = False
-            normalized[maneuver] = cfg.model_copy(update=updates)
+            normalized[maneuver] = cfg if not updates else cfg.model_copy(update=updates)
         if normalized:
             self.maneuvers = normalized
 
@@ -725,25 +619,9 @@ def _normalize_maneuver_config_payload(
     frame_width: int,
     frame_height: int,
 ) -> dict[str, Any]:
-    preset = _normalize_corridor_preset(raw_config.get("corridor_preset"))
-    corridor_width_px = raw_config.get("corridor_width_px")
-    if corridor_width_px is None:
-        corridor_width_px = _default_corridor_width_px(maneuver=maneuver, preset=preset)
-    corridor_width_px = max(int(corridor_width_px), 1)
+    del maneuver  # maneuver được giữ để tương thích chữ ký gọi hiện tại.
 
-    movement_path = normalize_optional_polyline(
-        raw_config.get("movement_path"),
-        frame_width,
-        frame_height,
-    )
-    turn_corridor = None
-    if movement_path:
-        turn_corridor = _build_turn_corridor_from_movement_path(
-            movement_path=movement_path,
-            corridor_width_px=corridor_width_px,
-            frame_width=frame_width,
-            frame_height=frame_height,
-        )
+    turn_zone = normalize_optional_polygon(raw_config.get("turn_zone"), frame_width, frame_height)
 
     exit_zone = normalize_optional_polygon(raw_config.get("exit_zone"), frame_width, frame_height)
 
@@ -755,10 +633,7 @@ def _normalize_maneuver_config_payload(
     return {
         "enabled": enabled,
         "allowed": allowed,
-        "movement_path": movement_path,
-        "corridor_width_px": corridor_width_px,
-        "corridor_preset": preset,
-        "turn_corridor": turn_corridor,
+        "turn_zone": turn_zone,
         "exit_zone": exit_zone,
         "exit_line": exit_line,
     }
@@ -864,15 +739,8 @@ def denormalize_lane_config(lane_config: CameraLaneConfig) -> RuntimeCameraLaneC
                         maneuver: {
                             "enabled": cfg.enabled,
                             "allowed": cfg.allowed,
-                            "movement_path": denormalize_optional_polygon(
-                                cfg.movement_path,
-                                frame_width,
-                                frame_height,
-                            ),
-                            "corridor_width_px": cfg.corridor_width_px,
-                            "corridor_preset": cfg.corridor_preset,
-                            "turn_corridor": denormalize_optional_polygon(
-                                cfg.turn_corridor,
+                            "turn_zone": denormalize_optional_polygon(
+                                cfg.turn_zone,
                                 frame_width,
                                 frame_height,
                             ),
@@ -974,10 +842,8 @@ def _compact_lane_config_for_storage(lane_config: CameraLaneConfig) -> dict[str,
                 "enabled": bool(cfg.enabled),
                 "allowed": bool(cfg.allowed),
             }
-            if cfg.movement_path:
-                compact["movement_path"] = cfg.movement_path
-            if cfg.corridor_width_px is not None:
-                compact["corridor_width_px"] = int(cfg.corridor_width_px)
+            if cfg.turn_zone:
+                compact["turn_zone"] = cfg.turn_zone
             if cfg.exit_line:
                 compact["exit_line"] = cfg.exit_line
             if cfg.exit_zone:

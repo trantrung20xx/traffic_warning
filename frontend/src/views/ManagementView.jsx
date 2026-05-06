@@ -13,15 +13,11 @@ import {
 	updateCamera,
 } from "../api";
 import {
-	CORRIDOR_WIDTH_MAX_PX,
-	CORRIDOR_WIDTH_MIN_PX,
-	CORRIDOR_WIDTH_STEP_PX,
 	MANEUVERS,
 	VEHICLE_TYPES,
 	buildPayload,
 	createCameraDraft,
 	createEmptyLane,
-	getDefaultCorridorWidthPx,
 	getEditTargetGeometryNoun,
 	getEditTargetLabel,
 	getEditTargetMinimumPoints,
@@ -30,7 +26,6 @@ import {
 	getVehicleTypeLabel,
 	isLineEditTarget,
 	isPolygonEditTarget,
-	normalizeCorridorWidthPx,
 	normalizeDirectionRuleConfig,
 	normalizeCameraDetail,
 	polygonSelfIntersects,
@@ -152,29 +147,26 @@ const VALIDATION_MESSAGE_BY_CODE = {
 	ALLOWED_MANEUVERS_MISMATCH:
 		"Danh sách hướng được phép chưa khớp với các công tắc của từng hướng.",
 	MANEUVER_ENABLED_BUT_MISSING_GEOMETRY:
-		"Đã bật nhận diện hướng này nhưng chưa vẽ đủ đường xe đi hoặc vùng/vạch xác nhận đầu ra.",
+		"Đã bật nhận diện hướng này nhưng chưa vẽ đủ vùng rẽ hoặc vùng/vạch xác nhận đầu ra.",
 	MANEUVER_DISABLED_WITH_GEOMETRY: "Hướng này đang tắt nhưng vẫn còn hình đã vẽ.",
 	MANEUVER_ALLOWED_BUT_DISABLED:
 		"Hướng này đang được cho phép nhưng nhận diện đang tắt.",
-	MOVEMENT_PATH_TOO_SHORT:
-		"Đường xe đi quá ngắn, hệ thống khó hiểu xe đang đi hướng nào.",
-	MOVEMENT_PATH_START_FAR_FROM_LANE: "Điểm bắt đầu đường xe đi đang xa làn nguồn.",
-	TURN_CORRIDOR_INVALID: "Vùng theo dõi hướng rẽ quá nhỏ hoặc chưa hợp lệ.",
-	TURN_CORRIDOR_FAR_FROM_LANE: "Vùng theo dõi hướng rẽ đang xa làn nguồn.",
+	TURN_ZONE_INVALID: "Vùng rẽ quá nhỏ hoặc chưa hợp lệ.",
+	TURN_ZONE_FAR_FROM_LANE: "Vùng rẽ đang xa làn nguồn.",
 	EXIT_ZONE_INVALID: "Vùng xác nhận đầu ra quá nhỏ hoặc chưa hợp lệ.",
-	EXIT_ZONE_FAR_FROM_PATH: "Vùng xác nhận đầu ra đang xa đường xe đi.",
+	EXIT_ZONE_FAR_FROM_TURN_ZONE: "Vùng xác nhận đầu ra đang xa vùng rẽ.",
 	EXIT_LINE_INVALID: "Vạch xác nhận đầu ra chưa hợp lệ.",
-	EXIT_LINE_FAR_FROM_PATH: "Vạch xác nhận đầu ra đang xa đường xe đi.",
+	EXIT_LINE_FAR_FROM_TURN_ZONE: "Vạch xác nhận đầu ra đang xa vùng rẽ.",
 	MISSING_EXIT_CONFIRM: "Chưa có vạch hoặc vùng xác nhận đầu ra.",
 	DIRECTION_PATH_MISSING: "Đã bật kiểm tra hướng nhưng chưa có đường hướng đúng chiều.",
 	DIRECTION_PATH_TOO_SHORT: "Đường hướng đúng chiều quá ngắn.",
 	DIRECTION_CHECK_ZONE_INVALID: "Vùng kiểm tra hướng chưa hợp lệ.",
 	DIRECTION_CHECK_ZONE_MISALIGNED: "Vùng kiểm tra hướng đang lệch khỏi làn.",
-	UTURN_PATH_NOT_OPPOSITE: "Đường quay đầu chưa thể hiện rõ hướng quay ngược lại.",
+	UTURN_ZONE_NOT_OPPOSITE: "Vùng quay đầu chưa thể hiện rõ hướng quay ngược lại.",
 	UTURN_MISSING_EXIT_CONFIRM: "Quay đầu chưa có vạch/vùng xác nhận đầu ra riêng.",
-	PATH_OVERLAP_AMBIGUOUS:
-		"Đường đi của nhiều hướng trong cùng làn đang chồng lên nhau nhiều, dễ bị nhận nhầm.",
-	UTURN_OVERLAP_HIGH: "Đường quay đầu đang chồng nhiều với hướng khác.",
+	TURN_ZONE_OVERLAP_AMBIGUOUS:
+		"Vùng rẽ của nhiều hướng trong cùng làn đang chồng lên nhau nhiều, dễ bị nhận nhầm.",
+	UTURN_OVERLAP_HIGH: "Vùng quay đầu đang chồng nhiều với hướng khác.",
 };
 
 const VALIDATION_SUGGESTION_BY_CODE = {
@@ -191,40 +183,35 @@ const VALIDATION_SUGGESTION_BY_CODE = {
 	ALLOWED_MANEUVERS_MISMATCH:
 		"Kiểm tra lại các công tắc bật nhận diện và cho phép trong từng hướng.",
 	MANEUVER_ENABLED_BUT_MISSING_GEOMETRY:
-		"Vẽ đường xe đi và thêm ít nhất một vạch hoặc vùng xác nhận đầu ra.",
+		"Vẽ vùng rẽ và thêm ít nhất một vạch hoặc vùng xác nhận đầu ra.",
 	MANEUVER_DISABLED_WITH_GEOMETRY:
 		"Bật lại hướng này nếu còn dùng, hoặc xóa các hình đã vẽ nếu không dùng nữa.",
 	MANEUVER_ALLOWED_BUT_DISABLED:
 		"Bật nhận diện cho hướng này để hệ thống theo dõi đúng.",
-	MOVEMENT_PATH_TOO_SHORT: "Kéo dài đường từ trước điểm bắt đầu rẽ đến nhánh xe đi ra.",
-	MOVEMENT_PATH_START_FAR_FROM_LANE: "Kéo điểm đầu đường xe đi về gần làn xe đi vào.",
-	TURN_CORRIDOR_INVALID: "Kéo dài đường xe đi hoặc tăng độ rộng vùng theo dõi.",
-	TURN_CORRIDOR_FAR_FROM_LANE: "Dịch đường xe đi gần làn nguồn và nhánh rẽ thực tế.",
+	TURN_ZONE_INVALID: "Mở rộng vùng rẽ để phủ khu vực xe đi ổn định theo hướng này.",
+	TURN_ZONE_FAR_FROM_LANE: "Dịch vùng rẽ gần làn nguồn và nhánh rẽ thực tế.",
 	EXIT_ZONE_INVALID: "Mở rộng vùng tại nơi xe đã đi ra và ổn định hướng.",
-	EXIT_ZONE_FAR_FROM_PATH: "Đặt vùng này gần cuối đường xe đi.",
+	EXIT_ZONE_FAR_FROM_TURN_ZONE: "Đặt vùng này gần vùng rẽ để tín hiệu xác nhận nhất quán.",
 	EXIT_LINE_INVALID: "Vẽ đúng 2 điểm trên nhánh xe đi ra.",
-	EXIT_LINE_FAR_FROM_PATH: "Đặt vạch gần nơi xe rời nhánh và ổn định hướng.",
+	EXIT_LINE_FAR_FROM_TURN_ZONE: "Đặt vạch gần vùng rẽ và nơi xe rời nhánh.",
 	MISSING_EXIT_CONFIRM: "Thêm một vạch hoặc vùng xác nhận để hệ thống chắc chắn hơn.",
 	DIRECTION_PATH_MISSING: "Vẽ đường polyline 2+ điểm theo hướng xe đi hợp lệ.",
 	DIRECTION_PATH_TOO_SHORT: "Kéo dài đường hướng để bao phủ đoạn xe chạy ổn định.",
 	DIRECTION_CHECK_ZONE_INVALID: "Vẽ vùng kiểm tra bằng ít nhất 3 điểm.",
 	DIRECTION_CHECK_ZONE_MISALIGNED:
 		"Đặt vùng kiểm tra nằm trong biên làn để tránh nhiễu.",
-	UTURN_PATH_NOT_OPPOSITE:
-		"Kéo điểm cuối đường quay đầu về hướng đối diện hướng đi vào.",
+	UTURN_ZONE_NOT_OPPOSITE:
+		"Dịch vùng quay đầu về khu vực thể hiện rõ xu hướng đảo chiều.",
 	UTURN_MISSING_EXIT_CONFIRM: "Thêm vạch hoặc vùng xác nhận riêng cho quay đầu.",
-	PATH_OVERLAP_AMBIGUOUS: "Tách đường đi của từng hướng hoặc thêm vạch xác nhận riêng.",
-	UTURN_OVERLAP_HIGH: "Tách rõ đường quay đầu khỏi các hướng rẽ khác.",
+	TURN_ZONE_OVERLAP_AMBIGUOUS: "Tách vùng rẽ của từng hướng hoặc thêm vạch xác nhận riêng.",
+	UTURN_OVERLAP_HIGH: "Tách rõ vùng quay đầu khỏi các hướng rẽ khác.",
 };
 
 function cleanValidationText(text) {
 	return String(text || "")
 		.replaceAll("lane polygon", "biên làn")
 		.replaceAll("polygon", "vùng")
-		.replaceAll("movement path", "đường xe đi")
-		.replaceAll("turn corridor", "vùng theo dõi hướng rẽ")
-		.replaceAll("corridor/path", "đường xe đi")
-		.replaceAll("corridor", "vùng theo dõi")
+		.replaceAll("turn zone", "vùng rẽ")
 		.replaceAll("exit geometry", "vùng/vạch xác nhận đầu ra")
 		.replaceAll("exit line/zone", "vạch/vùng xác nhận đầu ra")
 		.replaceAll("exit line", "vạch xác nhận đầu ra")
@@ -589,10 +576,6 @@ export default function ManagementView({
 	const selectedManeuverAllowed =
 		selectedManeuverEnabled && Boolean(selectedManeuverConfig?.allowed ?? false);
 	const selectedDirectionEnabled = Boolean(selectedDirectionRule.enabled);
-	const selectedCorridorWidthPx = normalizeCorridorWidthPx(
-		selectedManeuverConfig?.corridor_width_px,
-		selectedManeuver,
-	);
 
 	const selectedPoints = useMemo(() => {
 		return getTargetPoints({
@@ -693,8 +676,7 @@ export default function ManagementView({
 			const currentCfg = maneuvers[selectedManeuver] || {
 				enabled: true,
 				allowed: false,
-				movement_path: [],
-				corridor_width_px: getDefaultCorridorWidthPx(selectedManeuver),
+				turn_zone: [],
 				exit_line: [],
 				exit_zone: [],
 			};
@@ -773,7 +755,7 @@ export default function ManagementView({
 	const updateTargetGeometry = (updater) => {
 		if (!selectedLane) return;
 		if (
-			editTarget === "movement_path" ||
+			editTarget === "turn_zone" ||
 			editTarget === "exit_line" ||
 			editTarget === "exit_zone"
 		) {
@@ -784,8 +766,7 @@ export default function ManagementView({
 					const currentManeuverCfg = currentManeuvers[selectedManeuver] || {
 						enabled: true,
 						allowed: false,
-						movement_path: [],
-						corridor_width_px: getDefaultCorridorWidthPx(selectedManeuver),
+						turn_zone: [],
 						exit_line: [],
 						exit_zone: [],
 					};
@@ -868,7 +849,7 @@ export default function ManagementView({
 			entry.laneId,
 			(lane) => {
 				if (
-					entry.editTarget === "movement_path" ||
+					entry.editTarget === "turn_zone" ||
 					entry.editTarget === "exit_line" ||
 					entry.editTarget === "exit_zone"
 				) {
@@ -878,10 +859,7 @@ export default function ManagementView({
 					] || {
 						enabled: true,
 						allowed: false,
-						movement_path: [],
-						corridor_width_px: getDefaultCorridorWidthPx(
-							entry.selectedManeuver,
-						),
+						turn_zone: [],
 						exit_line: [],
 						exit_zone: [],
 					};
@@ -1743,8 +1721,8 @@ export default function ManagementView({
 														</option>
 													</optgroup>
 													<optgroup label="Theo hướng đang chọn">
-														<option value="movement_path">
-															Đường đi (movement path)
+														<option value="turn_zone">
+															Vùng rẽ (turn zone)
 														</option>
 														<option value="exit_line">
 															Vạch xác nhận đầu ra
@@ -1784,82 +1762,6 @@ export default function ManagementView({
 														</option>
 													))}
 												</select>
-											</label>
-											<label className="field corridor-width-field">
-												<span className="field-label-with-icon">
-													<AppIcon name="route" />
-													Độ rộng corridor:{" "}
-													{selectedCorridorWidthPx} px
-												</span>
-												<div className="corridor-width-control">
-													<button
-														type="button"
-														className="corridor-stepper-button"
-														onClick={() =>
-															updateSelectedManeuverConfig(
-																(cfg) => ({
-																	...cfg,
-																	corridor_width_px:
-																		normalizeCorridorWidthPx(
-																			normalizeCorridorWidthPx(
-																				cfg.corridor_width_px,
-																				selectedManeuver,
-																			) -
-																				CORRIDOR_WIDTH_STEP_PX,
-																			selectedManeuver,
-																		),
-																}),
-															)
-														}
-														aria-label="Giảm độ rộng corridor">
-														-
-													</button>
-													<input
-														type="number"
-														min={CORRIDOR_WIDTH_MIN_PX}
-														max={CORRIDOR_WIDTH_MAX_PX}
-														step={CORRIDOR_WIDTH_STEP_PX}
-														value={selectedCorridorWidthPx}
-														onChange={(event) =>
-															updateSelectedManeuverConfig(
-																(cfg) => ({
-																	...cfg,
-																	corridor_width_px:
-																		normalizeCorridorWidthPx(
-																			event.target
-																				.value,
-																			selectedManeuver,
-																		),
-																}),
-															)
-														}
-													/>
-													<span className="corridor-width-unit">
-														px
-													</span>
-													<button
-														type="button"
-														className="corridor-stepper-button"
-														onClick={() =>
-															updateSelectedManeuverConfig(
-																(cfg) => ({
-																	...cfg,
-																	corridor_width_px:
-																		normalizeCorridorWidthPx(
-																			normalizeCorridorWidthPx(
-																				cfg.corridor_width_px,
-																				selectedManeuver,
-																			) +
-																				CORRIDOR_WIDTH_STEP_PX,
-																			selectedManeuver,
-																		),
-																}),
-															)
-														}
-														aria-label="Tăng độ rộng corridor">
-														+
-													</button>
-												</div>
 											</label>
 										</div>
 
