@@ -1,18 +1,17 @@
 {
   "cameras": [
     {
-      "camera_id": "cam_03",
-      "rtsp_url": "D:\\Workspace\\DATN\\traffic_video_data\\4k\\Traffic Flow In The Highway - 4K Stock Videos ｜ NoCopyright ｜ AllVideoFree.mp4",
+      "camera_id": "cam_01",
+      "rtsp_url": "D:\\Workspace\\DATN\\traffic_video_data\\4k\\4K Road traffic video for object detection and tracking - free download now!.mp4",
       "camera_type": "roadside",
       "location": {
-        "road_name": "Ngã tư Nhổn"
+        "road_name": ""
       },
       "monitored_lanes": [
-        1,
-        2
+        1
       ],
-      "frame_width": 1920,
-      "frame_height": 1080
+      "frame_width": 1280,
+      "frame_height": 720
     }
   ]
 }

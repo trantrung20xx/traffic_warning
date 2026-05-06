@@ -410,7 +410,20 @@ class CameraManager:
             straight_score_threshold=self.cfg.evidence_fusion_turn_scoring.threshold_straight,
             trajectory_sample_inside_polygon_min_hits=self.cfg.turn_detection_trajectory.sample_inside_polygon_min_hits,
             trajectory_entry_heading_lookback_points=self.cfg.turn_detection_trajectory.entry_heading_lookback_points,
+            trajectory_entry_heading_min_displacement_px=(
+                self.cfg.turn_detection_trajectory.entry_heading_min_displacement_px
+            ),
             trajectory_heading_local_window_points=self.cfg.turn_detection_trajectory.heading_local_window_points,
+            lane_fallback_reference_sample_window=(
+                self.cfg.turn_detection_trajectory.fallback_reference.sample_window
+            ),
+            lane_fallback_reference_min_samples=self.cfg.turn_detection_trajectory.fallback_reference.min_samples,
+            lane_fallback_reference_consensus_min=self.cfg.turn_detection_trajectory.fallback_reference.consensus_min,
+            lane_fallback_reference_inlier_dot_min=self.cfg.turn_detection_trajectory.fallback_reference.inlier_dot_min,
+            lane_fallback_reference_inlier_ratio_min=(
+                self.cfg.turn_detection_trajectory.fallback_reference.inlier_ratio_min
+            ),
+            lane_fallback_reference_max_age_ms=self.cfg.turn_detection_trajectory.fallback_reference.max_age_ms,
             direction_detection_settings=DirectionDetectionSettings.from_values(
                 **self.cfg.direction_detection_defaults.model_dump()
             ),

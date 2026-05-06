@@ -62,7 +62,18 @@ def test_load_app_config_reads_grouped_settings_schema(tmp_path: Path) -> None:
             "heading": {"straight_max_deg": 30.0},
             "curvature": {"u_turn_min": 0.22},
             "opposite_direction": {"cos_threshold": -0.25},
-            "trajectory": {"sample_inside_polygon_min_hits": 3},
+            "trajectory": {
+                "sample_inside_polygon_min_hits": 3,
+                "entry_heading_min_displacement_px": 9.5,
+                "fallback_reference": {
+                    "sample_window": 28,
+                    "min_samples": 6,
+                    "consensus_min": 0.8,
+                    "inlier_dot_min": 0.62,
+                    "inlier_ratio_min": 0.82,
+                    "max_age_ms": 150000,
+                },
+            },
         },
         "evidence_fusion": {
             "line_crossing": {
@@ -142,6 +153,13 @@ def test_load_app_config_reads_grouped_settings_schema(tmp_path: Path) -> None:
     assert cfg.turn_detection_curvature.u_turn_min == 0.22
     assert cfg.turn_detection_opposite_direction.cos_threshold == -0.25
     assert cfg.turn_detection_trajectory.sample_inside_polygon_min_hits == 3
+    assert cfg.turn_detection_trajectory.entry_heading_min_displacement_px == 9.5
+    assert cfg.turn_detection_trajectory.fallback_reference.sample_window == 28
+    assert cfg.turn_detection_trajectory.fallback_reference.min_samples == 6
+    assert cfg.turn_detection_trajectory.fallback_reference.consensus_min == 0.8
+    assert cfg.turn_detection_trajectory.fallback_reference.inlier_dot_min == 0.62
+    assert cfg.turn_detection_trajectory.fallback_reference.inlier_ratio_min == 0.82
+    assert cfg.turn_detection_trajectory.fallback_reference.max_age_ms == 150000
     assert cfg.direction_detection_defaults.same_direction_cos_threshold == 0.24
     assert cfg.direction_detection_defaults.opposite_direction_cos_threshold == -0.28
     assert cfg.direction_detection_defaults.min_duration_ms == 550

@@ -134,10 +134,21 @@ class TurnDetectionOppositeDirectionConfig(BaseModel):
     cos_threshold: float = -0.3
 
 
+class TurnDetectionFallbackReferenceConfig(BaseModel):
+    sample_window: int = Field(default=32, ge=4)
+    min_samples: int = Field(default=5, ge=2)
+    consensus_min: float = Field(default=0.78, ge=0.0, le=1.0)
+    inlier_dot_min: float = Field(default=0.60, ge=-1.0, le=1.0)
+    inlier_ratio_min: float = Field(default=0.78, ge=0.0, le=1.0)
+    max_age_ms: int = Field(default=180000, ge=1000)
+
+
 class TurnDetectionTrajectoryConfig(BaseModel):
     sample_inside_polygon_min_hits: int = 2
     entry_heading_lookback_points: int = 4
+    entry_heading_min_displacement_px: float = Field(default=8.0, ge=0.1)
     heading_local_window_points: int = 3
+    fallback_reference: TurnDetectionFallbackReferenceConfig = TurnDetectionFallbackReferenceConfig()
 
 
 class EvidenceFusionTurnScoringConfig(BaseModel):
