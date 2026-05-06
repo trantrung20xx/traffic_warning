@@ -399,7 +399,7 @@ Các nhóm đang được backend load trong `load_app_config`:
 |---|---|---|
 | `database` | `path` | SQLite path cho SQLAlchemy. |
 | `camera.stream` | `rtsp_reconnect_delay_s` | Delay reconnect video source. |
-| `detection` | `weights_path`, `device`, `confidence_threshold`, `iou_threshold` | YOLO weight/device/conf/NMS IoU. |
+| `detection` | `weights_path`, `device`, `confidence_threshold`, `iou_threshold`, `allowed_classes` | YOLO weight/device/conf/NMS IoU và class được nhận diện. |
 | `tracking` | `tracker_config`, `vehicle_type_history`, `stable_track` | ByteTrack config, smoothing loại xe, stable ID rebind. |
 | `lane_assignment` | `temporal`, `overlap_preference` | Smoothing lane và giữ lane khi overlap. |
 | `wrong_lane` | `min_duration_ms` | Thời gian tối thiểu trước khi emit sai làn. |
@@ -497,7 +497,7 @@ File/class: `backend/app/vision/detector.py:YoloV8VehicleDetector`
 
 Input:
 
-- `weights_path`, `conf_threshold`, `iou_threshold`, `device`.
+- `weights_path`, `conf_threshold`, `iou_threshold`, `device`, `allowed_classes`.
 
 Xử lý:
 
@@ -506,7 +506,7 @@ Xử lý:
   - `auto`: dùng CUDA nếu `torch.cuda.is_available()`, ngược lại CPU.
   - `cuda`/`cuda:*`: yêu cầu PyTorch và CUDA khả dụng.
 - Lấy `self.model.names`.
-- Chỉ giữ COCO classes trong `ALLOWED_CLASSES = {"motorcycle","car","truck","bus"}`.
+- Chỉ giữ classes có trong `detection.allowed_classes`; mặc định là `motorcycle`, `car`, `truck`, `bus`.
 
 Output:
 
@@ -1231,7 +1231,7 @@ Hệ thống được thiết kế theo kiến trúc client-server. Backend Fast
 
 ### Thuật toán nhận diện
 
-Hệ thống dùng YOLOv8 qua thư viện Ultralytics. Model được load từ đường dẫn `detection.weights_path`, tự chọn CPU/GPU theo `detection.device`. Hệ thống chỉ giữ các lớp phương tiện `motorcycle`, `car`, `truck`, `bus`. Detection được chạy trong API `model.track`, kết hợp trực tiếp với ByteTrack.
+Hệ thống dùng YOLOv8 qua thư viện Ultralytics. Model được load từ đường dẫn `detection.weights_path`, tự chọn CPU/GPU theo `detection.device`. Hệ thống chỉ giữ các lớp có trong `detection.allowed_classes`, mặc định là `motorcycle`, `car`, `truck`, `bus`. Detection được chạy trong API `model.track`, kết hợp trực tiếp với ByteTrack.
 
 ### Thuật toán theo dõi
 

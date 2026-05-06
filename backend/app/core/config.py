@@ -4,12 +4,13 @@ import json
 from pathlib import Path
 from typing import Any, Optional
 
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from shapely.geometry import LineString, MultiPolygon, Polygon
 
 from app.schemas.camera import CameraConfig
 
-ALLOWED_VEHICLE_TYPES = {"motorcycle", "car", "truck", "bus"}
+DEFAULT_DETECTOR_ALLOWED_CLASSES = ("motorcycle", "car", "truck", "bus")
+ALLOWED_VEHICLE_TYPES = set(DEFAULT_DETECTOR_ALLOWED_CLASSES)
 ALLOWED_MANEUVERS = {"straight", "left", "right", "u_turn"}
 MANEUVER_ORDER = ("straight", "right", "left", "u_turn")
 CORRIDOR_WIDTH_PRESETS = {"narrow", "normal", "wide"}
@@ -37,6 +38,23 @@ def _validate_line_points(value: list[list[float]], *, field_name: str) -> list[
         if not (0.0 <= x <= 1.0 and 0.0 <= y <= 1.0):
             raise ValueError(f"{field_name} points must be normalized to [0, 1]")
     return value
+
+
+def _normalize_string_list(value: Any, *, field_name: str) -> list[str]:
+    raw_items = [value] if isinstance(value, str) else value
+    try:
+        iterator = iter(raw_items)
+    except TypeError:
+        iterator = iter([raw_items])
+
+    normalized: list[str] = []
+    for item in iterator:
+        text = str(item).strip()
+        if text and text not in normalized:
+            normalized.append(text)
+    if not normalized:
+        raise ValueError(f"{field_name} must contain at least one value")
+    return normalized
 
 
 def _validate_polyline_points(value: list[list[float]], *, field_name: str) -> list[list[float]]:
@@ -563,6 +581,9 @@ class AppConfig(BaseModel):
     detector_device: str = "auto"
     detector_conf_threshold: float = 0.28
     detector_iou_threshold: float = 0.7
+    detector_allowed_classes: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_DETECTOR_ALLOWED_CLASSES)
+    )
     tracker_config: str = "bytetrack.yaml"
     vehicle_type_history_window_ms: int = 4000
     vehicle_type_history_size: int = 12
@@ -611,6 +632,15 @@ class AppConfig(BaseModel):
     license_plate: LicensePlateConfig = LicensePlateConfig()
     analytics_chart: AnalyticsChartConfig = AnalyticsChartConfig()
     ui: UiConfig = UiConfig()
+
+    @field_validator("detector_allowed_classes")
+    @classmethod
+    def validate_detector_allowed_classes(cls, value: Any) -> list[str]:
+        raw_value = list(DEFAULT_DETECTOR_ALLOWED_CLASSES) if value is None else value
+        return _normalize_string_list(
+            raw_value,
+            field_name="detection.allowed_classes",
+        )
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -993,6 +1023,11 @@ def load_app_config(repo_root: Path) -> AppConfig:
         detector_device=str(_setting(settings, ("detection", "device"), "auto")),
         detector_conf_threshold=float(_setting(settings, ("detection", "confidence_threshold"), 0.28)),
         detector_iou_threshold=float(_setting(settings, ("detection", "iou_threshold"), 0.7)),
+        detector_allowed_classes=_setting(
+            settings,
+            ("detection", "allowed_classes"),
+            list(DEFAULT_DETECTOR_ALLOWED_CLASSES),
+        ),
         tracker_config=str(_setting(settings, ("tracking", "tracker_config"), "bytetrack.yaml")),
         vehicle_type_history_window_ms=int(_setting(settings, ("tracking", "vehicle_type_history", "window_ms"), 4000)),
         vehicle_type_history_size=int(_setting(settings, ("tracking", "vehicle_type_history", "size"), 12)),

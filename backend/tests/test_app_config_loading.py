@@ -29,6 +29,7 @@ def test_load_app_config_reads_grouped_settings_schema(tmp_path: Path) -> None:
             "device": "cpu",
             "confidence_threshold": 0.22,
             "iou_threshold": 0.61,
+            "allowed_classes": ["motorcycle", "car"],
         },
         "tracking": {
             "tracker_config": "bytetrack.yaml",
@@ -127,6 +128,7 @@ def test_load_app_config_reads_grouped_settings_schema(tmp_path: Path) -> None:
     assert cfg.db_path == repo_root / "config" / "test.sqlite"
     assert cfg.detector_device == "cpu"
     assert cfg.detector_conf_threshold == 0.22
+    assert cfg.detector_allowed_classes == ["motorcycle", "car"]
     assert cfg.track_push_interval_ms == 150
     assert cfg.websocket_listener_queue_maxsize == 120
     assert cfg.line_crossing_max_gap_ms == 350

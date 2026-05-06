@@ -11,7 +11,13 @@
     "weights_path": "backend/yolov8m.pt",
     "device": "auto",
     "confidence_threshold": 0.25,
-    "iou_threshold": 0.7
+    "iou_threshold": 0.7,
+    "allowed_classes": [
+      "motorcycle",
+      "car",
+      "truck",
+      "bus"
+    ]
   },
   "tracking": {
     "tracker_config": "bytetrack.yaml",

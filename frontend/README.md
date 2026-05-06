@@ -48,7 +48,8 @@ Frontend không tải/chạy model YOLO trực tiếp. Model `.pt` chạy hoàn 
 
 1. Tải model `.pt` về máy (ví dụ `backend/yolov8m.pt`).
 2. Sửa `config/settings.json` tại `detection.weights_path`.
-3. Restart backend.
+3. Sửa `detection.allowed_classes` nếu muốn bật/tắt class detector như `motorcycle`, `car`, `truck`, `bus`.
+4. Restart backend.
 
 Sau khi backend đổi model, frontend tự nhận kết quả mới qua API/WS, không cần build lại frontend.
 

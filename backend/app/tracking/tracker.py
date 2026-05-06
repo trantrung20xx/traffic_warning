@@ -33,13 +33,16 @@ class YoloByteTrackVehicleTracker:
 
     def track(self, frame_bgr: np.ndarray) -> list[Track]:
         """Chạy detector + tracker của Ultralytics và trả về danh sách track hiện tại."""
+        if not self.detector.vehicle_class_ids:
+            return []
+
         results = self.detector.model.track(
             frame_bgr,
             device=self.detector.device,
             persist=True,
             conf=self.detector.conf_threshold,
             iou=self.detector.iou_threshold,
-            classes=self.detector.vehicle_class_ids if self.detector.vehicle_class_ids else None,
+            classes=self.detector.vehicle_class_ids,
             tracker=self.tracker_config,
             verbose=False,
         )
@@ -64,7 +67,7 @@ class YoloByteTrackVehicleTracker:
             vehicle_id = int(ids[i])
             cls_id = int(cls_ids[i])
             vehicle_type = self.detector.class_names.get(cls_id, str(cls_id))
-            if vehicle_type not in self.detector.ALLOWED_CLASSES:
+            if vehicle_type not in self.detector.allowed_class_set:
                 continue
             tracks.append(
                 Track(

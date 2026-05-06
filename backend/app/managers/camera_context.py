@@ -57,6 +57,7 @@ class CameraContext:
         detector_device: str = "auto",
         detector_conf_threshold: float = 0.35,
         detector_iou_threshold: float = 0.7,
+        detector_allowed_classes: Optional[list[str]] = None,
         tracker_config: str = "bytetrack.yaml",
         vehicle_type_history_window_ms: int = 4000,
         vehicle_type_history_size: int = 12,
@@ -171,11 +172,12 @@ class CameraContext:
             device=detector_device,
             conf_threshold=detector_conf_threshold,
             iou_threshold=detector_iou_threshold,
+            allowed_classes=detector_allowed_classes,
         )
         self.tracker = YoloByteTrackVehicleTracker(self.detector, tracker_config=tracker_config)
         self.on_log(
             f"[{self.camera_id}] detector={detector_weights_path} requested_device={self.detector.requested_device} "
-            f"resolved_device={self.detector.device}"
+            f"resolved_device={self.detector.device} allowed_classes={self.detector.allowed_classes}"
         )
 
         # Logic gán làn và phát hiện vi phạm dựa trên polygon cấu hình thủ công.

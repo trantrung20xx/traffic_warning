@@ -87,7 +87,8 @@ Sửa `config/settings.json`:
     "weights_path": "backend/yolov8m.pt",
     "device": "auto",
     "confidence_threshold": 0.28,
-    "iou_threshold": 0.7
+    "iou_threshold": 0.7,
+    "allowed_classes": ["motorcycle", "car", "truck", "bus"]
   }
 }
 ```
@@ -98,6 +99,7 @@ Sửa `config/settings.json`:
 - `device`: `auto` (ưu tiên GPU nếu có), hoặc `cpu`, `cuda`, `cuda:0`.
 - `confidence_threshold`: tăng thì ít false positive hơn nhưng dễ miss vật thể nhỏ.
 - `iou_threshold`: điều khiển NMS.
+- `allowed_classes`: class YOLO được nhận diện/tracking. Xóa class khỏi danh sách để tắt nhận diện class đó.
 
 ### Cài PyTorch theo phần cứng
 
@@ -207,6 +209,7 @@ Toàn bộ tọa độ lưu theo chuẩn hóa `[0, 1]`.
 | `detection.device` | Thiết bị suy luận (`auto`, `cpu`, `cuda`, `cuda:0`, ...). |
 | `detection.confidence_threshold` | Ngưỡng confidence tối thiểu của detector. |
 | `detection.iou_threshold` | Ngưỡng IoU NMS cho detector. |
+| `detection.allowed_classes` | Danh sách class YOLO được nhận diện/tracking, mặc định `motorcycle`, `car`, `truck`, `bus`. |
 
 ### `tracking`
 

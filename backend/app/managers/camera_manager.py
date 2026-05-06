@@ -350,6 +350,7 @@ class CameraManager:
             detector_device=self.cfg.detector_device,
             detector_conf_threshold=self.cfg.detector_conf_threshold,
             detector_iou_threshold=self.cfg.detector_iou_threshold,
+            detector_allowed_classes=self.cfg.detector_allowed_classes,
             tracker_config=self.cfg.tracker_config,
             vehicle_type_history_window_ms=self.cfg.vehicle_type_history_window_ms,
             vehicle_type_history_size=self.cfg.vehicle_type_history_size,
