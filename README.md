@@ -242,7 +242,7 @@ Toàn bộ điểm hình học là `[x, y]` chuẩn hóa từ `0.0` đến `1.0`
 | `lanes[].allowed_vehicle_types` | Loại phương tiện được phép trong lane: `motorcycle`, `car`, `truck`, `bus`. |
 | `lanes[].allowed_maneuvers` | Danh sách hướng đi được phép theo lane. |
 | `lanes[].direction_rule.enabled` | Bật/tắt kiểm tra đi ngược chiều cho lane. |
-| `lanes[].direction_rule.direction_path` | Đường hướng đúng chiều, dạng polyline. |
+| `lanes[].direction_rule.direction_path` | Vector hướng đúng chiều, dạng polyline (vẽ từ đầu lane đến cuối theo chiều xe chạy hợp lệ). |
 | `lanes[].direction_rule.check_zone` | Vùng áp dụng kiểm tra hướng. |
 | `lanes[].maneuvers` | Cấu hình cho `straight`, `left`, `right`, `u_turn`. |
 

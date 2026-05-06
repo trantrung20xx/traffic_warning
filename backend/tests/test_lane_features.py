@@ -794,6 +794,168 @@ class LaneFeatureTests(unittest.TestCase):
         self.assertEqual(status, "unknown")
         self.assertIsNone(dot)
 
+    def test_turn_lane_direction_vector_prefers_direction_path(self) -> None:
+        lane_config = CameraLaneConfig.model_validate(
+            {
+                "camera_id": "cam_turn_vector_priority",
+                "frame_width": 100,
+                "frame_height": 100,
+                "lanes": [
+                    {
+                        "lane_id": 1,
+                        "polygon": [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+                        "approach_zone": [[0.40, 0.10], [0.60, 0.10], [0.60, 0.25], [0.40, 0.25]],
+                        "commit_gate": [[0.40, 0.55], [0.60, 0.55], [0.60, 0.70], [0.40, 0.70]],
+                        "allowed_maneuvers": ["right"],
+                        "allowed_lane_changes": [1],
+                        "allowed_vehicle_types": ["car"],
+                        "direction_rule": {
+                            "enabled": True,
+                            "direction_path": [[0.15, 0.60], [0.90, 0.60]],
+                        },
+                        "maneuvers": {
+                            "right": {
+                                "enabled": True,
+                                "allowed": True,
+                                "turn_zone": [[0.55, 0.74], [0.80, 0.74], [0.80, 0.92], [0.55, 0.92]],
+                            }
+                        },
+                    }
+                ],
+            }
+        )
+        runtime_lane_config = denormalize_lane_config(lane_config)
+        logic = ViolationLogic(runtime_lane_config.lanes, turn_region_min_hits=99)
+
+        lane_vec = logic._lane_direction_vectors[1]
+        self.assertTrue(lane_vec[0] > 0.98)
+        self.assertTrue(abs(lane_vec[1]) < 0.02)
+
+    def test_turn_lane_direction_vector_uses_direction_segment_near_commit(self) -> None:
+        lane_config = CameraLaneConfig.model_validate(
+            {
+                "camera_id": "cam_turn_vector_local",
+                "frame_width": 100,
+                "frame_height": 100,
+                "lanes": [
+                    {
+                        "lane_id": 1,
+                        "polygon": [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+                        "approach_zone": [[0.20, 0.10], [0.45, 0.10], [0.45, 0.24], [0.20, 0.24]],
+                        "commit_gate": [[0.82, 0.74], [0.94, 0.74], [0.94, 0.88], [0.82, 0.88]],
+                        "allowed_maneuvers": ["right"],
+                        "allowed_lane_changes": [1],
+                        "allowed_vehicle_types": ["car"],
+                        "direction_rule": {
+                            "enabled": True,
+                            "direction_path": [[0.10, 0.20], [0.90, 0.20], [0.90, 0.90]],
+                        },
+                        "maneuvers": {
+                            "right": {
+                                "enabled": True,
+                                "allowed": True,
+                                "turn_zone": [[0.78, 0.78], [0.96, 0.78], [0.96, 0.96], [0.78, 0.96]],
+                            }
+                        },
+                    }
+                ],
+            }
+        )
+        runtime_lane_config = denormalize_lane_config(lane_config)
+        logic = ViolationLogic(runtime_lane_config.lanes, turn_region_min_hits=99)
+
+        lane_vec = logic._lane_direction_vectors[1]
+        self.assertTrue(abs(lane_vec[0]) < 0.05)
+        self.assertTrue(lane_vec[1] > 0.95)
+
+    def test_turn_side_sign_flips_when_direction_path_is_reversed(self) -> None:
+        def build_logic(direction_path: list[list[float]]) -> ViolationLogic:
+            lane_config = CameraLaneConfig.model_validate(
+                {
+                    "camera_id": "cam_turn_sign",
+                    "frame_width": 100,
+                    "frame_height": 100,
+                    "lanes": [
+                        {
+                            "lane_id": 1,
+                            "polygon": [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+                            "approach_zone": [[0.40, 0.15], [0.60, 0.15], [0.60, 0.30], [0.40, 0.30]],
+                            "commit_gate": [[0.42, 0.45], [0.58, 0.45], [0.58, 0.56], [0.42, 0.56]],
+                            "allowed_maneuvers": ["right"],
+                            "allowed_lane_changes": [1],
+                            "allowed_vehicle_types": ["car"],
+                            "direction_rule": {
+                                "enabled": True,
+                                "direction_path": direction_path,
+                            },
+                            "maneuvers": {
+                                "right": {
+                                    "enabled": True,
+                                    "allowed": True,
+                                    "turn_zone": [[0.45, 0.72], [0.66, 0.72], [0.66, 0.90], [0.45, 0.90]],
+                                }
+                            },
+                        }
+                    ],
+                }
+            )
+            runtime_lane_config = denormalize_lane_config(lane_config)
+            return ViolationLogic(runtime_lane_config.lanes, turn_region_min_hits=99)
+
+        forward_logic = build_logic([[0.15, 0.55], [0.90, 0.55]])
+        reverse_logic = build_logic([[0.90, 0.55], [0.15, 0.55]])
+
+        forward_sign = forward_logic._expected_turn_side_sign(source_lane_id=1, maneuver="right")
+        reverse_sign = reverse_logic._expected_turn_side_sign(source_lane_id=1, maneuver="right")
+        self.assertIsNotNone(forward_sign)
+        self.assertIsNotNone(reverse_sign)
+        self.assertNotEqual(forward_sign, 0)
+        self.assertEqual(forward_sign, -reverse_sign)
+
+    def test_turn_lane_direction_vector_falls_back_when_direction_path_missing(self) -> None:
+        lane_config = CameraLaneConfig.model_validate(
+            {
+                "camera_id": "cam_turn_vector_fallback",
+                "frame_width": 100,
+                "frame_height": 100,
+                "lanes": [
+                    {
+                        "lane_id": 1,
+                        "polygon": [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+                        "approach_zone": [[0.40, 0.10], [0.60, 0.10], [0.60, 0.22], [0.40, 0.22]],
+                        "commit_gate": [[0.40, 0.66], [0.60, 0.66], [0.60, 0.82], [0.40, 0.82]],
+                        "allowed_maneuvers": ["straight"],
+                        "allowed_lane_changes": [1],
+                        "allowed_vehicle_types": ["car"],
+                        "direction_rule": {"enabled": True},
+                        "maneuvers": {
+                            "straight": {
+                                "enabled": True,
+                                "allowed": True,
+                                "turn_zone": [[0.42, 0.75], [0.58, 0.75], [0.58, 0.94], [0.42, 0.94]],
+                            }
+                        },
+                    }
+                ],
+            }
+        )
+        runtime_lane_config = denormalize_lane_config(lane_config)
+        logic = ViolationLogic(runtime_lane_config.lanes, turn_region_min_hits=99)
+
+        lane_vec = logic._lane_direction_vectors[1]
+        self.assertTrue(lane_vec[1] > 0.95)
+        self.assertTrue(abs(lane_vec[0]) < 0.1)
+        self.assertEqual(
+            logic.update_and_maybe_generate_violation(
+                vehicle_id=8110,
+                vehicle_type="car",
+                lane_id=1,
+                bbox_xyxy=[45, 40, 55, 56],
+                ts=datetime(2026, 5, 1, 10, 0, 0, tzinfo=timezone.utc),
+            ),
+            [],
+        )
+
     def test_overlap_prefers_current_stable_lane_when_vehicle_already_has_lane(self) -> None:
         lane_config = CameraLaneConfig.model_validate(
             {
@@ -1944,6 +2106,35 @@ class LaneFeatureTests(unittest.TestCase):
             turn_state.last_reject_reasons.get("u_turn"),
             "u_turn_heading_change_too_small",
         )
+
+    def test_geometry_validator_warns_for_direction_path_far_and_misaligned(self) -> None:
+        lane_config = CameraLaneConfig.model_validate(
+            {
+                "camera_id": "cam_direction_semantic",
+                "frame_width": 1280,
+                "frame_height": 720,
+                "lanes": [
+                    {
+                        "lane_id": 1,
+                        "polygon": [[0.05, 0.10], [0.32, 0.10], [0.32, 0.95], [0.05, 0.95]],
+                        "approach_zone": [[0.08, 0.22], [0.28, 0.22], [0.28, 0.36], [0.08, 0.36]],
+                        "commit_line": [[0.08, 0.78], [0.28, 0.78]],
+                        "allowed_maneuvers": ["straight"],
+                        "allowed_lane_changes": [1],
+                        "allowed_vehicle_types": ["car"],
+                        "direction_rule": {
+                            "enabled": True,
+                            "direction_path": [[0.82, 0.90], [0.94, 0.12]],
+                        },
+                    }
+                ],
+            }
+        )
+
+        issues = validate_lane_geometry(lane_config)
+        issue_codes = {issue["code"] for issue in issues}
+        self.assertIn("DIRECTION_PATH_FAR_FROM_LANE", issue_codes)
+        self.assertIn("DIRECTION_PATH_COMMIT_MISALIGNED", issue_codes)
 
     def test_geometry_validator_reports_semantic_issues(self) -> None:
         lane_config = CameraLaneConfig.model_validate(

@@ -191,7 +191,8 @@ const VALIDATION_SUGGESTION_BY_CODE = {
 	TURN_ZONE_INVALID: "Mở rộng vùng rẽ để phủ khu vực xe đi ổn định theo hướng này.",
 	TURN_ZONE_FAR_FROM_LANE: "Dịch vùng rẽ gần làn nguồn và nhánh rẽ thực tế.",
 	EXIT_ZONE_INVALID: "Mở rộng vùng tại nơi xe đã đi ra và ổn định hướng.",
-	EXIT_ZONE_FAR_FROM_TURN_ZONE: "Đặt vùng này gần vùng rẽ để tín hiệu xác nhận nhất quán.",
+	EXIT_ZONE_FAR_FROM_TURN_ZONE:
+		"Đặt vùng này gần vùng rẽ để tín hiệu xác nhận nhất quán.",
 	EXIT_LINE_INVALID: "Vẽ đúng 2 điểm trên nhánh xe đi ra.",
 	EXIT_LINE_FAR_FROM_TURN_ZONE: "Đặt vạch gần vùng rẽ và nơi xe rời nhánh.",
 	MISSING_EXIT_CONFIRM: "Thêm một vạch hoặc vùng xác nhận để hệ thống chắc chắn hơn.",
@@ -203,7 +204,8 @@ const VALIDATION_SUGGESTION_BY_CODE = {
 	UTURN_ZONE_NOT_OPPOSITE:
 		"Dịch vùng quay đầu về khu vực thể hiện rõ xu hướng đảo chiều.",
 	UTURN_MISSING_EXIT_CONFIRM: "Thêm vạch hoặc vùng xác nhận riêng cho quay đầu.",
-	TURN_ZONE_OVERLAP_AMBIGUOUS: "Tách vùng rẽ của từng hướng hoặc thêm vạch xác nhận riêng.",
+	TURN_ZONE_OVERLAP_AMBIGUOUS:
+		"Tách vùng rẽ của từng hướng hoặc thêm vạch xác nhận riêng.",
 	UTURN_OVERLAP_HIGH: "Tách rõ vùng quay đầu khỏi các hướng rẽ khác.",
 };
 
@@ -1703,32 +1705,32 @@ export default function ManagementView({
 													onChange={(event) =>
 														setEditTarget(event.target.value)
 													}>
-													<optgroup label="Theo từng làn">
+													<optgroup label="Cấu hình làn">
 														<option value="lane_polygon">
-															Biên làn xe
+															Làn đường
 														</option>
 														<option value="approach_zone">
-															Vùng chuẩn bị rẽ
+															Vùng khóa làn
 														</option>
 														<option value="commit_line">
-															Vạch bắt đầu rẽ
+															Vạch chốt hướng
 														</option>
 														<option value="direction_path">
-															Hướng đúng chiều
+															Chiều xe đi
 														</option>
 														<option value="direction_check_zone">
-															Vùng kiểm tra hướng
+															Vùng theo dõi hướng
 														</option>
 													</optgroup>
-													<optgroup label="Theo hướng đang chọn">
+													<optgroup label="Cấu hình hướng">
 														<option value="turn_zone">
-															Vùng rẽ (turn zone)
+															Vùng rẽ
 														</option>
 														<option value="exit_line">
-															Vạch xác nhận đầu ra
+															Vạch thoát
 														</option>
 														<option value="exit_zone">
-															Vùng xác nhận đầu ra
+															Vùng thoát
 														</option>
 													</optgroup>
 												</select>

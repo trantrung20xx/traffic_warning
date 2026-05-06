@@ -1588,10 +1588,78 @@ class ViolationLogic:
             return self._centroid_of_points(lane.approach_zone)
         return self._centroid_of_points(lane.polygon)
 
+    @staticmethod
+    def _point_tuple_or_none(point) -> Optional[tuple[float, float]]:
+        if not isinstance(point, (list, tuple)) or len(point) < 2:
+            return None
+        try:
+            return (float(point[0]), float(point[1]))
+        except (TypeError, ValueError):
+            return None
+
+    def _direction_path_vector(
+        self,
+        lane: LanePolygon,
+        *,
+        reference_point: Optional[tuple[float, float]] = None,
+    ) -> Optional[tuple[float, float]]:
+        direction_rule = getattr(lane, "direction_rule", None)
+        if direction_rule is None:
+            return None
+
+        if isinstance(direction_rule, dict):
+            enabled = bool(direction_rule.get("enabled", False))
+            raw_direction_path = direction_rule.get("direction_path")
+        else:
+            enabled = bool(getattr(direction_rule, "enabled", False))
+            raw_direction_path = getattr(direction_rule, "direction_path", None)
+
+        if not enabled or not isinstance(raw_direction_path, list) or len(raw_direction_path) < 2:
+            return None
+
+        points = [point for point in (self._point_tuple_or_none(raw) for raw in raw_direction_path) if point is not None]
+        if len(points) < 2:
+            return None
+
+        if reference_point is not None:
+            best_vector: Optional[tuple[float, float]] = None
+            best_distance: Optional[float] = None
+            for index in range(len(points) - 1):
+                start = points[index]
+                end = points[index + 1]
+                vec = self._normalize_vector((end[0] - start[0], end[1] - start[1]))
+                if vec is None:
+                    continue
+                distance = self._distance_point_to_segment(
+                    point=reference_point,
+                    start=start,
+                    end=end,
+                )
+                if best_distance is None or distance < best_distance:
+                    best_distance = distance
+                    best_vector = vec
+            if best_vector is not None:
+                return best_vector
+
+        start = points[0]
+        for index in range(len(points) - 1, 0, -1):
+            end = points[index]
+            vec = self._normalize_vector((end[0] - start[0], end[1] - start[1]))
+            if vec is not None:
+                return vec
+        return None
+
     def _lane_direction_vector(self, lane: LanePolygon) -> tuple[float, float]:
         commit_point = self._lane_commit_points.get(lane.lane_id)
         if commit_point is None:
             commit_point = self._lane_commit_point(lane)
+
+        direction_path_vec = self._direction_path_vector(
+            lane,
+            reference_point=commit_point,
+        )
+        if direction_path_vec is not None:
+            return direction_path_vec
 
         if lane.approach_zone:
             approach_center = self._centroid_of_points(lane.approach_zone)
@@ -1699,6 +1767,29 @@ class ViolationLogic:
         if mag <= 1e-6:
             return None
         return (vx / mag, vy / mag)
+
+    @staticmethod
+    def _distance_point_to_segment(
+        *,
+        point: tuple[float, float],
+        start: tuple[float, float],
+        end: tuple[float, float],
+    ) -> float:
+        px, py = point
+        x1, y1 = start
+        x2, y2 = end
+
+        dx = x2 - x1
+        dy = y2 - y1
+        length_sq = (dx * dx) + (dy * dy)
+        if length_sq <= 1e-9:
+            return hypot(px - x1, py - y1)
+
+        t = ((px - x1) * dx + (py - y1) * dy) / length_sq
+        t = max(0.0, min(1.0, t))
+        proj_x = x1 + (dx * t)
+        proj_y = y1 + (dy * t)
+        return hypot(px - proj_x, py - proj_y)
 
     @staticmethod
     def _sign_of_value(value: float, *, tolerance: float = 1e-5) -> int:
