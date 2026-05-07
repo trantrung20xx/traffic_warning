@@ -286,8 +286,6 @@ class ViolationLogic:
         self._lane_direction_vectors: dict[int, Optional[tuple[float, float]]] = {}
         for lane in lane_polygons:
             commit_point = self._lane_commit_points.get(lane.lane_id)
-            if commit_point is None:
-                commit_point = self._lane_commit_point(lane)
             self._lane_direction_vectors[lane.lane_id] = self._direction_path_vector(
                 lane,
                 reference_point=commit_point,
@@ -1649,14 +1647,12 @@ class ViolationLogic:
         lifecycle.last_seen_ts = ts
         return lifecycle
 
-    def _lane_commit_point(self, lane: LanePolygon) -> tuple[float, float]:
+    def _lane_commit_point(self, lane: LanePolygon) -> Optional[tuple[float, float]]:
         if lane.commit_gate:
             return self._centroid_of_points(lane.commit_gate)
         if lane.commit_line:
             return self._line_midpoint(lane.commit_line)
-        if lane.approach_zone:
-            return self._centroid_of_points(lane.approach_zone)
-        return self._centroid_of_points(lane.polygon)
+        return None
 
     @staticmethod
     def _point_tuple_or_none(point) -> Optional[tuple[float, float]]:

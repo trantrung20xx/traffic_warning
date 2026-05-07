@@ -139,11 +139,11 @@ def validate_lane_geometry(lane_config: CameraLaneConfig) -> list[dict[str, Any]
             if len(direction_path) < 2:
                 issues.append(
                     _issue(
-                        level="info",
-                        code="DIRECTION_PATH_AUTO_FALLBACK",
-                        message=f"Làn {lane.lane_id}: direction path thiếu, runtime sẽ dùng centerline tự sinh từ lane.",
+                        level="warning",
+                        code="DIRECTION_PATH_MISSING",
+                        message=f"Làn {lane.lane_id}: direction path chưa có hoặc chưa đủ 2 điểm.",
                         lane_id=lane.lane_id,
-                        suggestion="Vẽ direction path nếu cần kiểm soát hướng tham chiếu chính xác hơn centerline tự sinh.",
+                        suggestion="Vẽ direction path bằng polyline 2+ điểm theo hướng xe đi hợp lệ.",
                     )
                 )
             else:
@@ -173,20 +173,6 @@ def validate_lane_geometry(lane_config: CameraLaneConfig) -> list[dict[str, Any]
                             )
                         )
                 direction_path_vec = _direction_path_vector(direction_path)
-
-            commit_reference_vec = _approach_commit_direction_vector(lane)
-            if direction_path_vec is not None and commit_reference_vec is not None:
-                dot = (direction_path_vec[0] * commit_reference_vec[0]) + (direction_path_vec[1] * commit_reference_vec[1])
-                if dot < 0.26:
-                    issues.append(
-                        _issue(
-                            level="warning",
-                            code="DIRECTION_PATH_COMMIT_MISALIGNED",
-                            message=f"Làn {lane.lane_id}: direction path lệch mạnh so với hướng approach -> commit.",
-                            lane_id=lane.lane_id,
-                            suggestion="Kiểm tra lại chiều vẽ direction path (đầu -> cuối) theo đúng hướng xe đi hợp lệ.",
-                        )
-                    )
 
             if check_zone:
                 check_zone_shape = Polygon([(float(x), float(y)) for x, y in check_zone])
@@ -583,24 +569,6 @@ def _direction_path_vector(points: list[list[float]]) -> Optional[tuple[float, f
     return None
 
 
-def _approach_commit_direction_vector(lane) -> Optional[tuple[float, float]]:
-    if lane.approach_zone and lane.commit_gate:
-        approach_center = Polygon([(float(x), float(y)) for x, y in lane.approach_zone]).centroid
-        commit_center = Polygon([(float(x), float(y)) for x, y in lane.commit_gate]).centroid
-        vec = _normalize_vector((commit_center.x - approach_center.x, commit_center.y - approach_center.y))
-        if vec is not None:
-            return vec
-
-    if lane.approach_zone and lane.commit_line:
-        approach_center = Polygon([(float(x), float(y)) for x, y in lane.approach_zone]).centroid
-        commit_line = LineString([(float(x), float(y)) for x, y in lane.commit_line])
-        commit_mid = commit_line.interpolate(0.5, normalized=True)
-        vec = _normalize_vector((commit_mid.x - approach_center.x, commit_mid.y - approach_center.y))
-        if vec is not None:
-            return vec
-    return None
-
-
 def _lane_direction_vector_for_validation(lane) -> Optional[tuple[float, float]]:
     direction_rule = getattr(lane, "direction_rule", None)
     if direction_rule is not None and bool(getattr(direction_rule, "enabled", False)):
@@ -609,13 +577,4 @@ def _lane_direction_vector_for_validation(lane) -> Optional[tuple[float, float]]
         if vec is not None:
             return vec
 
-    vec = _approach_commit_direction_vector(lane)
-    if vec is not None:
-        return vec
-
-    lane_shape = Polygon([(float(x), float(y)) for x, y in lane.polygon])
-    if lane_shape.is_empty:
-        return None
-    min_y = min(float(point[1]) for point in lane.polygon)
-    max_y = max(float(point[1]) for point in lane.polygon)
-    return _normalize_vector((0.0, max_y - min_y))
+    return None

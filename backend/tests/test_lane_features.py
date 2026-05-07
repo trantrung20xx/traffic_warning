@@ -552,10 +552,10 @@ class LaneFeatureTests(unittest.TestCase):
             [{"lane_id": 1, "violation": "wrong_direction"}],
         )
 
-    def test_direction_centerline_fallback_works_without_direction_path(self) -> None:
+    def test_direction_detection_is_not_configured_without_direction_path(self) -> None:
         lane_config = CameraLaneConfig.model_validate(
             {
-                "camera_id": "cam_direction_centerline_fallback",
+                "camera_id": "cam_direction_missing_path",
                 "frame_width": 100,
                 "frame_height": 100,
                 "lanes": [
@@ -604,12 +604,9 @@ class LaneFeatureTests(unittest.TestCase):
             )
 
         status, dot = logic.get_direction_status_for_vehicle(vehicle_id=81011)
-        self.assertEqual(status, "wrong_direction")
-        self.assertTrue(dot is not None and dot <= -0.25)
-        self.assertEqual(
-            self._normalize_violation_rows(emitted),
-            [{"lane_id": 1, "violation": "wrong_direction"}],
-        )
+        self.assertEqual(status, "not_configured")
+        self.assertIsNone(dot)
+        self.assertEqual(self._normalize_violation_rows(emitted), [])
 
     def test_direction_path_uses_local_segment_for_curved_lane(self) -> None:
         lane_config = CameraLaneConfig.model_validate(
@@ -2927,7 +2924,6 @@ class LaneFeatureTests(unittest.TestCase):
         issues = validate_lane_geometry(lane_config)
         issue_codes = {issue["code"] for issue in issues}
         self.assertIn("DIRECTION_PATH_FAR_FROM_LANE", issue_codes)
-        self.assertIn("DIRECTION_PATH_COMMIT_MISALIGNED", issue_codes)
 
     def test_geometry_validator_reports_semantic_issues(self) -> None:
         lane_config = CameraLaneConfig.model_validate(
