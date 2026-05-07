@@ -32,7 +32,7 @@ const LANE_TARGET_LABELS = {
 	commit_gate: "Vùng chốt hướng",
 	commit_line: "Vạch chốt hướng",
 	direction_path: "Chiều xe đi",
-	direction_check_zone: "Vùng theo dõi hướng",
+	direction_check_zone: "Vùng kiểm tra hướng",
 };
 
 const MANEUVER_TARGET_LABELS = {

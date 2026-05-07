@@ -8,7 +8,9 @@
         "road_name": ""
       },
       "monitored_lanes": [
-        1
+        1,
+        2,
+        3
       ],
       "frame_width": 1280,
       "frame_height": 720

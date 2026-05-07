@@ -1719,7 +1719,7 @@ export default function ManagementView({
 															Chiều xe đi
 														</option>
 														<option value="direction_check_zone">
-															Vùng theo dõi hướng
+															Vùng kiểm tra hướng
 														</option>
 													</optgroup>
 													<optgroup label="Cấu hình hướng">
