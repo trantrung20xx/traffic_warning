@@ -179,7 +179,7 @@ Tọa độ trong file lane config là tọa độ chuẩn hóa `[0, 1]`. Backen
 | `lane_assignment` | `temporal`, `overlap_preference` | Làm mượt lane và xử lý xe nằm gần ranh giới lane. |
 | `wrong_lane` | `min_duration_ms` | Thời gian tối thiểu trước khi phát lỗi sai làn. |
 | `direction_detection` | `defaults.*` | Ngưỡng đánh giá đúng chiều/ngược chiều. |
-| `turn_detection` | `heading`, `curvature`, `opposite_direction`, `trajectory` | Tham số hỗ trợ nhận diện đi thẳng/rẽ/quay đầu từ cấu hình hình học và quỹ đạo xe hiện tại. |
+| `turn_detection` | `heading`, `curvature`, `opposite_direction`, `trajectory`, `trajectory.fallback_reference` | Tham số hỗ trợ nhận diện đi thẳng/rẽ/quay đầu từ cấu hình hình học, quỹ đạo xe hiện tại và consensus hướng theo làn khi thiếu `direction_path`. |
 | `evidence_fusion` | `line_crossing`, `turn_scoring` | Chấm điểm và hợp nhất bằng chứng hình học. |
 | `event_lifecycle` | `violation_rearm_window_ms`, `state_prune_max_age_s` | Chống phát trùng sự kiện và dọn state cũ. |
 | `geometry` | `evidence_crop`, `evidence_image` | Cách cắt/lưu ảnh bằng chứng. |

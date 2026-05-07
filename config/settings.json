@@ -76,7 +76,15 @@
 			"sample_inside_polygon_min_hits": 2,
 			"entry_heading_lookback_points": 4,
 			"entry_heading_min_displacement_px": 8.0,
-			"heading_local_window_points": 3
+			"heading_local_window_points": 3,
+			"fallback_reference": {
+				"sample_window": 32,
+				"min_samples": 3,
+				"consensus_min": 0.78,
+				"inlier_dot_min": 0.6,
+				"inlier_ratio_min": 0.78,
+				"max_age_ms": 180000
+			}
 		}
 	},
 	"evidence_fusion": {
