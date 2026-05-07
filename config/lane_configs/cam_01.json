@@ -274,23 +274,6 @@
         "truck",
         "bus"
       ],
-      "direction_rule": {
-        "enabled": true,
-        "direction_path": [
-          [
-            0.9979166666666667,
-            0.49537037037037035
-          ],
-          [
-            0.740625,
-            0.6185185185185185
-          ],
-          [
-            0.55,
-            0.675
-          ]
-        ]
-      },
       "maneuvers": {
         "straight": {
           "enabled": true,

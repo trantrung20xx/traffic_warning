@@ -1064,6 +1064,74 @@ class LaneFeatureTests(unittest.TestCase):
         self.assertTrue(turn_state.lane_direction_vector[1] < -0.2)
         self.assertTrue(turn_state.entry_heading_vector[1] < -0.2)
 
+    def test_turn_fallback_entry_vector_preserves_vehicle_direction_without_direction_path(self) -> None:
+        cases = [
+            ("east_to_west", (80.0, 50.0), (65.0, 50.0), (50.0, 50.0)),
+            ("west_to_east", (20.0, 50.0), (35.0, 50.0), (50.0, 50.0)),
+            ("north_to_south", (50.0, 20.0), (50.0, 35.0), (50.0, 50.0)),
+            ("south_to_north", (50.0, 80.0), (50.0, 65.0), (50.0, 50.0)),
+            ("northwest_to_southeast", (30.0, 30.0), (40.0, 40.0), (50.0, 50.0)),
+            ("southeast_to_northwest", (70.0, 70.0), (60.0, 60.0), (50.0, 50.0)),
+            ("northeast_to_southwest", (70.0, 30.0), (60.0, 40.0), (50.0, 50.0)),
+            ("southwest_to_northeast", (30.0, 70.0), (40.0, 60.0), (50.0, 50.0)),
+        ]
+
+        def bbox_for(point: tuple[float, float]) -> list[float]:
+            x, y = point
+            return [x - 4.0, y - 8.0, x + 4.0, y]
+
+        def unit_vector(start: tuple[float, float], end: tuple[float, float]) -> tuple[float, float]:
+            vx = end[0] - start[0]
+            vy = end[1] - start[1]
+            mag = ((vx * vx) + (vy * vy)) ** 0.5
+            return (vx / mag, vy / mag)
+
+        for name, start, mid, end in cases:
+            with self.subTest(name=name):
+                lane_config = CameraLaneConfig.model_validate(
+                    {
+                        "camera_id": f"cam_turn_runtime_{name}",
+                        "frame_width": 100,
+                        "frame_height": 100,
+                        "lanes": [
+                            {
+                                "lane_id": 1,
+                                "polygon": [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+                                "allowed_maneuvers": ["left"],
+                                "allowed_lane_changes": [1],
+                                "allowed_vehicle_types": ["car"],
+                                "direction_rule": {"enabled": True},
+                                "maneuvers": {
+                                    "left": {
+                                        "enabled": True,
+                                        "allowed": True,
+                                        "turn_zone": [[0.45, 0.45], [0.55, 0.45], [0.55, 0.55], [0.45, 0.55]],
+                                    }
+                                },
+                            }
+                        ],
+                    }
+                )
+                runtime_lane_config = denormalize_lane_config(lane_config)
+                logic = ViolationLogic(runtime_lane_config.lanes, turn_region_min_hits=99)
+                ts = datetime(2026, 5, 2, 10, 12, 0, tzinfo=timezone.utc)
+
+                for idx, point in enumerate((start, mid, end)):
+                    logic.update_and_maybe_generate_violation(
+                        vehicle_id=8120,
+                        vehicle_type="car",
+                        lane_id=1,
+                        bbox_xyxy=bbox_for(point),
+                        ts=ts + timedelta(milliseconds=idx * 120),
+                    )
+
+                turn_state = logic._vehicle_states[8120].turn_state
+                expected = unit_vector(start, end)
+                actual = turn_state.lane_direction_vector
+                self.assertIsNotNone(actual)
+                dot = (actual[0] * expected[0]) + (actual[1] * expected[1])
+                self.assertGreater(dot, 0.999)
+
     def test_turn_reference_vector_stays_none_when_signal_is_insufficient(self) -> None:
         lane_config = CameraLaneConfig.model_validate(
             {
@@ -1106,27 +1174,25 @@ class LaneFeatureTests(unittest.TestCase):
         self.assertIsNone(turn_state.entry_heading_vector)
         self.assertIsNone(turn_state.lane_direction_vector)
 
-    def test_turn_fallback_model_reuses_consensus_vector_when_entry_is_short(self) -> None:
+    def test_turn_reference_vector_refreshes_after_trajectory_becomes_reliable(self) -> None:
         lane_config = CameraLaneConfig.model_validate(
             {
-                "camera_id": "cam_turn_runtime_model",
+                "camera_id": "cam_turn_runtime_refresh_entry_vector",
                 "frame_width": 100,
                 "frame_height": 100,
                 "lanes": [
                     {
                         "lane_id": 1,
-                        "polygon": [[0.10, 0.10], [0.90, 0.10], [0.90, 0.98], [0.10, 0.98]],
-                        "approach_zone": [[0.30, 0.58], [0.70, 0.58], [0.70, 0.86], [0.30, 0.86]],
-                        "commit_gate": [[0.34, 0.62], [0.66, 0.62], [0.66, 0.80], [0.34, 0.80]],
-                        "allowed_maneuvers": ["straight"],
+                        "polygon": [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+                        "allowed_maneuvers": ["left"],
                         "allowed_lane_changes": [1],
                         "allowed_vehicle_types": ["car"],
                         "direction_rule": {"enabled": True},
                         "maneuvers": {
-                            "right": {
+                            "left": {
                                 "enabled": True,
-                                "allowed": False,
-                                "turn_zone": [[0.60, 0.58], [0.86, 0.58], [0.86, 0.90], [0.60, 0.90]],
+                                "allowed": True,
+                                "turn_zone": [[0.45, 0.45], [0.55, 0.45], [0.55, 0.92], [0.45, 0.92]],
                             }
                         },
                     }
@@ -1134,250 +1200,95 @@ class LaneFeatureTests(unittest.TestCase):
             }
         )
         runtime_lane_config = denormalize_lane_config(lane_config)
-        logic = ViolationLogic(runtime_lane_config.lanes, turn_region_min_hits=2)
-        ts = datetime(2026, 5, 2, 10, 20, 0, tzinfo=timezone.utc)
+        logic = ViolationLogic(runtime_lane_config.lanes, turn_region_min_hits=99)
+        ts = datetime(2026, 5, 2, 10, 16, 0, tzinfo=timezone.utc)
 
-        for veh_idx in range(5):
-            base_ts = ts + timedelta(milliseconds=veh_idx * 1000)
-            for frame_idx, bbox in enumerate(
-                (
-                    [45, 84, 55, 96],
-                    [44, 74, 54, 86],
-                    [43, 64, 53, 76],
-                )
-            ):
-                logic.update_and_maybe_generate_violation(
-                    vehicle_id=9000 + veh_idx,
-                    vehicle_type="car",
-                    lane_id=1,
-                    bbox_xyxy=bbox,
-                    ts=base_ts + timedelta(milliseconds=frame_idx * 120),
-                )
-
-        consensus_vec = logic._lane_fallback_reference_vector(
-            source_lane_id=1,
-            ts=ts + timedelta(milliseconds=4500),
-        )
-        self.assertIsNotNone(consensus_vec)
-        self.assertTrue(consensus_vec[1] < -0.65)
-
-        # Xe mới đi vào commit với trajectory rất ngắn -> entry heading không đủ tin cậy.
-        # Hệ thống phải dùng consensus vector của lane model.
-        short_vehicle_ts = ts + timedelta(milliseconds=6000)
+        # Mẫu đầu tiên: đã committed theo turn-zone nhưng chưa đủ dữ liệu để suy ra hướng vào.
         logic.update_and_maybe_generate_violation(
-            vehicle_id=9010,
+            vehicle_id=8121,
             vehicle_type="car",
             lane_id=1,
-            bbox_xyxy=[46, 66, 56, 78],
-            ts=short_vehicle_ts,
+            bbox_xyxy=[46, 74, 54, 82],
+            ts=ts,
         )
 
-        turn_state = logic._vehicle_states[9010].turn_state
+        turn_state = logic._vehicle_states[8121].turn_state
         self.assertEqual(turn_state.phase, "committed")
-        self.assertIsNotNone(turn_state.entry_heading_vector)
-        self.assertIsNotNone(turn_state.lane_direction_vector)
-        self.assertTrue(turn_state.entry_heading_vector[1] < -0.65)
-        self.assertTrue(turn_state.lane_direction_vector[1] < -0.65)
+        self.assertIsNone(turn_state.lane_direction_vector)
 
-    def test_turn_fallback_model_rejects_mixed_direction_samples(self) -> None:
-        lane_config = CameraLaneConfig.model_validate(
-            {
-                "camera_id": "cam_turn_runtime_model_mixed",
-                "frame_width": 100,
-                "frame_height": 100,
-                "lanes": [
-                    {
-                        "lane_id": 1,
-                        "polygon": [[0.10, 0.10], [0.90, 0.10], [0.90, 0.98], [0.10, 0.98]],
-                        "approach_zone": [[0.30, 0.58], [0.70, 0.58], [0.70, 0.86], [0.30, 0.86]],
-                        "commit_gate": [[0.34, 0.62], [0.66, 0.62], [0.66, 0.80], [0.34, 0.80]],
-                        "allowed_maneuvers": ["straight"],
-                        "allowed_lane_changes": [1],
-                        "allowed_vehicle_types": ["car"],
-                        "direction_rule": {"enabled": True},
-                        "maneuvers": {
-                            "right": {
-                                "enabled": True,
-                                "allowed": False,
-                                "turn_zone": [[0.60, 0.58], [0.86, 0.58], [0.86, 0.90], [0.60, 0.90]],
-                            }
-                        },
-                    }
-                ],
-            }
-        )
-        runtime_lane_config = denormalize_lane_config(lane_config)
-        logic = ViolationLogic(runtime_lane_config.lanes, turn_region_min_hits=2)
-        ts = datetime(2026, 5, 2, 10, 40, 0, tzinfo=timezone.utc)
-
-        # 2 xe đi xuống (hướng hợp lệ), 2 xe đi ngược lại -> dữ liệu lane bị mâu thuẫn.
-        for veh_idx in range(2):
-            base_ts = ts + timedelta(milliseconds=veh_idx * 900)
-            for frame_idx, bbox in enumerate(
-                (
-                    [45, 84, 55, 96],
-                    [44, 74, 54, 86],
-                    [43, 64, 53, 76],
-                )
-            ):
-                logic.update_and_maybe_generate_violation(
-                    vehicle_id=9100 + veh_idx,
-                    vehicle_type="car",
-                    lane_id=1,
-                    bbox_xyxy=bbox,
-                    ts=base_ts + timedelta(milliseconds=frame_idx * 120),
-                )
-
-        for veh_idx in range(2):
-            base_ts = ts + timedelta(milliseconds=2500 + veh_idx * 900)
-            for frame_idx, bbox in enumerate(
-                (
-                    [45, 64, 55, 76],
-                    [46, 74, 56, 86],
-                    [47, 84, 57, 96],
-                )
-            ):
-                logic.update_and_maybe_generate_violation(
-                    vehicle_id=9200 + veh_idx,
-                    vehicle_type="car",
-                    lane_id=1,
-                    bbox_xyxy=bbox,
-                    ts=base_ts + timedelta(milliseconds=frame_idx * 120),
-                )
-
-        self.assertIsNone(
-            logic._lane_fallback_reference_vector(
-                source_lane_id=1,
-                ts=ts + timedelta(milliseconds=5000),
-            )
-        )
-
-    def test_turn_fallback_model_ignores_small_outliers_and_keeps_majority_direction(self) -> None:
-        lane_config = CameraLaneConfig.model_validate(
-            {
-                "camera_id": "cam_turn_runtime_model_outlier",
-                "frame_width": 100,
-                "frame_height": 100,
-                "lanes": [
-                    {
-                        "lane_id": 1,
-                        "polygon": [[0.10, 0.10], [0.90, 0.10], [0.90, 0.98], [0.10, 0.98]],
-                        "approach_zone": [[0.30, 0.58], [0.70, 0.58], [0.70, 0.86], [0.30, 0.86]],
-                        "commit_gate": [[0.34, 0.62], [0.66, 0.62], [0.66, 0.80], [0.34, 0.80]],
-                        "allowed_maneuvers": ["straight"],
-                        "allowed_lane_changes": [1],
-                        "allowed_vehicle_types": ["car"],
-                        "direction_rule": {"enabled": True},
-                        "maneuvers": {
-                            "right": {
-                                "enabled": True,
-                                "allowed": False,
-                                "turn_zone": [[0.60, 0.58], [0.86, 0.58], [0.86, 0.90], [0.60, 0.90]],
-                            }
-                        },
-                    }
-                ],
-            }
-        )
-        runtime_lane_config = denormalize_lane_config(lane_config)
-        logic = ViolationLogic(runtime_lane_config.lanes, turn_region_min_hits=2)
-        ts = datetime(2026, 5, 2, 11, 0, 0, tzinfo=timezone.utc)
-
-        for veh_idx in range(6):
-            base_ts = ts + timedelta(milliseconds=veh_idx * 700)
-            for frame_idx, bbox in enumerate(
-                (
-                    [45, 84, 55, 96],
-                    [44, 74, 54, 86],
-                    [43, 64, 53, 76],
-                )
-            ):
-                logic.update_and_maybe_generate_violation(
-                    vehicle_id=9300 + veh_idx,
-                    vehicle_type="car",
-                    lane_id=1,
-                    bbox_xyxy=bbox,
-                    ts=base_ts + timedelta(milliseconds=frame_idx * 120),
-                )
-
-        # Một xe outlier đi lệch ngang mạnh nhưng không được làm lane model mất hướng.
-        for frame_idx, bbox in enumerate(
+        for idx, bbox in enumerate(
             (
-                [36, 74, 46, 86],
-                [46, 74, 56, 86],
-                [56, 74, 66, 86],
-            )
+                [46, 62, 54, 70],
+                [46, 50, 54, 58],
+            ),
+            start=1,
         ):
             logic.update_and_maybe_generate_violation(
-                vehicle_id=9399,
+                vehicle_id=8121,
                 vehicle_type="car",
                 lane_id=1,
                 bbox_xyxy=bbox,
-                ts=ts + timedelta(milliseconds=4800 + frame_idx * 120),
+                ts=ts + timedelta(milliseconds=idx * 120),
             )
 
-        lane_vec = logic._lane_fallback_reference_vector(
-            source_lane_id=1,
-            ts=ts + timedelta(milliseconds=5600),
-        )
-        self.assertIsNotNone(lane_vec)
-        self.assertTrue(lane_vec[1] < -0.7)
+        turn_state = logic._vehicle_states[8121].turn_state
+        self.assertIsNotNone(turn_state.lane_direction_vector)
+        self.assertIsNotNone(turn_state.entry_heading_vector)
+        self.assertLess(turn_state.lane_direction_vector[1], -0.98)
+        self.assertLess(turn_state.entry_heading_vector[1], -0.98)
 
-    def test_turn_fallback_model_expires_stale_samples(self) -> None:
+    def test_turn_reference_vector_rejects_ambiguous_zigzag_trajectory(self) -> None:
         lane_config = CameraLaneConfig.model_validate(
             {
-                "camera_id": "cam_turn_runtime_model_expire",
+                "camera_id": "cam_turn_runtime_reject_ambiguous",
                 "frame_width": 100,
                 "frame_height": 100,
                 "lanes": [
                     {
                         "lane_id": 1,
-                        "polygon": [[0.10, 0.10], [0.90, 0.10], [0.90, 0.98], [0.10, 0.98]],
-                        "approach_zone": [[0.30, 0.58], [0.70, 0.58], [0.70, 0.86], [0.30, 0.86]],
-                        "commit_gate": [[0.34, 0.62], [0.66, 0.62], [0.66, 0.80], [0.34, 0.80]],
-                        "allowed_maneuvers": ["straight"],
+                        "polygon": [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+                        "allowed_maneuvers": ["left"],
                         "allowed_lane_changes": [1],
                         "allowed_vehicle_types": ["car"],
                         "direction_rule": {"enabled": True},
+                        "maneuvers": {
+                            "left": {
+                                "enabled": True,
+                                "allowed": True,
+                                "turn_zone": [[0.35, 0.35], [0.65, 0.35], [0.65, 0.92], [0.35, 0.92]],
+                            }
+                        },
                     }
                 ],
             }
         )
         runtime_lane_config = denormalize_lane_config(lane_config)
-        logic = ViolationLogic(runtime_lane_config.lanes, turn_region_min_hits=2)
-        ts = datetime(2026, 5, 2, 11, 20, 0, tzinfo=timezone.utc)
+        logic = ViolationLogic(runtime_lane_config.lanes, turn_region_min_hits=99)
+        ts = datetime(2026, 5, 2, 10, 18, 0, tzinfo=timezone.utc)
 
-        for veh_idx in range(5):
-            base_ts = ts + timedelta(milliseconds=veh_idx * 700)
-            for frame_idx, bbox in enumerate(
-                (
-                    [45, 84, 55, 96],
-                    [44, 74, 54, 86],
-                    [43, 64, 53, 76],
-                )
-            ):
-                logic.update_and_maybe_generate_violation(
-                    vehicle_id=9400 + veh_idx,
-                    vehicle_type="car",
-                    lane_id=1,
-                    bbox_xyxy=bbox,
-                    ts=base_ts + timedelta(milliseconds=frame_idx * 120),
-                )
-
-        self.assertIsNotNone(
-            logic._lane_fallback_reference_vector(
-                source_lane_id=1,
-                ts=ts + timedelta(milliseconds=4000),
+        for idx, bbox in enumerate(
+            (
+                [46, 74, 54, 82],
+                [61, 59, 69, 67],
+                [31, 59, 39, 67],
+                [61, 44, 69, 52],
+                [31, 44, 39, 52],
             )
-        )
-        self.assertIsNone(
-            logic._lane_fallback_reference_vector(
-                source_lane_id=1,
-                ts=ts + timedelta(minutes=5),
+        ):
+            logic.update_and_maybe_generate_violation(
+                vehicle_id=8122,
+                vehicle_type="car",
+                lane_id=1,
+                bbox_xyxy=bbox,
+                ts=ts + timedelta(milliseconds=idx * 120),
             )
-        )
 
-    def test_turn_fallback_reference_always_prefers_direction_path(self) -> None:
+        turn_state = logic._vehicle_states[8122].turn_state
+        self.assertEqual(turn_state.phase, "committed")
+        self.assertIsNone(turn_state.entry_heading_vector)
+        self.assertIsNone(turn_state.lane_direction_vector)
+
+    def test_turn_reference_always_prefers_direction_path(self) -> None:
         lane_config = CameraLaneConfig.model_validate(
             {
                 "camera_id": "cam_turn_runtime_prefer_direction_path",
@@ -1425,7 +1336,6 @@ class LaneFeatureTests(unittest.TestCase):
         self.assertIsNotNone(explicit_vec)
         resolved_vec = logic._resolve_turn_reference_vector(
             source_lane_id=1,
-            ts=ts + timedelta(milliseconds=4000),
             trajectory_entry_vector=(0.0, -1.0),
         )
         self.assertIsNotNone(resolved_vec)

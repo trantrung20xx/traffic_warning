@@ -186,12 +186,6 @@ class ViolationLogic:
         trajectory_entry_heading_lookback_points: int = 4,
         trajectory_entry_heading_min_displacement_px: float = 8.0,
         trajectory_heading_local_window_points: int = 3,
-        lane_fallback_reference_sample_window: int = 32,
-        lane_fallback_reference_min_samples: int = 5,
-        lane_fallback_reference_consensus_min: float = 0.78,
-        lane_fallback_reference_inlier_dot_min: float = 0.60,
-        lane_fallback_reference_inlier_ratio_min: float = 0.78,
-        lane_fallback_reference_max_age_ms: int = 180000,
         direction_detection_settings: Optional[DirectionDetectionSettings] = None,
     ):
         if not lane_polygons:
@@ -246,7 +240,6 @@ class ViolationLogic:
             0.1,
         )
         self._trajectory_heading_local_window_points = max(int(trajectory_heading_local_window_points), 2)
-        self._lane_fallback_reference_sample_window = max(int(lane_fallback_reference_sample_window), 4)
 
         self._straight_heading_max_deg = float(heading_straight_max_deg)
         self._turn_heading_min_deg = float(heading_turn_min_deg)
@@ -290,17 +283,6 @@ class ViolationLogic:
                 lane,
                 reference_point=commit_point,
             )
-        self._lane_fallback_reference_samples: dict[int, deque[tuple[datetime, tuple[float, float]]]] = {
-            lane.lane_id: deque(maxlen=self._lane_fallback_reference_sample_window) for lane in lane_polygons
-        }
-        self._lane_fallback_reference_min_samples = max(int(lane_fallback_reference_min_samples), 2)
-        self._lane_fallback_reference_consensus_min = min(max(float(lane_fallback_reference_consensus_min), 0.0), 1.0)
-        self._lane_fallback_reference_inlier_dot_min = min(max(float(lane_fallback_reference_inlier_dot_min), -1.0), 1.0)
-        self._lane_fallback_reference_inlier_ratio_min = min(
-            max(float(lane_fallback_reference_inlier_ratio_min), 0.0),
-            1.0,
-        )
-        self._lane_fallback_reference_max_age_ms = max(int(lane_fallback_reference_max_age_ms), 1000)
         self._lane_known_maneuvers = self._build_lane_known_maneuvers(lane_polygons)
         self._lane_maneuver_anchor_points = self._build_lane_maneuver_anchor_points(lane_polygons)
         self._direction_logic = DirectionLogic(
@@ -555,6 +537,9 @@ class ViolationLogic:
                 self._enter_approach(turn_state=turn_state, source_lane_id=current_lane_id, ts=ts)
             self._enter_committed(st=st, turn_state=turn_state, ts=ts)
 
+        if turn_state.phase == "committed":
+            self._refresh_turn_reference_vector_if_needed(st=st, turn_state=turn_state)
+
         if turn_state.phase != "committed" or turn_state.source_lane_id is None:
             return
 
@@ -614,7 +599,6 @@ class ViolationLogic:
         turn_state.entry_heading_vector = None
         turn_state.lane_direction_vector = self._resolve_turn_reference_vector(
             source_lane_id=source_lane_id,
-            ts=ts,
             trajectory_entry_vector=None,
         )
         turn_state.last_scored_maneuver = None
@@ -633,21 +617,31 @@ class ViolationLogic:
         trajectory_entry_vector = self._estimate_entry_heading_vector(
             st=st,
             turn_state=turn_state,
-            allow_lane_fallback=False,
         )
-        if trajectory_entry_vector is not None:
-            self._update_lane_fallback_reference_vector(
-                source_lane_id=turn_state.source_lane_id,
-                ts=ts,
-                vector=trajectory_entry_vector,
-            )
         reference_vector = self._resolve_turn_reference_vector(
             source_lane_id=turn_state.source_lane_id,
-            ts=ts,
             trajectory_entry_vector=trajectory_entry_vector,
         )
         turn_state.entry_heading_vector = trajectory_entry_vector or reference_vector
         turn_state.lane_direction_vector = reference_vector
+
+    def _refresh_turn_reference_vector_if_needed(self, *, st: VehicleState, turn_state: TurnState) -> None:
+        if turn_state.source_lane_id is None or turn_state.lane_direction_vector is not None:
+            return
+
+        trajectory_entry_vector = self._estimate_entry_heading_vector(
+            st=st,
+            turn_state=turn_state,
+        )
+        if trajectory_entry_vector is None:
+            return
+
+        turn_state.lane_direction_vector = self._resolve_turn_reference_vector(
+            source_lane_id=turn_state.source_lane_id,
+            trajectory_entry_vector=trajectory_entry_vector,
+        )
+        if turn_state.entry_heading_vector is None:
+            turn_state.entry_heading_vector = trajectory_entry_vector
 
     def _update_turn_confirmation(
         self,
@@ -1014,25 +1008,84 @@ class ViolationLogic:
         *,
         st: VehicleState,
         turn_state: TurnState,
-        allow_lane_fallback: bool = True,
     ) -> Optional[tuple[float, float]]:
         points = [sample.center for sample in st.trajectory]
         if len(points) >= 2:
             start_idx = max(len(points) - self._trajectory_entry_heading_lookback_points, 0)
-            start = points[start_idx]
-            end = points[-1]
-            displacement = hypot(end[0] - start[0], end[1] - start[1])
-            if displacement < self._trajectory_entry_heading_min_displacement_px:
-                if allow_lane_fallback and turn_state.source_lane_id is not None:
-                    lane_id = turn_state.source_lane_id
-                    return self._lane_direction_vectors.get(lane_id)
+            window_points = points[start_idx:]
+            start = window_points[0]
+            end = window_points[-1]
+            gross_displacement = hypot(end[0] - start[0], end[1] - start[1])
+            if gross_displacement < self._trajectory_entry_heading_min_displacement_px:
                 return None
-            vec = self._normalize_vector((end[0] - start[0], end[1] - start[1]))
-            if vec is not None:
-                return vec
-        if allow_lane_fallback and turn_state.source_lane_id is not None:
-            lane_id = turn_state.source_lane_id
-            return self._lane_direction_vectors.get(lane_id)
+            gross_vec = self._normalize_vector((end[0] - start[0], end[1] - start[1]))
+            if gross_vec is None:
+                return None
+
+            segment_min_displacement = max(self._trajectory_entry_heading_min_displacement_px * 0.1, 1.0)
+            segment_vectors: list[tuple[tuple[float, float], float]] = []
+            path_length = 0.0
+            for idx in range(1, len(window_points)):
+                prev = window_points[idx - 1]
+                curr = window_points[idx]
+                seg_dx = curr[0] - prev[0]
+                seg_dy = curr[1] - prev[1]
+                seg_len = hypot(seg_dx, seg_dy)
+                if seg_len < segment_min_displacement:
+                    continue
+                seg_vec = self._normalize_vector((seg_dx, seg_dy))
+                if seg_vec is None:
+                    continue
+                segment_vectors.append((seg_vec, seg_len))
+                path_length += seg_len
+
+            # Need at least two effective segments (>= 3 points) to avoid locking to a noisy 2-point guess.
+            if len(segment_vectors) < 2:
+                return None
+            if path_length <= 1e-6:
+                return gross_vec
+
+            # Path-efficiency acts as an ambiguity gate: heavy zig-zag should not force a heading.
+            path_efficiency = gross_displacement / path_length
+            if path_efficiency < 0.45:
+                return None
+
+            weighted_sum_x = sum(vec[0] * weight for vec, weight in segment_vectors)
+            weighted_sum_y = sum(vec[1] * weight for vec, weight in segment_vectors)
+            consensus_vec = self._normalize_vector((weighted_sum_x, weighted_sum_y))
+            if consensus_vec is None:
+                return None
+
+            consensus_inlier_weight = sum(
+                weight
+                for vec, weight in segment_vectors
+                if ((vec[0] * consensus_vec[0]) + (vec[1] * consensus_vec[1])) >= 0.65
+            )
+            if (consensus_inlier_weight / path_length) < 0.70:
+                return None
+
+            if ((consensus_vec[0] * gross_vec[0]) + (consensus_vec[1] * gross_vec[1])) < 0.35:
+                return None
+
+            local_start_idx = max(len(window_points) - self._trajectory_heading_local_window_points, 0)
+            local_start = window_points[local_start_idx]
+            local_vec = self._normalize_vector((end[0] - local_start[0], end[1] - local_start[1]))
+            if local_vec is None:
+                return consensus_vec
+
+            local_alignment = (local_vec[0] * consensus_vec[0]) + (local_vec[1] * consensus_vec[1])
+            if local_alignment < 0.2:
+                return None
+
+            if local_alignment >= 0.9:
+                return local_vec
+            blended = self._normalize_vector(
+                (
+                    (consensus_vec[0] * 2.0) + local_vec[0] + gross_vec[0],
+                    (consensus_vec[1] * 2.0) + local_vec[1] + gross_vec[1],
+                )
+            )
+            return blended or consensus_vec
         return None
 
     def _compute_motion_features(self, *, st: VehicleState, turn_state: TurnState) -> MotionFeatures:
@@ -1715,89 +1768,16 @@ class ViolationLogic:
                 return vec
         return None
 
-    def _update_lane_fallback_reference_vector(
-        self,
-        *,
-        source_lane_id: int,
-        ts: datetime,
-        vector: tuple[float, float],
-    ) -> None:
-        samples = self._lane_fallback_reference_samples.get(source_lane_id)
-        if samples is None:
-            samples = deque(maxlen=self._lane_fallback_reference_sample_window)
-            self._lane_fallback_reference_samples[source_lane_id] = samples
-        samples.append((ts, vector))
-        self._prune_lane_fallback_reference_samples(samples=samples, ts=ts)
-
-    def _prune_lane_fallback_reference_samples(
-        self,
-        *,
-        samples: deque[tuple[datetime, tuple[float, float]]],
-        ts: datetime,
-    ) -> None:
-        while samples:
-            oldest_ts, _ = samples[0]
-            age_ms = int((ts - oldest_ts).total_seconds() * 1000.0)
-            if age_ms <= self._lane_fallback_reference_max_age_ms:
-                break
-            samples.popleft()
-
-    def _lane_fallback_reference_vector(
-        self,
-        *,
-        source_lane_id: int,
-        ts: datetime,
-    ) -> Optional[tuple[float, float]]:
-        samples = self._lane_fallback_reference_samples.get(source_lane_id)
-        if not samples:
-            return None
-
-        self._prune_lane_fallback_reference_samples(samples=samples, ts=ts)
-        if len(samples) < self._lane_fallback_reference_min_samples:
-            return None
-
-        raw_vectors = [vec for _, vec in samples]
-        coarse = self._normalized_mean_vector(raw_vectors)
-        if coarse is None:
-            return None
-
-        inliers = [
-            vec for vec in raw_vectors
-            if ((vec[0] * coarse[0]) + (vec[1] * coarse[1])) >= self._lane_fallback_reference_inlier_dot_min
-        ]
-        if len(inliers) < self._lane_fallback_reference_min_samples:
-            return None
-
-        inlier_ratio = len(inliers) / len(raw_vectors)
-        if inlier_ratio < self._lane_fallback_reference_inlier_ratio_min:
-            return None
-
-        robust = self._normalized_mean_vector(inliers)
-        if robust is None:
-            return None
-
-        consistency = sum((vec[0] * robust[0]) + (vec[1] * robust[1]) for vec in inliers) / len(inliers)
-        if consistency < self._lane_fallback_reference_consensus_min:
-            return None
-        return robust
-
     def _resolve_turn_reference_vector(
         self,
         *,
         source_lane_id: int,
-        ts: datetime,
         trajectory_entry_vector: Optional[tuple[float, float]],
     ) -> Optional[tuple[float, float]]:
         explicit_direction_path_vec = self._lane_direction_vectors.get(source_lane_id)
         if explicit_direction_path_vec is not None:
             return explicit_direction_path_vec
 
-        lane_model_vec = self._lane_fallback_reference_vector(
-            source_lane_id=source_lane_id,
-            ts=ts,
-        )
-        if lane_model_vec is not None:
-            return lane_model_vec
         if trajectory_entry_vector is not None:
             return trajectory_entry_vector
         return None
@@ -1878,17 +1858,6 @@ class ViolationLogic:
         start = points[0]
         end = points[1]
         return ((float(start[0]) + float(end[0])) / 2.0, (float(start[1]) + float(end[1])) / 2.0)
-
-    @staticmethod
-    def _normalized_mean_vector(vectors: list[tuple[float, float]]) -> Optional[tuple[float, float]]:
-        if not vectors:
-            return None
-        sum_x = sum(vec[0] for vec in vectors)
-        sum_y = sum(vec[1] for vec in vectors)
-        mag = hypot(sum_x, sum_y)
-        if mag <= 1e-6:
-            return None
-        return (sum_x / mag, sum_y / mag)
 
     @staticmethod
     def _normalize_vector(vector: tuple[float, float]) -> Optional[tuple[float, float]]:
