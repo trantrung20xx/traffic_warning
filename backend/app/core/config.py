@@ -206,6 +206,7 @@ class UiConfig(BaseModel):
 class LicensePlateConfig(BaseModel):
     enabled: bool = False
     detector_weights_path: str = "backend/license_plate_yolov8.pt"
+    detector_backend: str = "pytorch"
     detector_confidence_threshold: float = 0.35
     detector_allowed_classes: list[str] = Field(
         default_factory=lambda: ["license_plate", "License Plates"]
@@ -242,6 +243,16 @@ class LicensePlateConfig(BaseModel):
         normalized = str(value or "").strip().lower()
         if normalized not in {"easyocr", "paddleocr"}:
             raise ValueError("license_plate.ocr_backend must be either 'easyocr' or 'paddleocr'")
+        return normalized
+
+    @field_validator("detector_backend")
+    @classmethod
+    def validate_detector_backend(cls, value: str) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized not in {"pytorch", "tensorrt", "openvino", "onnxruntime"}:
+            raise ValueError(
+                "license_plate.detector_backend must be one of: pytorch, tensorrt, openvino, onnxruntime"
+            )
         return normalized
 
     @field_validator("easyocr_lang", "paddle_lang")
@@ -559,6 +570,7 @@ class AppConfig(BaseModel):
 
     # Cấu hình detector, tracker và các tham số ảnh hưởng hiệu năng xử lý.
     detector_weights_path: str = "backend/yolov8n.pt"
+    detector_backend: str = "pytorch"
     detector_device: str = "auto"
     detector_conf_threshold: float = 0.28
     detector_iou_threshold: float = 0.7
@@ -605,6 +617,9 @@ class AppConfig(BaseModel):
     preview_max_fps: float = 15.0
     preview_jpeg_quality: int = 75
     processing_fps_window_s: float = 1.5
+    processing_prune_interval_ms: int = 700
+    license_plate_worker_max_pending_jobs: int = 64
+    license_plate_worker_batch_size: int = 8
     evidence_crop_expand_x_ratio: float = 0.28
     evidence_crop_expand_y_top_ratio: float = 0.32
     evidence_crop_expand_y_bottom_ratio: float = 0.27
@@ -622,6 +637,14 @@ class AppConfig(BaseModel):
             raw_value,
             field_name="detection.allowed_classes",
         )
+
+    @field_validator("detector_backend")
+    @classmethod
+    def validate_detector_backend(cls, value: str) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized not in {"pytorch", "tensorrt", "openvino", "onnxruntime"}:
+            raise ValueError("detection.backend must be one of: pytorch, tensorrt, openvino, onnxruntime")
+        return normalized
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -973,6 +996,7 @@ def load_app_config(repo_root: Path) -> AppConfig:
         evidence_images_dir=evidence_images_dir,
         db_path=db_path,
         detector_weights_path=str(_setting(settings, ("detection", "weights_path"), "backend/yolov8n.pt")),
+        detector_backend=str(_setting(settings, ("detection", "backend"), "pytorch")),
         detector_device=str(_setting(settings, ("detection", "device"), "auto")),
         detector_conf_threshold=float(_setting(settings, ("detection", "confidence_threshold"), 0.28)),
         detector_iou_threshold=float(_setting(settings, ("detection", "iou_threshold"), 0.7)),
@@ -1067,6 +1091,15 @@ def load_app_config(repo_root: Path) -> AppConfig:
         preview_max_fps=float(_setting(settings, ("performance", "preview", "max_fps"), 15.0)),
         preview_jpeg_quality=int(_setting(settings, ("performance", "preview", "jpeg_quality"), 75)),
         processing_fps_window_s=float(_setting(settings, ("performance", "processing", "fps_window_s"), 1.5)),
+        processing_prune_interval_ms=int(
+            _setting(settings, ("performance", "processing", "prune_interval_ms"), 700)
+        ),
+        license_plate_worker_max_pending_jobs=int(
+            _setting(settings, ("performance", "processing", "license_plate_worker_max_pending_jobs"), 64)
+        ),
+        license_plate_worker_batch_size=int(
+            _setting(settings, ("performance", "processing", "license_plate_worker_batch_size"), 8)
+        ),
         evidence_crop_expand_x_ratio=float(_setting(settings, ("geometry", "evidence_crop", "expand_x_ratio"), 0.28)),
         evidence_crop_expand_y_top_ratio=float(
             _setting(settings, ("geometry", "evidence_crop", "expand_y_top_ratio"), 0.32)

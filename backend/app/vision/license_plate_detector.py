@@ -24,12 +24,15 @@ class YoloV8LicensePlateDetector:
         self,
         *,
         weights_path: str,
+        inference_backend: str = "pytorch",
         conf_threshold: float = 0.35,
         iou_threshold: float = 0.7,
         device: str = "auto",
         allowed_classes: Optional[Iterable[str]] = None,
     ):
         self.model = self._load_model(weights_path)
+        self.requested_backend = (inference_backend or "pytorch").strip().lower()
+        self.inference_backend = self._resolve_inference_backend(self.requested_backend, weights_path)
         self.conf_threshold = float(conf_threshold)
         self.iou_threshold = float(iou_threshold)
         self.requested_device = (device or "auto").strip()
@@ -56,8 +59,46 @@ class YoloV8LicensePlateDetector:
         )
         if not results:
             return []
-        result = results[0]
-        if result.boxes is None:
+        return self._detections_from_result(results[0])
+
+    def detect_batch(self, images_bgr: list[np.ndarray]) -> list[list[LicensePlateDetection]]:
+        if not images_bgr:
+            return []
+
+        outputs: list[list[LicensePlateDetection]] = [[] for _ in images_bgr]
+        valid_indices: list[int] = []
+        valid_images: list[np.ndarray] = []
+        for index, image in enumerate(images_bgr):
+            if image is None or image.size == 0:
+                continue
+            valid_indices.append(index)
+            valid_images.append(image)
+
+        if not valid_images:
+            return outputs
+
+        try:
+            results = self.model.predict(
+                valid_images,
+                device=self.device,
+                conf=self.conf_threshold,
+                iou=self.iou_threshold,
+                classes=self.allowed_class_ids or None,
+                verbose=False,
+            )
+        except Exception:
+            for index in valid_indices:
+                outputs[index] = self.detect(images_bgr[index])
+            return outputs
+
+        for idx, result in enumerate(results or []):
+            if idx >= len(valid_indices):
+                break
+            outputs[valid_indices[idx]] = self._detections_from_result(result)
+        return outputs
+
+    def _detections_from_result(self, result) -> list[LicensePlateDetection]:
+        if result is None or result.boxes is None:
             return []
 
         boxes = result.boxes
@@ -86,6 +127,23 @@ class YoloV8LicensePlateDetector:
             )
         rows.sort(key=lambda row: row.confidence, reverse=True)
         return rows
+
+    def _resolve_inference_backend(self, backend: str, weights_path: str) -> str:
+        normalized = str(backend or "pytorch").strip().lower()
+        if normalized in {"", "pytorch", "auto"}:
+            return "pytorch"
+        if normalized in {"tensorrt", "openvino", "onnxruntime"}:
+            candidate = Path(weights_path)
+            if normalized == "tensorrt" and candidate.suffix.lower() == ".engine":
+                return "tensorrt"
+            if normalized == "openvino" and (
+                candidate.suffix.lower() == ".xml" or candidate.name.endswith("_openvino_model")
+            ):
+                return "openvino"
+            if normalized == "onnxruntime" and candidate.suffix.lower() == ".onnx":
+                return "onnxruntime"
+            return "pytorch"
+        return "pytorch"
 
     def _normalize_allowed_classes(
         self,

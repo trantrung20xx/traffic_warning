@@ -16,12 +16,15 @@ class YoloV8VehicleDetector:
     def __init__(
         self,
         weights_path: str = "yolov8n.pt",
+        inference_backend: str = "pytorch",
         conf_threshold: float = 0.35,
         iou_threshold: float = 0.7,
         device: str = "auto",
         allowed_classes: Optional[Iterable[str]] = None,
     ):
         self.model = self._load_model_with_fallback(weights_path)
+        self.requested_backend = (inference_backend or "pytorch").strip().lower()
+        self.inference_backend = self._resolve_inference_backend(self.requested_backend, weights_path)
         self.conf_threshold = float(conf_threshold)
         self.iou_threshold = float(iou_threshold)
         self.requested_device = (device or "auto").strip()
@@ -114,4 +117,21 @@ class YoloV8VehicleDetector:
                     candidates.append(candidate)
 
         return [str(path) for path in candidates]
+
+    def _resolve_inference_backend(self, backend: str, weights_path: str) -> str:
+        normalized = str(backend or "pytorch").strip().lower()
+        if normalized in {"", "pytorch", "auto"}:
+            return "pytorch"
+        if normalized in {"tensorrt", "openvino", "onnxruntime"}:
+            candidate = Path(weights_path)
+            if normalized == "tensorrt" and candidate.suffix.lower() == ".engine":
+                return "tensorrt"
+            if normalized == "openvino" and (
+                candidate.suffix.lower() == ".xml" or candidate.name.endswith("_openvino_model")
+            ):
+                return "openvino"
+            if normalized == "onnxruntime" and candidate.suffix.lower() == ".onnx":
+                return "onnxruntime"
+            return "pytorch"
+        return "pytorch"
 

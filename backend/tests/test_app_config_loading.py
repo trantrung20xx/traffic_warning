@@ -26,6 +26,7 @@ def test_load_app_config_reads_grouped_settings_schema(tmp_path: Path) -> None:
         "camera": {"stream": {"rtsp_reconnect_delay_s": 1.25}},
         "detection": {
             "weights_path": "backend/yolov8n.pt",
+            "backend": "pytorch",
             "device": "cpu",
             "confidence_threshold": 0.22,
             "iou_threshold": 0.61,
@@ -94,7 +95,12 @@ def test_load_app_config_reads_grouped_settings_schema(tmp_path: Path) -> None:
         "event_lifecycle": {"violation_rearm_window_ms": 2600, "state_prune_max_age_s": 45.0},
         "performance": {
             "preview": {"max_fps": 12.0, "jpeg_quality": 70},
-            "processing": {"fps_window_s": 2.0},
+            "processing": {
+                "fps_window_s": 2.0,
+                "prune_interval_ms": 900,
+                "license_plate_worker_max_pending_jobs": 40,
+                "license_plate_worker_batch_size": 6,
+            },
         },
         "geometry": {
             "evidence_crop": {
@@ -115,6 +121,7 @@ def test_load_app_config_reads_grouped_settings_schema(tmp_path: Path) -> None:
         "license_plate": {
             "enabled": True,
             "detector_weights_path": "backend/license_plate_yolov8.pt",
+            "detector_backend": "pytorch",
             "detector_confidence_threshold": 0.4,
             "detector_allowed_classes": ["license_plate", "License Plates"],
             "ocr_backend": "paddleocr",
@@ -141,6 +148,7 @@ def test_load_app_config_reads_grouped_settings_schema(tmp_path: Path) -> None:
 
     assert cfg.db_path == repo_root / "config" / "test.sqlite"
     assert cfg.detector_device == "cpu"
+    assert cfg.detector_backend == "pytorch"
     assert cfg.detector_conf_threshold == 0.22
     assert cfg.detector_allowed_classes == ["motorcycle", "car"]
     assert cfg.track_push_interval_ms == 150
@@ -151,6 +159,9 @@ def test_load_app_config_reads_grouped_settings_schema(tmp_path: Path) -> None:
     assert cfg.rtsp_reconnect_delay_s == 1.25
     assert cfg.preview_max_fps == 12.0
     assert cfg.processing_fps_window_s == 2.0
+    assert cfg.processing_prune_interval_ms == 900
+    assert cfg.license_plate_worker_max_pending_jobs == 40
+    assert cfg.license_plate_worker_batch_size == 6
     assert cfg.turn_detection_heading.straight_max_deg == 30.0
     assert cfg.turn_detection_curvature.u_turn_min == 0.22
     assert cfg.turn_detection_opposite_direction.cos_threshold == -0.25
@@ -176,6 +187,7 @@ def test_load_app_config_reads_grouped_settings_schema(tmp_path: Path) -> None:
     assert cfg.evidence_jpeg_quality == 88
     assert cfg.license_plate.enabled is True
     assert cfg.license_plate.detector_confidence_threshold == 0.4
+    assert cfg.license_plate.detector_backend == "pytorch"
     assert cfg.license_plate.detector_allowed_classes == ["license_plate", "License Plates"]
     assert cfg.license_plate.ocr_backend == "paddleocr"
     assert cfg.license_plate.easyocr_lang == "en"

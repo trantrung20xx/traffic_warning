@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import os
-from typing import Callable, Optional
+from typing import Optional
 
 import cv2
 
@@ -146,7 +146,6 @@ class LicensePlateOcr:
         paddle_text_recognition_model_name: str = "PP-OCRv5_mobile_rec",
         paddle_lang: str = "en",
         paddle_use_gpu: bool = False,
-        on_log: Optional[Callable[[str], None]] = None,
     ):
         self.backend = str(backend or "paddleocr").strip().lower()
         self._easyocr_lang = str(easyocr_lang or "en").strip().lower()
@@ -160,7 +159,6 @@ class LicensePlateOcr:
         ).strip()
         self._paddle_lang = str(paddle_lang or "en").strip().lower()
         self._paddle_use_gpu = bool(paddle_use_gpu)
-        self._on_log = on_log or (lambda _: None)
         self._engine = None
         self.available = False
         self._init_backend()
@@ -172,7 +170,6 @@ class LicensePlateOcr:
         if self.backend == "paddleocr":
             self._init_paddleocr()
             return
-        self._on_log(f"[license_plate_ocr] unsupported backend={self.backend}. OCR disabled.")
 
     def _easyocr_languages(self) -> list[str]:
         raw = self._easyocr_lang.replace(";", ",").replace(" ", ",")
@@ -184,8 +181,7 @@ class LicensePlateOcr:
     def _init_easyocr(self) -> None:
         try:
             import easyocr
-        except Exception as exc:
-            self._on_log(f"[license_plate_ocr] easyocr is unavailable: {exc}. OCR disabled.")
+        except Exception:
             return
         try:
             self._engine = easyocr.Reader(
@@ -194,8 +190,8 @@ class LicensePlateOcr:
                 verbose=False,
             )
             self.available = True
-        except Exception as exc:
-            self._on_log(f"[license_plate_ocr] failed to initialize easyocr: {exc}. OCR disabled.")
+        except Exception:
+            return
 
     def _init_paddleocr(self) -> None:
         try:
@@ -207,8 +203,8 @@ class LicensePlateOcr:
                 use_gpu=self._paddle_use_gpu,
             )
             self.available = True
-        except Exception as exc:
-            self._on_log(f"[license_plate_ocr] failed to initialize paddleocr: {exc}. OCR disabled.")
+        except Exception:
+            return
 
     def read_best(self, image_bgr) -> Optional[OcrReadout]:
         if not self.available or self._engine is None:
@@ -225,8 +221,7 @@ class LicensePlateOcr:
                 return self._read_easyocr(image_rgb)
             if self.backend == "paddleocr":
                 return self._read_paddleocr(image_rgb)
-        except Exception as exc:
-            self._on_log(f"[license_plate_ocr] OCR inference failed: {exc}")
+        except Exception:
             return None
         return None
 
