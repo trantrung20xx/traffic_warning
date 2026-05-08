@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.core.config import CameraLaneConfig, denormalize_lane_config
 from app.logic.direction_logic import DirectionDetectionSettings
-from app.logic.lane_logic import LaneLogic, TemporalLaneAssigner
+from app.logic.lane_logic import LaneLogic, LaneObservation, LaneScore, TemporalLaneAssigner
 from app.logic.geometry_validator import validate_lane_geometry
 from app.logic.violation_logic import ViolationLogic
 
@@ -110,6 +110,46 @@ class LaneFeatureTests(unittest.TestCase):
         return ViolationLogic(
             runtime_lane_config.lanes,
             **kwargs,
+        )
+
+    @staticmethod
+    def _lane_observation_for_tests(
+        *,
+        raw_lane_id: int,
+        source_lane_id: int,
+        target_lane_id: int,
+        source_confidence: float,
+        target_confidence: float,
+    ) -> LaneObservation:
+        source_score = LaneScore(
+            overlap_length=10.0 * float(source_confidence),
+            overlap_ratio=min(max(float(source_confidence), 0.0), 1.0),
+            center_inside=source_confidence >= 0.5,
+            left_contact_inside=source_confidence >= 0.45,
+            right_contact_inside=source_confidence >= 0.45,
+            confidence=min(max(float(source_confidence), 0.0), 1.0),
+        )
+        target_score = LaneScore(
+            overlap_length=10.0 * float(target_confidence),
+            overlap_ratio=min(max(float(target_confidence), 0.0), 1.0),
+            center_inside=target_confidence >= 0.5,
+            left_contact_inside=target_confidence >= 0.45,
+            right_contact_inside=target_confidence >= 0.45,
+            confidence=min(max(float(target_confidence), 0.0), 1.0),
+        )
+        lane_scores = {
+            int(source_lane_id): source_score,
+            int(target_lane_id): target_score,
+        }
+        selected = lane_scores.get(int(raw_lane_id))
+        return LaneObservation(
+            raw_lane_id=int(raw_lane_id),
+            confidence=float(selected.confidence if selected is not None else 0.0),
+            overlap_ratio=float(selected.overlap_ratio if selected is not None else 0.0),
+            center_inside=bool(selected.center_inside if selected is not None else False),
+            left_contact_inside=bool(selected.left_contact_inside if selected is not None else False),
+            right_contact_inside=bool(selected.right_contact_inside if selected is not None else False),
+            lane_scores=lane_scores,
         )
 
     def test_vehicle_type_not_allowed_emits_violation_once(self) -> None:
@@ -496,6 +536,189 @@ class LaneFeatureTests(unittest.TestCase):
         lifecycle = logic._vehicle_states[303].violation_lifecycles["wrong_lane:1->2"]
         self.assertEqual(lifecycle.event_window_id, 2)
         self.assertIsNotNone(lifecycle.emitted_ts)
+
+    def test_wrong_lane_requires_transition_evidence_with_lane_observation(self) -> None:
+        lane_config = CameraLaneConfig.model_validate(
+            {
+                "camera_id": "cam_test",
+                "frame_width": 100,
+                "frame_height": 100,
+                "lanes": [
+                    {
+                        "lane_id": 1,
+                        "polygon": [[0.0, 0.0], [0.49, 0.0], [0.49, 1.0], [0.0, 1.0]],
+                        "allowed_lane_changes": [1],
+                        "allowed_maneuvers": ["straight"],
+                        "allowed_vehicle_types": ["car"],
+                    },
+                    {
+                        "lane_id": 2,
+                        "polygon": [[0.51, 0.0], [1.0, 0.0], [1.0, 1.0], [0.51, 1.0]],
+                        "allowed_lane_changes": [2],
+                        "allowed_maneuvers": ["straight"],
+                        "allowed_vehicle_types": ["car"],
+                    },
+                ],
+            }
+        )
+        runtime_lane_config = denormalize_lane_config(lane_config)
+        logic = ViolationLogic(
+            runtime_lane_config.lanes,
+            wrong_lane_min_duration_ms=900,
+            turn_region_min_hits=3,
+        )
+        ts = datetime(2026, 5, 8, 8, 0, 0, tzinfo=timezone.utc)
+
+        self.assertEqual(
+            logic.update_and_maybe_generate_violation(
+                vehicle_id=304,
+                vehicle_type="car",
+                lane_id=1,
+                lane_observation=self._lane_observation_for_tests(
+                    raw_lane_id=1,
+                    source_lane_id=1,
+                    target_lane_id=2,
+                    source_confidence=0.90,
+                    target_confidence=0.08,
+                ),
+                bbox_xyxy=[10, 10, 20, 20],
+                ts=ts,
+            ),
+            [],
+        )
+        self.assertEqual(
+            logic.update_and_maybe_generate_violation(
+                vehicle_id=304,
+                vehicle_type="car",
+                lane_id=2,
+                lane_observation=self._lane_observation_for_tests(
+                    raw_lane_id=2,
+                    source_lane_id=1,
+                    target_lane_id=2,
+                    source_confidence=0.40,
+                    target_confidence=0.52,
+                ),
+                bbox_xyxy=[12, 10, 22, 20],
+                ts=ts + timedelta(milliseconds=200),
+            ),
+            [],
+        )
+        self.assertEqual(
+            logic.update_and_maybe_generate_violation(
+                vehicle_id=304,
+                vehicle_type="car",
+                lane_id=2,
+                lane_observation=self._lane_observation_for_tests(
+                    raw_lane_id=2,
+                    source_lane_id=1,
+                    target_lane_id=2,
+                    source_confidence=0.38,
+                    target_confidence=0.50,
+                ),
+                bbox_xyxy=[12, 10, 22, 20],
+                ts=ts + timedelta(milliseconds=1400),
+            ),
+            [],
+        )
+
+    def test_wrong_lane_emits_when_transition_evidence_is_strong(self) -> None:
+        lane_config = CameraLaneConfig.model_validate(
+            {
+                "camera_id": "cam_test",
+                "frame_width": 100,
+                "frame_height": 100,
+                "lanes": [
+                    {
+                        "lane_id": 1,
+                        "polygon": [[0.0, 0.0], [0.49, 0.0], [0.49, 1.0], [0.0, 1.0]],
+                        "allowed_lane_changes": [1],
+                        "allowed_maneuvers": ["straight"],
+                        "allowed_vehicle_types": ["car"],
+                    },
+                    {
+                        "lane_id": 2,
+                        "polygon": [[0.51, 0.0], [1.0, 0.0], [1.0, 1.0], [0.51, 1.0]],
+                        "allowed_lane_changes": [2],
+                        "allowed_maneuvers": ["straight"],
+                        "allowed_vehicle_types": ["car"],
+                    },
+                ],
+            }
+        )
+        runtime_lane_config = denormalize_lane_config(lane_config)
+        logic = ViolationLogic(
+            runtime_lane_config.lanes,
+            wrong_lane_min_duration_ms=900,
+            turn_region_min_hits=3,
+        )
+        ts = datetime(2026, 5, 8, 9, 0, 0, tzinfo=timezone.utc)
+
+        self.assertEqual(
+            logic.update_and_maybe_generate_violation(
+                vehicle_id=305,
+                vehicle_type="car",
+                lane_id=1,
+                lane_observation=self._lane_observation_for_tests(
+                    raw_lane_id=1,
+                    source_lane_id=1,
+                    target_lane_id=2,
+                    source_confidence=0.92,
+                    target_confidence=0.05,
+                ),
+                bbox_xyxy=[10, 10, 20, 20],
+                ts=ts,
+            ),
+            [],
+        )
+        self.assertEqual(
+            logic.update_and_maybe_generate_violation(
+                vehicle_id=305,
+                vehicle_type="car",
+                lane_id=2,
+                lane_observation=self._lane_observation_for_tests(
+                    raw_lane_id=2,
+                    source_lane_id=1,
+                    target_lane_id=2,
+                    source_confidence=0.18,
+                    target_confidence=0.84,
+                ),
+                bbox_xyxy=[38, 10, 48, 20],
+                ts=ts + timedelta(milliseconds=200),
+            ),
+            [],
+        )
+        self.assertEqual(
+            logic.update_and_maybe_generate_violation(
+                vehicle_id=305,
+                vehicle_type="car",
+                lane_id=2,
+                lane_observation=self._lane_observation_for_tests(
+                    raw_lane_id=2,
+                    source_lane_id=1,
+                    target_lane_id=2,
+                    source_confidence=0.16,
+                    target_confidence=0.86,
+                ),
+                bbox_xyxy=[55, 10, 65, 20],
+                ts=ts + timedelta(milliseconds=700),
+            ),
+            [],
+        )
+        emitted = logic.update_and_maybe_generate_violation(
+            vehicle_id=305,
+            vehicle_type="car",
+            lane_id=2,
+            lane_observation=self._lane_observation_for_tests(
+                raw_lane_id=2,
+                source_lane_id=1,
+                target_lane_id=2,
+                source_confidence=0.14,
+                target_confidence=0.88,
+            ),
+            bbox_xyxy=[70, 10, 80, 20],
+            ts=ts + timedelta(milliseconds=1200),
+        )
+        self.assertViolationsEqual(emitted, [{"lane_id": 2, "violation": "wrong_lane"}])
 
     def test_wrong_direction_requires_temporal_persistence_before_emitting(self) -> None:
         lane_config = CameraLaneConfig.model_validate(

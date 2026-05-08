@@ -12,6 +12,7 @@ from app.logic.direction_logic import (
     DirectionDetectionSettings,
     DirectionLogic,
 )
+from app.logic.lane_logic import LaneObservation
 from app.logic.polygon import (
     PreparedLine,
     PreparedPolygon,
@@ -28,6 +29,13 @@ class IllegalLaneCandidate:
     target_lane_id: int
     started_ts: datetime
     source_lane_duration_ms: int = 0
+    observed_frames: int = 0
+    target_majority_hits: int = 0
+    target_confidence_sum: float = 0.0
+    source_confidence_sum: float = 0.0
+    started_center: Optional[tuple[float, float]] = None
+    latest_center: Optional[tuple[float, float]] = None
+    used_confidence_observation: bool = False
 
 
 @dataclass
@@ -139,6 +147,12 @@ class ViolationLogic:
         vehicle_type_min_duration_ms: int = 900,
         wrong_lane_min_duration_ms: int = 1200,
         wrong_lane_min_source_stable_ms: int = 0,
+        wrong_lane_target_confidence_min: float = 0.70,
+        wrong_lane_source_confidence_max: float = 0.35,
+        wrong_lane_target_majority_ratio_min: float = 0.70,
+        wrong_lane_min_lateral_displacement_px: float = 12.0,
+        wrong_lane_min_lateral_displacement_lane_ratio: float = 0.12,
+        wrong_lane_min_observed_frames: int = 3,
         turn_region_min_hits: int = 3,
         turn_state_timeout_ms: int = 3000,
         trajectory_history_window_ms: int = 2000,
@@ -228,6 +242,18 @@ class ViolationLogic:
         self._vehicle_type_min_duration_ms = int(vehicle_type_min_duration_ms)
         self._wrong_lane_min_duration_ms = int(wrong_lane_min_duration_ms)
         self._wrong_lane_min_source_stable_ms = int(wrong_lane_min_source_stable_ms)
+        self._wrong_lane_target_confidence_min = min(max(float(wrong_lane_target_confidence_min), 0.0), 1.0)
+        self._wrong_lane_source_confidence_max = min(max(float(wrong_lane_source_confidence_max), 0.0), 1.0)
+        self._wrong_lane_target_majority_ratio_min = min(
+            max(float(wrong_lane_target_majority_ratio_min), 0.0),
+            1.0,
+        )
+        self._wrong_lane_min_lateral_displacement_px = max(float(wrong_lane_min_lateral_displacement_px), 0.0)
+        self._wrong_lane_min_lateral_displacement_lane_ratio = min(
+            max(float(wrong_lane_min_lateral_displacement_lane_ratio), 0.0),
+            1.0,
+        )
+        self._wrong_lane_min_observed_frames = max(int(wrong_lane_min_observed_frames), 1)
         self._turn_region_min_hits = int(turn_region_min_hits)
         self._turn_state_timeout_ms = int(turn_state_timeout_ms)
         self._trajectory_history_window_ms = int(trajectory_history_window_ms)
@@ -285,6 +311,10 @@ class ViolationLogic:
             lp.lane_id: self._lane_commit_point(lp)
             for lp in lane_polygons
         }
+        self._lane_nominal_width_px = {
+            lp.lane_id: self._estimate_lane_width_px(lp.polygon)
+            for lp in lane_polygons
+        }
         self._lane_direction_vectors: dict[int, Optional[tuple[float, float]]] = {}
         for lane in lane_polygons:
             commit_point = self._lane_commit_points.get(lane.lane_id)
@@ -326,6 +356,7 @@ class ViolationLogic:
         vehicle_id: int,
         vehicle_type: str,
         lane_id: Optional[int],
+        lane_observation: Optional[LaneObservation] = None,
         bbox_xyxy: list[float] | tuple[float, ...],
         ts: datetime,
     ) -> list[dict]:
@@ -342,7 +373,14 @@ class ViolationLogic:
 
         violations: list[dict] = []
 
-        self._update_lane_state(st=st, lane_id=lane_id, ts=ts, violations=violations)
+        self._update_lane_state(
+            st=st,
+            lane_id=lane_id,
+            lane_observation=lane_observation,
+            sample=sample,
+            ts=ts,
+            violations=violations,
+        )
 
         current_lane_id = st.current_stable_lane_id
         if current_lane_id is not None:
@@ -423,11 +461,19 @@ class ViolationLogic:
         *,
         st: VehicleState,
         lane_id: Optional[int],
+        lane_observation: Optional[LaneObservation],
+        sample: TrajectorySample,
         ts: datetime,
         violations: list[dict],
     ) -> None:
         if lane_id is None:
-            self._update_wrong_lane_candidate(st=st, ts=ts, violations=violations)
+            self._update_wrong_lane_candidate(
+                st=st,
+                lane_observation=lane_observation,
+                sample=sample,
+                ts=ts,
+                violations=violations,
+            )
             return
 
         previous_lane_id = st.current_stable_lane_id
@@ -435,7 +481,13 @@ class ViolationLogic:
             st.current_stable_lane_id = lane_id
             st.current_lane_started_ts = ts
             self._append_lane_history(st=st, lane_id=lane_id, ts=ts)
-            self._update_wrong_lane_candidate(st=st, ts=ts, violations=violations)
+            self._update_wrong_lane_candidate(
+                st=st,
+                lane_observation=lane_observation,
+                sample=sample,
+                ts=ts,
+                violations=violations,
+            )
             return
 
         if lane_id != previous_lane_id:
@@ -464,14 +516,24 @@ class ViolationLogic:
                     target_lane_id=lane_id,
                     started_ts=ts,
                     source_lane_duration_ms=source_lane_duration_ms,
+                    started_center=sample.center,
+                    latest_center=sample.center,
                 )
 
-        self._update_wrong_lane_candidate(st=st, ts=ts, violations=violations)
+        self._update_wrong_lane_candidate(
+            st=st,
+            lane_observation=lane_observation,
+            sample=sample,
+            ts=ts,
+            violations=violations,
+        )
 
     def _update_wrong_lane_candidate(
         self,
         *,
         st: VehicleState,
+        lane_observation: Optional[LaneObservation],
+        sample: TrajectorySample,
         ts: datetime,
         violations: list[dict],
     ) -> None:
@@ -482,6 +544,12 @@ class ViolationLogic:
         if st.current_stable_lane_id != candidate.target_lane_id:
             st.illegal_lane_candidate = None
             return
+
+        candidate.latest_center = sample.center
+        self._accumulate_wrong_lane_candidate_evidence(
+            candidate=candidate,
+            lane_observation=lane_observation,
+        )
 
         if candidate.source_lane_duration_ms < self._wrong_lane_min_source_stable_ms:
             st.illegal_lane_candidate = None
@@ -499,6 +567,9 @@ class ViolationLogic:
         if duration_ms < self._wrong_lane_min_duration_ms:
             return
 
+        if not self._has_wrong_lane_transition_evidence(candidate=candidate):
+            return
+
         lifecycle_key = f"wrong_lane:{candidate.source_lane_id}->{candidate.target_lane_id}"
         self._emit_violation_if_needed(
             st=st,
@@ -512,9 +583,88 @@ class ViolationLogic:
                 "target_lane_id": candidate.target_lane_id,
                 "source_lane_duration_ms": candidate.source_lane_duration_ms,
                 "target_lane_duration_ms": duration_ms,
+                "target_majority_ratio": self._wrong_lane_target_majority_ratio(candidate),
+                "avg_target_confidence": self._wrong_lane_avg_target_confidence(candidate),
+                "avg_source_confidence": self._wrong_lane_avg_source_confidence(candidate),
             },
             violations=violations,
         )
+
+    def _accumulate_wrong_lane_candidate_evidence(
+        self,
+        *,
+        candidate: IllegalLaneCandidate,
+        lane_observation: Optional[LaneObservation],
+    ) -> None:
+        if lane_observation is None:
+            candidate.observed_frames += 1
+            candidate.target_majority_hits += 1
+            return
+
+        candidate.observed_frames += 1
+        source_conf = lane_observation.confidence_for_lane(candidate.source_lane_id)
+        target_conf = lane_observation.confidence_for_lane(candidate.target_lane_id)
+        candidate.source_confidence_sum += source_conf
+        candidate.target_confidence_sum += target_conf
+        candidate.used_confidence_observation = True
+        if lane_observation.raw_lane_id == candidate.target_lane_id:
+            candidate.target_majority_hits += 1
+
+    def _has_wrong_lane_transition_evidence(self, *, candidate: IllegalLaneCandidate) -> bool:
+        if not candidate.used_confidence_observation:
+            return True
+
+        if candidate.observed_frames < self._wrong_lane_min_observed_frames:
+            return False
+
+        if self._wrong_lane_target_majority_ratio(candidate) < self._wrong_lane_target_majority_ratio_min:
+            return False
+        if self._wrong_lane_avg_target_confidence(candidate) < self._wrong_lane_target_confidence_min:
+            return False
+        if self._wrong_lane_avg_source_confidence(candidate) > self._wrong_lane_source_confidence_max:
+            return False
+
+        if candidate.started_center is None or candidate.latest_center is None:
+            return False
+
+        lane_width_px = self._lane_nominal_width_px.get(candidate.source_lane_id, 0.0)
+        min_lateral_px = max(
+            self._wrong_lane_min_lateral_displacement_px,
+            lane_width_px * self._wrong_lane_min_lateral_displacement_lane_ratio,
+        )
+        lateral_displacement_px = self._lateral_displacement_from_source_lane(candidate=candidate)
+        return lateral_displacement_px >= min_lateral_px
+
+    def _wrong_lane_target_majority_ratio(self, candidate: IllegalLaneCandidate) -> float:
+        if candidate.observed_frames <= 0:
+            return 0.0
+        return float(candidate.target_majority_hits) / float(candidate.observed_frames)
+
+    def _wrong_lane_avg_target_confidence(self, candidate: IllegalLaneCandidate) -> float:
+        if candidate.observed_frames <= 0:
+            return 0.0
+        return float(candidate.target_confidence_sum) / float(candidate.observed_frames)
+
+    def _wrong_lane_avg_source_confidence(self, candidate: IllegalLaneCandidate) -> float:
+        if candidate.observed_frames <= 0:
+            return 0.0
+        return float(candidate.source_confidence_sum) / float(candidate.observed_frames)
+
+    def _lateral_displacement_from_source_lane(self, *, candidate: IllegalLaneCandidate) -> float:
+        start = candidate.started_center
+        end = candidate.latest_center
+        if start is None or end is None:
+            return 0.0
+        move_x = float(end[0]) - float(start[0])
+        move_y = float(end[1]) - float(start[1])
+
+        lane_vec = self._lane_direction_vectors.get(candidate.source_lane_id)
+        if lane_vec is None:
+            return hypot(move_x, move_y)
+
+        normal_x = -lane_vec[1]
+        normal_y = lane_vec[0]
+        return abs((move_x * normal_x) + (move_y * normal_y))
 
     def _update_turn_state(
         self,
@@ -2020,6 +2170,16 @@ class ViolationLogic:
         start = points[0]
         end = points[1]
         return ((float(start[0]) + float(end[0])) / 2.0, (float(start[1]) + float(end[1])) / 2.0)
+
+    @staticmethod
+    def _estimate_lane_width_px(points: list[list[float]]) -> float:
+        if not points:
+            return 0.0
+        xs = [float(point[0]) for point in points]
+        ys = [float(point[1]) for point in points]
+        width_px = max(xs) - min(xs)
+        height_px = max(ys) - min(ys)
+        return max(min(width_px, height_px), 0.0)
 
     @staticmethod
     def _normalized_mean_vector(vectors: list[tuple[float, float]]) -> Optional[tuple[float, float]]:
