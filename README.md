@@ -189,6 +189,40 @@ Biển số được xử lý theo 2 bước:
 Crop xe -> tìm vùng biển số -> đọc chữ/số trên biển số
 ```
 
+Model mặc định cần đặt tại:
+
+```text
+backend/license_plate_yolov8.pt
+```
+
+Tải nhanh model khuyến nghị về đúng tên file mặc định:
+
+```powershell
+Invoke-WebRequest -Uri "https://huggingface.co/Koushim/yolov8-license-plate-detection/resolve/main/best.pt?download=true" -OutFile ".\backend\license_plate_yolov8.pt"
+```
+
+Vì hệ thống hiện tại đã crop vùng xe trước rồi mới tìm biển số, model detector biển số phù hợp nhất là model nhẹ, một class biển số duy nhất. Nếu dùng model nhiều class, cần cấu hình `license_plate.detector_allowed_classes` đúng tên class biển số để backend không lấy nhầm khung xe.
+
+| Model | Link tải `.pt` | Ưu điểm với hệ thống hiện tại | Nhược điểm / lưu ý |
+|---|---|---|---|
+| `Koushim/yolov8-license-plate-detection` | [best.pt](https://huggingface.co/Koushim/yolov8-license-plate-detection/resolve/main/best.pt?download=true) | Phù hợp nhất để đặt thành `backend/license_plate_yolov8.pt`: YOLOv8n nhẹ, chỉ có 1 class `license_plate`, license MIT, đúng với pipeline crop xe rồi detect biển số. | Model generic, vẫn cần test lại với biển số Việt Nam, góc camera thực tế, ban đêm và biển số mờ. |
+| `Murd0ck/LicensePlateDetector_YOLOv8n` | [best.pt](https://huggingface.co/Murd0ck/LicensePlateDetector_YOLOv8n/resolve/main/best.pt?download=true) | YOLOv8n nhẹ, có cả bản `.pt` và `.onnx`, metric validation cao theo model card, phù hợp làm model thử nghiệm thứ hai. | Dữ liệu huấn luyện nghiêng về biển số Ukraine/AUTO.RIA; license CC BY 4.0 nên cần ghi nguồn khi dùng; cần kiểm thử lại với biển số Việt Nam. |
+| `orionwambert/yolov8-license-plate-detection` | [best.pt](https://huggingface.co/orionwambert/yolov8-license-plate-detection/resolve/main/best.pt?download=true) | YOLOv8n, có class `License Plates`; có thể dùng nếu muốn thử model nhận cả xe và biển số. | Có 2 class `License Plates`, `Vehicles`, nên bắt buộc cấu hình allowlist class biển số; nếu không có thể chọn nhầm khung xe. |
+| `morsetechlab/yolov11-license-plate-detection` | [v1n.pt](https://huggingface.co/morsetechlab/yolov11-license-plate-detection/resolve/main/license-plate-finetune-v1n.pt?download=true) | Có nhiều biến thể YOLO11 `n/s/m/l/x`, dataset lớn hơn, có thể thử khi muốn độ chính xác cao hơn và môi trường Ultralytics mới hỗ trợ YOLO11. | License AGPLv3; cần kiểm tra tương thích phiên bản `ultralytics` trong môi trường hiện tại; bản lớn nặng hơn và có thể làm giảm FPS. |
+
+Sau khi tải model khác, có thể đổi tên thành `license_plate_yolov8.pt` hoặc sửa đường dẫn trong `config/settings.json`:
+
+```json
+{
+  "license_plate": {
+    "enabled": true,
+    "detector_weights_path": "backend/license_plate_yolov8.pt",
+    "detector_allowed_classes": ["license_plate", "License Plates"],
+    "ocr_backend": "paddleocr"
+  }
+}
+```
+
 Cấu hình chính:
 
 ```json
