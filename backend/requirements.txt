@@ -40,6 +40,19 @@ ultralytics
 # GPU NVIDIA (ví dụ CUDA 13.0):
 #   pip install torch==2.10.0 torchvision==0.25.0 --index-url https://download.pytorch.org/whl/cu130
 
+# Inference backend mặc định (pytorch):
+torch
+torchvision
+# Ultralytics phụ thuộc PyTorch để chạy mô hình .pt
+# Inference backend thay thế (được source hỗ trợ qua `detection.backend`):
+# onnxruntime
+# openvino; platform_system == "Windows" or platform_system == "Linux"
+# tensorrt==10.16.1.11; platform_machine == "AMD64" or platform_machine == "x86_64"
+# Lưu ý:
+# - TensorRT chỉ nên dùng trên máy có NVIDIA driver/CUDA tương thích.
+# - Backend thực tế dùng backend nào phụ thuộc vào `detection.backend` và định dạng weight
+#   (.pt/.onnx/.xml/.engine), không tự đổi hành vi nhận diện nếu bạn vẫn để backend = pytorch.
+
 lap>=0.5.12
 # Thư viện phục vụ thuật toán ByteTrack (matching bounding box)
 # Cài sẵn để tránh việc Ultralytics tự tải khi chạy lần đầu

@@ -8,7 +8,7 @@
 		}
 	},
 	"detection": {
-		"weights_path": "backend/yolov8n.pt",
+		"weights_path": "backend/yolov8m.pt",
 		"device": "auto",
 		"confidence_threshold": 0.25,
 		"iou_threshold": 0.7,
