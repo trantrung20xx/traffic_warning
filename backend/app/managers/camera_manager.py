@@ -35,16 +35,23 @@ class CameraManager:
     """Quản lý danh sách camera, context runtime và các kênh realtime toàn hệ thống."""
 
     def __init__(self, repo_root: Path):
+        # Root thư mục dự án để resolve toàn bộ path config/evidence.
         self.repo_root = repo_root
+        # Load settings typed ngay khi khởi tạo manager.
         self.cfg = load_app_config(repo_root)
 
+        # Validate tính toàn vẹn giữa cameras.json và lane_configs/* trước khi chạy.
         validate_no_shared_lanes_across_cameras(repo_root)
         self.cameras: list[CameraConfig] = load_cameras(repo_root)
 
+        # Engine/session dùng chung cho query lịch sử và analytics.
         self._engine, self._SessionLocal = create_engine_and_session(self.cfg.db_path)
 
+        # Runtime map camera_id -> context xử lý realtime.
         self._contexts: dict[str, CameraContext] = {}
+        # Cờ stop dùng chung cho toàn bộ camera task.
         self._stop_event = asyncio.Event()
+        # Map camera_id -> asyncio task đang chạy run_forever.
         self._tasks: dict[str, asyncio.Task] = {}
         self._running = False
 
@@ -56,9 +63,11 @@ class CameraManager:
 
     @property
     def session_factory(self):
+        # Expose session factory cho API layer cần query DB.
         return self._SessionLocal
 
     def list_cameras(self) -> list[dict]:
+        # Trả danh sách camera ở dạng dict JSON-friendly cho API.
         rows = []
         for cam in self.cameras:
             rows.append(
@@ -81,10 +90,12 @@ class CameraManager:
         return rows
 
     def get_camera_detail(self, camera_id: str) -> dict:
+        # Tìm camera theo id; không thấy thì ném KeyError để route map thành 404.
         cam = next((item for item in self.cameras if item.camera_id == camera_id), None)
         if cam is None:
             raise KeyError(camera_id)
         lane_cfg = load_lane_config_for_camera(self.repo_root, camera_id)
+        # Validate geometry để UI biết cảnh báo cấu hình hiện tại.
         validation = validate_lane_geometry(lane_cfg)
         return {
             "camera": {
@@ -120,25 +131,32 @@ class CameraManager:
             raise ValueError("monitored_lanes must match lane_config lane_id values")
 
         next_cameras = [cam for cam in self.cameras if cam.camera_id != camera_config.camera_id]
+        # Upsert: thay camera cũ cùng id bằng camera mới.
         next_cameras.append(camera_config)
+        # Giữ thứ tự cố định theo camera_id để file config dễ review diff.
         next_cameras.sort(key=lambda cam: cam.camera_id)
 
+        # Ghi file camera và lane config xuống disk.
         save_cameras(self.repo_root, next_cameras)
         save_lane_config_for_camera(self.repo_root, lane_config)
+        # Re-validate sau ghi để chặn trạng thái shared lane ngoài ý muốn.
         validate_no_shared_lanes_across_cameras(self.repo_root)
 
         self.cameras = next_cameras
+        # Reload context runtime để áp dụng cấu hình mới ngay.
         self._reload_context(camera_config.camera_id)
         return self.get_camera_detail(camera_config.camera_id)
 
     def delete_camera(self, camera_id: str) -> None:
         if not any(cam.camera_id == camera_id for cam in self.cameras):
             raise KeyError(camera_id)
+        # Dừng context trước khi xóa metadata/config để tránh đọc dữ liệu mồ côi.
         self._stop_context(camera_id)
         self.cameras = [cam for cam in self.cameras if cam.camera_id != camera_id]
         save_cameras(self.repo_root, self.cameras)
         delete_lane_config_for_camera(self.repo_root, camera_id)
         delete_background_image(self.repo_root, camera_id)
+        # Dọn evidence ảnh vi phạm để không còn dữ liệu mồ côi theo camera đã xóa.
         delete_evidence_images_for_camera(self.repo_root, camera_id)
 
     def query_history(
@@ -150,6 +168,7 @@ class CameraManager:
         license_plate: Optional[str],
         limit: Optional[int],
     ):
+        # Query lịch sử qua repository, session scope theo từng request.
         with self._SessionLocal() as session:
             return query_violation_history(
                 session,
@@ -161,6 +180,7 @@ class CameraManager:
             )
 
     def query_dashboard(self, *, from_ts: Optional[str], to_ts: Optional[str], camera_id: Optional[str]):
+        # Dashboard aggregate được tính theo filter và chart_config hiện tại.
         with self._SessionLocal() as session:
             return query_dashboard_analytics(
                 session,
@@ -175,9 +195,11 @@ class CameraManager:
         self._broadcast_to_listeners(listeners=self._track_listeners, message=msg)
 
     def _on_violation(self, ev: ViolationEvent) -> None:
+        # Broadcast sự kiện vi phạm tới toàn bộ listener queue đã đăng ký.
         self._broadcast_to_listeners(listeners=self._violation_listeners, message=ev)
 
     def create_track_listener(self, *, maxsize: Optional[int] = None) -> asyncio.Queue[TrackMessage | None]:
+        # Mỗi client/consumer được cấp một queue riêng để tránh tranh chấp dữ liệu.
         q: asyncio.Queue[TrackMessage | None] = self._create_listener_queue(maxsize=maxsize)
         self._track_listeners.add(q)
         return q
@@ -188,6 +210,7 @@ class CameraManager:
         return q
 
     def remove_track_listener(self, q: asyncio.Queue[TrackMessage | None]) -> None:
+        # discard an toàn ngay cả khi q không còn trong set.
         self._track_listeners.discard(q)
 
     def remove_violation_listener(self, q: asyncio.Queue[ViolationEvent | None]) -> None:
@@ -208,6 +231,7 @@ class CameraManager:
     def get_lane_polygons(self, camera_id: str) -> dict:
         ctx = self._contexts.get(camera_id)
         if ctx is None:
+            # Khi context chưa chạy, trả dữ liệu từ file config đã denormalize.
             lane_cfg = load_lane_config_for_camera(self.repo_root, camera_id)
             lane_cfg_pixels = denormalize_lane_config(lane_cfg)
             validation = validate_lane_geometry(lane_cfg)
@@ -234,8 +258,10 @@ class CameraManager:
         payload = ctx.get_lane_polygons_for_ui()
         try:
             lane_cfg = load_lane_config_for_camera(self.repo_root, camera_id)
+            # Luôn trả validation mới nhất từ file để UI cảnh báo chính xác.
             payload["config_validation"] = validate_lane_geometry(lane_cfg)
         except Exception:
+            # Lỗi load/validate config không làm hỏng API runtime lane payload.
             payload["config_validation"] = []
         return payload
 
@@ -265,6 +291,7 @@ class CameraManager:
 
     def has_background_image(self, camera_id: str) -> bool:
         self._require_camera_exists(camera_id)
+        # Chỉ cần kiểm tra path tồn tại hay không.
         return get_background_image_path(self.repo_root, camera_id) is not None
 
     def get_background_image_path(self, camera_id: str) -> Optional[Path]:
@@ -280,6 +307,7 @@ class CameraManager:
         path = get_background_image_path(self.repo_root, camera_id)
         if path is None:
             return False
+        # Có path thì thực hiện xóa và trả True.
         delete_background_image(self.repo_root, camera_id)
         return True
 
@@ -294,6 +322,7 @@ class CameraManager:
 
     async def start(self) -> None:
         if self._running:
+            # Idempotent: start lại khi đang chạy sẽ bỏ qua.
             return
         self._stop_event.clear()
         for cam in self.cameras:
@@ -310,11 +339,13 @@ class CameraManager:
         tasks = list(self._tasks.values())
         if tasks:
             try:
+                # Chờ các context thoát mềm trong timeout đầu tiên.
                 await asyncio.wait_for(
                     asyncio.gather(*tasks, return_exceptions=True),
                     timeout=6.0,
                 )
             except asyncio.TimeoutError:
+                # Quá timeout thì cancel cứng phần task còn treo.
                 for task in tasks:
                     task.cancel()
                 try:
@@ -331,12 +362,14 @@ class CameraManager:
         self._track_websockets.clear()
         self._violation_websockets.clear()
         try:
+            # Đóng engine SQLAlchemy khi manager dừng hẳn.
             self._engine.dispose()
         except Exception:
             pass
         self._running = False
 
     def _build_context(self, camera_id: str) -> CameraContext:
+        # Context lấy camera config + lane config hiện hành để dựng pipeline runtime.
         cam = next(item for item in self.cameras if item.camera_id == camera_id)
         lane_cfg = load_lane_config_for_camera(self.repo_root, cam.camera_id)
         lane_cfg_pixels = denormalize_lane_config(lane_cfg)
@@ -475,6 +508,7 @@ class CameraManager:
         )
 
     def _ui_payload(self) -> dict:
+        # Payload UI typed trả thẳng từ settings hiện hành.
         return self.cfg.ui.model_dump(mode="json")
 
     def _start_context(self, camera_id: str) -> None:
@@ -487,6 +521,7 @@ class CameraManager:
     def _stop_context(self, camera_id: str) -> None:
         task = self._tasks.pop(camera_id, None)
         if task is not None:
+            # Cancel task event-loop trước rồi mới request shutdown resource nền.
             task.cancel()
         ctx = self._contexts.pop(camera_id, None)
         if ctx is not None:
@@ -501,10 +536,12 @@ class CameraManager:
             self._start_context(camera_id)
 
     def _require_camera_exists(self, camera_id: str) -> None:
+        # Guard thống nhất cho các API thao tác theo camera_id.
         if not any(cam.camera_id == camera_id for cam in self.cameras):
             raise KeyError(camera_id)
 
     def _notify_listener_shutdown(self) -> None:
+        # Gửi sentinel None để consumer thoát vòng lặp đọc queue.
         for q in list(self._track_listeners):
             try:
                 q.put_nowait(None)
@@ -523,11 +560,13 @@ class CameraManager:
             except Exception:
                 pass
 
+        # Đóng toàn bộ socket track + violation còn mở.
         sockets = list(self._track_websockets) + list(self._violation_websockets)
         if sockets:
             await asyncio.gather(*(close_one(ws) for ws in sockets), return_exceptions=True)
 
     def _create_listener_queue(self, *, maxsize: Optional[int] = None) -> asyncio.Queue[Any]:
+        # maxsize request-level có thể override cấu hình mặc định.
         queue_size = int(maxsize) if maxsize is not None else int(self.cfg.websocket_listener_queue_maxsize)
         return asyncio.Queue(maxsize=max(queue_size, 1))
 

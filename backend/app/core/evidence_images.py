@@ -17,8 +17,10 @@ def _sanitize_fragment(value: str) -> str:
         if char.isalnum() or char in {"_", "-"}:
             cleaned.append(char)
         else:
+            # Ký tự lạ bị thay bằng "_" để tên file an toàn trên nhiều hệ điều hành.
             cleaned.append("_")
     compact = "".join(cleaned).strip("_")
+    # Tránh trả chuỗi rỗng để luôn có thành phần tên hợp lệ.
     return compact or "na"
 
 
@@ -30,6 +32,7 @@ def build_evidence_filename(
     lane_id: int,
     violation: str,
 ) -> str:
+    # Tên file chứa đủ camera/time/vehicle/lane/violation để truy vết ngược.
     return (
         f"{_sanitize_fragment(camera_id)}__{int(timestamp_utc_ms)}__"
         f"veh_{int(vehicle_id)}__lane_{int(lane_id)}__{_sanitize_fragment(violation)}.jpg"
@@ -44,6 +47,7 @@ def build_evidence_date_folder(timestamp_utc_ms: int) -> str:
 
 
 def build_evidence_relative_path(camera_id: str, timestamp_utc_ms: int, filename: str) -> str:
+    # Cấu trúc thư mục: camera_id/ngay_thang_nam/filename.jpg
     return (Path(_sanitize_fragment(camera_id)) / build_evidence_date_folder(timestamp_utc_ms) / filename).as_posix()
 
 
@@ -51,6 +55,7 @@ def build_evidence_image_url(relative_path: str | None) -> str | None:
     if not relative_path:
         return None
     normalized = Path(relative_path).as_posix().lstrip("/")
+    # quote giữ nguyên "/" để API path param vẫn phân tách đúng theo thư mục.
     return f"/api/violations/evidence/{quote(normalized, safe='/')}"
 
 
@@ -61,6 +66,7 @@ def resolve_evidence_image_path(repo_root: Path, relative_path: str | None) -> P
     cfg = load_app_config(repo_root)
     base_dir = cfg.evidence_images_dir.resolve()
     candidate = (base_dir / relative_path).resolve()
+    # Chặn path traversal: bắt buộc candidate nằm bên trong base_dir.
     if candidate == base_dir or base_dir not in candidate.parents:
         return None
     if not candidate.exists() or not candidate.is_file():
@@ -90,11 +96,13 @@ def save_evidence_image(
     )
     relative_path = build_evidence_relative_path(camera_id, timestamp_utc_ms, filename)
     destination = cfg.evidence_images_dir / relative_path
+    # Tạo thư mục đích theo cây camera/date nếu chưa tồn tại.
     destination.parent.mkdir(parents=True, exist_ok=True)
 
     ok, buf = cv2.imencode(".jpg", image_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), int(jpeg_quality)])
     if not ok:
         raise ValueError("Failed to encode violation evidence image")
+    # Ghi bytes JPG xuống disk, DB chỉ lưu relative_path.
     destination.write_bytes(buf.tobytes())
     return Path(relative_path).as_posix()
 
@@ -105,6 +113,7 @@ def delete_evidence_images_for_camera(repo_root: Path, camera_id: str) -> None:
     camera_dir = cfg.evidence_images_dir / _sanitize_fragment(camera_id)
     if not camera_dir.exists():
         return
+    # Xóa file trước, sau đó dọn thư mục rỗng từ dưới lên.
     for child in camera_dir.rglob("*"):
         if child.is_file():
             child.unlink()

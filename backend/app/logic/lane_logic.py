@@ -33,11 +33,14 @@ class LaneObservation:
     lane_scores: dict[int, LaneScore] = field(default_factory=dict)
 
     def confidence_for_lane(self, lane_id: int) -> float:
+        # Ưu tiên confidence chi tiết theo lane_scores nếu có.
         score = self.lane_scores.get(lane_id)
         if score is not None:
             return float(score.confidence)
+        # Fallback: nếu raw_lane trùng lane cần hỏi thì dùng confidence tổng của observation.
         if self.raw_lane_id == lane_id:
             return float(self.confidence)
+        # Không có bằng chứng cho lane này.
         return 0.0
 
 
@@ -83,6 +86,7 @@ class LaneLogic:
         *,
         preferred_lane_id: Optional[int] = None,
     ) -> Optional[int]:
+        # API rút gọn cho caller chỉ cần lane_id thô, không cần metadata observation.
         observation = self.observe_lane_from_bbox_xyxy(
             bbox_xyxy,
             preferred_lane_id=preferred_lane_id,
@@ -146,9 +150,11 @@ class LaneLogic:
             center_x=px,
             center_y=py,
         )
+        # selected có thể None nếu không đủ bằng chứng thuộc bất kỳ lane nào.
         selected = lane_scores.get(raw_lane_id) if raw_lane_id is not None else None
         return LaneObservation(
             raw_lane_id=raw_lane_id,
+            # Khi selected None thì toàn bộ trường confidence/overlap mặc định về 0/False.
             confidence=float(selected.confidence if selected is not None else 0.0),
             overlap_ratio=float(selected.overlap_ratio if selected is not None else 0.0),
             center_inside=bool(selected.center_inside if selected is not None else False),
@@ -170,6 +176,7 @@ class LaneLogic:
         best_overlap = max((score for score, _, _ in overlap_scores), default=0.0)
         if best_overlap > 0.0:
             if preferred_lane_id is not None:
+                # Tìm thông tin overlap của preferred lane để xét hysteresis.
                 preferred_tuple = next(
                     (item for item in overlap_scores if item[1] == preferred_lane_id),
                     None,
@@ -216,6 +223,7 @@ class LaneLogic:
         for lane_id in self._lane_order:
             shape = self._lane_shapes[lane_id]
             if shape.contains_xy(center_x, center_y):
+                # Collect tất cả lane chứa tâm đáy, dùng cho nhánh fallback.
                 matches.append(lane_id)
 
         # Fallback dùng vị trí tâm đáy khi overlap không tách bạch được lane.
@@ -270,11 +278,13 @@ class TemporalLaneAssigner:
         observation: Optional[LaneObservation] = None,
     ) -> Optional[int]:
         """Trả về làn ổn định cho một xe tại thời điểm hiện tại."""
+        # State được giữ theo vehicle_id xuyên suốt nhiều frame.
         st = self._vehicle_states.get(vehicle_id)
         if st is None:
             st = LaneHistoryState()
             self._vehicle_states[vehicle_id] = st
 
+        # Nếu caller không truyền observation chi tiết thì dựng observation giả từ raw_lane_id.
         obs = observation if observation is not None else self._synthetic_observation(raw_lane_id=raw_lane_id)
 
         st.last_seen_ts = ts
@@ -291,12 +301,14 @@ class TemporalLaneAssigner:
                 continue
             conf = item.confidence_for_lane(lane_id)
             if conf <= 0.0:
+                # Bỏ phiếu confidence <=0 vì không đóng góp thông tin lane.
                 continue
             lane_weight[lane_id] += conf
             lane_hits[lane_id] += 1
             lane_conf_sum[lane_id] += conf
 
         if not lane_weight:
+            # Không có phiếu hợp lệ -> giữ nguyên stable lane cũ (nếu có).
             return st.stable_lane_id
 
         # Majority ở đây dùng tổng confidence thay vì chỉ đếm frame.
@@ -317,6 +329,7 @@ class TemporalLaneAssigner:
             return st.stable_lane_id
 
         if majority_lane_id == st.stable_lane_id:
+            # Khi majority quay lại lane hiện tại thì xóa pending switch.
             st.pending_lane_id = None
             st.pending_started_ts = None
             return st.stable_lane_id
@@ -350,6 +363,7 @@ class TemporalLaneAssigner:
         )
 
         if not (majority_ready and target_wins_clearly and source_is_weak and target_consecutive_ok):
+            # Chưa đủ điều kiện switch thì reset pending để tránh tích lũy sai.
             st.pending_lane_id = None
             st.pending_started_ts = None
             return st.stable_lane_id
@@ -367,6 +381,7 @@ class TemporalLaneAssigner:
         # Chỉ chuyển lane khi trạng thái pending kéo dài đủ lâu.
         duration_ms = int((ts - st.pending_started_ts).total_seconds() * 1000.0)
         if duration_ms >= self._switch_min_duration_ms:
+            # Commit lane mới khi đã đạt dwell-time pending tối thiểu.
             st.stable_lane_id = majority_lane_id
             st.pending_lane_id = None
             st.pending_started_ts = None
@@ -374,6 +389,7 @@ class TemporalLaneAssigner:
         return st.stable_lane_id
 
     def get_stable_lane(self, *, vehicle_id: int) -> Optional[int]:
+        # Truy vấn nhanh lane ổn định hiện tại của một vehicle.
         st = self._vehicle_states.get(vehicle_id)
         if st is None:
             return None
@@ -392,6 +408,7 @@ class TemporalLaneAssigner:
 
     def _prune_history(self, state: LaneHistoryState, current_ts: datetime) -> None:
         """Loại các quan sát cũ đã nằm ngoài cửa sổ bỏ phiếu."""
+        # Mốc cắt lịch sử dựa trên timestamp hiện tại trừ observation_window.
         cutoff_ts = current_ts.timestamp() - (self._observation_window_ms / 1000.0)
         while state.recent_observations and state.recent_observations[0][0].timestamp() < cutoff_ts:
             state.recent_observations.popleft()
@@ -443,6 +460,7 @@ class TemporalLaneAssigner:
             if obs.raw_lane_id != target_lane_id:
                 break
             if obs.confidence_for_lane(target_lane_id) < min_confidence:
+                # Đứt streak nếu confidence dưới ngưỡng.
                 break
             streak += 1
             if streak >= min_consecutive:

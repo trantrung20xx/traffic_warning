@@ -373,9 +373,12 @@ class ViolationLogic:
         # Điểm vào duy nhất của pipeline violation cho mỗi track ở mỗi frame.
         st = self._vehicle_states.get(vehicle_id)
         if st is None:
+            # Khởi tạo state lần đầu cho vehicle_id mới xuất hiện.
             st = VehicleState(vehicle_id=vehicle_id, vehicle_type=vehicle_type)
             self._vehicle_states[vehicle_id] = st
+        # Mốc last_seen phục vụ cơ chế prune state cuối pipeline.
         st.last_seen_ts = ts
+        # vehicle_type có thể đổi theo temporal assigner nên luôn cập nhật bản mới nhất.
         st.vehicle_type = vehicle_type
 
         sample = self._build_sample(bbox_xyxy=bbox_xyxy, ts=ts)
@@ -418,6 +421,7 @@ class ViolationLogic:
                         violations=violations,
                     )
 
+        # Đánh giá hướng chạy lấy trực tiếp từ trajectory hiện có trong state.
         direction_eval = self._direction_logic.evaluate(
             vehicle_id=vehicle_id,
             lane_id=current_lane_id,
@@ -425,6 +429,7 @@ class ViolationLogic:
             trajectory_centers=[(sample.ts, sample.center) for sample in st.trajectory],
             ts=ts,
         )
+        # Lưu snapshot trạng thái hướng để API trajectory/debug có thể đọc lại.
         st.direction_status = direction_eval.status
         st.direction_dot = direction_eval.dot
         if direction_eval.should_emit_violation and current_lane_id is not None:
@@ -466,10 +471,12 @@ class ViolationLogic:
         return TrajectorySample(ts=ts, left=left, center=center, right=right)
 
     def _append_trajectory_sample(self, *, st: VehicleState, sample: TrajectorySample) -> None:
+        # Thêm sample mới nhất vào đuôi trajectory theo thứ tự thời gian.
         st.trajectory.append(sample)
         # Giữ lịch sử trong cửa sổ thời gian cố định thay vì lưu vô hạn.
         cutoff_ts = sample.ts.timestamp() - (self._trajectory_history_window_ms / 1000.0)
         while st.trajectory and st.trajectory[0].ts.timestamp() < cutoff_ts:
+            # Loại sample quá cũ ở đầu deque.
             st.trajectory.popleft()
 
     def _update_lane_state(
@@ -512,6 +519,7 @@ class ViolationLogic:
             source_lane_started_ts = st.current_lane_started_ts or ts
             # Thời gian xe đã bám lane nguồn trước khi chuyển lane.
             source_lane_duration_ms = int((ts - source_lane_started_ts).total_seconds() * 1000.0)
+            # Kiểm tra "chuyển sửa sai": lane nguồn cấm loại xe nhưng lane đích cho phép.
             source_allows_vehicle_type = self._lane_allows_vehicle_type(
                 lane_id=previous_lane_id,
                 vehicle_type=st.vehicle_type,
@@ -524,6 +532,7 @@ class ViolationLogic:
 
             st.current_stable_lane_id = lane_id
             st.current_lane_started_ts = ts
+            # Ghi lại lane history ngay khi đổi lane.
             self._append_lane_history(st=st, lane_id=lane_id, ts=ts)
 
             allowed_lane_changes = self._allowed_lane_changes_for(previous_lane_id)
@@ -563,9 +572,11 @@ class ViolationLogic:
             return
 
         if st.current_stable_lane_id != candidate.target_lane_id:
+            # Xe đã không còn ở lane đích candidate -> hủy candidate hiện tại.
             st.illegal_lane_candidate = None
             return
 
+        # Cập nhật điểm center mới nhất để tính dịch chuyển ngang so với lane nguồn.
         candidate.latest_center = sample.center
         self._accumulate_wrong_lane_candidate_evidence(
             candidate=candidate,
@@ -573,6 +584,7 @@ class ViolationLogic:
         )
 
         if candidate.source_lane_duration_ms < self._wrong_lane_min_source_stable_ms:
+            # Lane nguồn chưa đủ ổn định thì chưa coi là hành vi đổi lane có chủ đích.
             st.illegal_lane_candidate = None
             return
 
@@ -618,10 +630,12 @@ class ViolationLogic:
         lane_observation: Optional[LaneObservation],
     ) -> None:
         if lane_observation is None:
+            # Không có observation chi tiết: fallback tăng hit/frame cơ bản.
             candidate.observed_frames += 1
             candidate.target_majority_hits += 1
             return
 
+        # Dùng confidence theo từng lane để tăng chất lượng bằng chứng chuyển làn.
         candidate.observed_frames += 1
         source_conf = lane_observation.confidence_for_lane(candidate.source_lane_id)
         target_conf = lane_observation.confidence_for_lane(candidate.target_lane_id)
@@ -633,6 +647,7 @@ class ViolationLogic:
 
     def _has_wrong_lane_transition_evidence(self, *, candidate: IllegalLaneCandidate) -> bool:
         if not candidate.used_confidence_observation:
+            # Nếu upstream không có confidence thì fallback cho phép pass điều kiện mềm.
             return True
 
         if candidate.observed_frames < self._wrong_lane_min_observed_frames:
@@ -649,6 +664,7 @@ class ViolationLogic:
             return False
 
         lane_width_px = self._lane_nominal_width_px.get(candidate.source_lane_id, 0.0)
+        # Ngưỡng dời ngang lấy max giữa ngưỡng tuyệt đối và ngưỡng theo bề rộng lane.
         min_lateral_px = max(
             self._wrong_lane_min_lateral_displacement_px,
             lane_width_px * self._wrong_lane_min_lateral_displacement_lane_ratio,
@@ -885,6 +901,7 @@ class ViolationLogic:
         ts: datetime,
         line_events: set[str],
     ) -> Optional[str]:
+        # Event line được map về danh sách maneuver theo lane nguồn hiện tại.
         exit_line_matches = self._extract_exit_line_matches(
             line_events=line_events,
             source_lane_id=source_lane_id,
@@ -906,8 +923,10 @@ class ViolationLogic:
             )
         )
         if not (exit_line_matches or exit_zone_matches or turn_zone_matches or turn_state.evidences):
+            # Không có tín hiệu mới và cũng không có evidence cũ để decay/score tiếp.
             return None
 
+        # Decay điểm cũ trước khi cộng frame_score mới ở frame hiện tại.
         self._decay_turn_evidence(turn_state=turn_state, ts=ts)
         motion = self._compute_motion_features(st=st, turn_state=turn_state)
         maneuvers_to_score = (
@@ -921,6 +940,7 @@ class ViolationLogic:
         if not maneuvers_to_score:
             return None
 
+        # Theo dõi maneuver mạnh nhất ở frame hiện tại để cộng temporal bonus frame sau.
         best_frame_maneuver: Optional[str] = None
         best_frame_score = 0.0
 
@@ -946,9 +966,11 @@ class ViolationLogic:
                 best_frame_maneuver = maneuver
 
         if best_frame_maneuver is not None:
+            # last_scored_maneuver là tín hiệu continuity cho evidence.temporal_hits.
             turn_state.last_scored_maneuver = best_frame_maneuver
             turn_state.last_activity_ts = ts
 
+        # Rank evidence theo score rồi tie-break bằng exit hits + temporal hits.
         ranked = sorted(
             turn_state.evidences.values(),
             key=lambda ev: (
@@ -979,8 +1001,10 @@ class ViolationLogic:
             if evidence.last_seen_ts is not None:
                 elapsed_ms = int((ts - evidence.last_seen_ts).total_seconds() * 1000.0)
                 if elapsed_ms > self._evidence_expire_ms:
+                    # Evidence quá cũ thì loại hẳn khỏi state.
                     stale.append(maneuver)
                     continue
+            # Mỗi frame giảm điểm nhẹ để bằng chứng cũ tự mờ dần.
             evidence.score = max(evidence.score - self._evidence_decay_per_frame, 0.0)
         for maneuver in stale:
             del turn_state.evidences[maneuver]
@@ -1039,15 +1063,19 @@ class ViolationLogic:
         if signal_hit or heading_support:
             if evidence.first_seen_ts is None:
                 evidence.first_seen_ts = ts
+            # last_seen_ts chỉ cập nhật khi frame có tín hiệu hỗ trợ thực sự.
             evidence.last_seen_ts = ts
             if turn_state.last_scored_maneuver == maneuver:
+                # Cùng maneuver liên tiếp thì cộng temporal bonus để ổn định quyết định.
                 evidence.temporal_hits += 1
                 frame_score += self._evidence_weight_temporal_bonus
             else:
                 evidence.temporal_hits = max(evidence.temporal_hits, 1)
         else:
+            # Không có tín hiệu frame này thì trừ điểm nhẹ.
             frame_score -= self._evidence_penalty_no_signal
 
+        # Tổng điểm bị chặn trong [0, score_cap] để tránh tăng vô hạn.
         evidence.score = min(max(evidence.score + frame_score, 0.0), self._evidence_score_cap)
         return frame_score
 
@@ -1241,12 +1269,14 @@ class ViolationLogic:
         st: VehicleState,
         turn_state: TurnState,
     ) -> Optional[tuple[float, float]]:
+        # Dùng trajectory gần commit để ước lượng hướng vào maneuver.
         points = [sample.center for sample in st.trajectory]
         if len(points) >= 2:
             start_idx = max(len(points) - self._trajectory_entry_heading_lookback_points, 0)
             window_points = points[start_idx:]
             start = window_points[0]
             end = window_points[-1]
+            # Gross displacement là độ dời đầu-cuối trong cửa sổ lookback.
             gross_displacement = hypot(end[0] - start[0], end[1] - start[1])
             if gross_displacement < self._trajectory_entry_heading_min_displacement_px:
                 return None
@@ -1264,11 +1294,13 @@ class ViolationLogic:
                 seg_dy = curr[1] - prev[1]
                 seg_len = hypot(seg_dx, seg_dy)
                 if seg_len < segment_min_displacement:
+                    # Bỏ segment quá ngắn vì dễ chỉ là rung bbox.
                     continue
                 seg_vec = self._normalize_vector((seg_dx, seg_dy))
                 if seg_vec is None:
                     continue
                 segment_vectors.append((seg_vec, seg_len))
+                # path_length dùng để tính path_efficiency và trọng số inlier.
                 path_length += seg_len
 
             # Need at least two effective segments (>= 3 points) to avoid locking to a noisy 2-point guess.
@@ -1282,6 +1314,7 @@ class ViolationLogic:
             if path_efficiency < 0.45:
                 return None
 
+            # Consensus vector theo tổng có trọng số độ dài segment.
             weighted_sum_x = sum(vec[0] * weight for vec, weight in segment_vectors)
             weighted_sum_y = sum(vec[1] * weight for vec, weight in segment_vectors)
             consensus_vec = self._normalize_vector((weighted_sum_x, weighted_sum_y))
@@ -1296,6 +1329,7 @@ class ViolationLogic:
             if (consensus_inlier_weight / path_length) < 0.70:
                 return None
 
+            # Consensus phải cùng hướng tương đối với gross vector.
             if ((consensus_vec[0] * gross_vec[0]) + (consensus_vec[1] * gross_vec[1])) < 0.35:
                 return None
 
@@ -1305,12 +1339,14 @@ class ViolationLogic:
             if local_vec is None:
                 return consensus_vec
 
+            # So trục hướng cục bộ cuối đoạn với consensus để tránh bị bẻ lái bất thường.
             local_alignment = (local_vec[0] * consensus_vec[0]) + (local_vec[1] * consensus_vec[1])
             if local_alignment < 0.2:
                 return None
 
             if local_alignment >= 0.9:
                 return local_vec
+            # Blend consensus + local + gross để lấy hướng vào ổn định hơn.
             blended = self._normalize_vector(
                 (
                     (consensus_vec[0] * 2.0) + local_vec[0] + gross_vec[0],
@@ -1323,6 +1359,7 @@ class ViolationLogic:
     def _compute_motion_features(self, *, st: VehicleState, turn_state: TurnState) -> MotionFeatures:
         samples = list(st.trajectory)
         if len(samples) < 2:
+            # Thiếu trajectory thì chỉ trả entry_vector fallback cho nhánh scoring.
             return MotionFeatures(
                 entry_vector=turn_state.entry_heading_vector or turn_state.lane_direction_vector
             )
@@ -1330,6 +1367,7 @@ class ViolationLogic:
         recent = samples[-self._motion_window_samples:]
         path_length = 0.0
         for idx in range(1, len(recent)):
+            # Tổng độ dài polyline quỹ đạo gần nhất.
             path_length += hypot(
                 recent[idx].center[0] - recent[idx - 1].center[0],
                 recent[idx].center[1] - recent[idx - 1].center[1],
@@ -1343,6 +1381,7 @@ class ViolationLogic:
         local_start = recent[max(len(recent) - self._trajectory_heading_local_window_points, 0)].center
         heading_vector = self._normalize_vector((end[0] - local_start[0], end[1] - local_start[1]))
         if heading_vector is None:
+            # Fallback dùng vector tổng thể nếu vector local suy biến.
             heading_vector = self._normalize_vector((dx, dy))
         entry_vector = turn_state.entry_heading_vector or turn_state.lane_direction_vector
 
@@ -1352,12 +1391,14 @@ class ViolationLogic:
         if heading_vector is not None and entry_vector is not None:
             cross = (entry_vector[0] * heading_vector[1]) - (entry_vector[1] * heading_vector[0])
             dot = (entry_vector[0] * heading_vector[0]) + (entry_vector[1] * heading_vector[1])
+            # Heading change dùng atan2(cross, dot) để lấy cả độ lớn và chiều quay.
             heading_change_deg = abs(atan2(cross, dot)) * (180.0 / 3.141592653589793)
             signed_heading_change_deg = atan2(cross, dot) * (180.0 / 3.141592653589793)
             opposite_direction = dot <= self._opposite_direction_cos_threshold
 
         curvature = 0.0
         if displacement > 1e-6:
+            # Curvature xấp xỉ theo tỉ lệ đường đi thực / đường chim bay.
             curvature = max((path_length / displacement) - 1.0, 0.0)
 
         return MotionFeatures(
@@ -1625,6 +1666,7 @@ class ViolationLogic:
             return False
 
         if state.armed_side is None:
+            # Chưa có phía neo ban đầu, rearm từ phía hiện tại rồi chờ thêm pre-frames.
             self._rearm_line_crossing_state(state=state, current_side=current_side)
             return False
 
@@ -1639,6 +1681,7 @@ class ViolationLogic:
             return False
 
         if current_side == state.armed_side:
+            # Vẫn đứng cùng phía armed_side: tích lũy pre_count trước khi crossing.
             state.pre_count += 1
             return False
 
@@ -1670,6 +1713,7 @@ class ViolationLogic:
         return False
 
     def _reset_line_crossing_state(self, *, state: LineCrossingState) -> None:
+        # Reset toàn bộ trạng thái crossing hiện tại.
         state.armed_side = None
         state.pre_count = 0
         state.crossing_active = False
@@ -1679,6 +1723,7 @@ class ViolationLogic:
         state.crossing_started_ts = None
 
     def _rearm_line_crossing_state(self, *, state: LineCrossingState, current_side: int) -> None:
+        # Trở về trạng thái "đang canh" cho lượt crossing tiếp theo.
         state.crossing_active = False
         state.expected_post_side = None
         state.post_count = 0
@@ -1687,8 +1732,10 @@ class ViolationLogic:
         if current_side == 0:
             return
         if state.armed_side == current_side:
+            # Cùng phía với armed_side cũ thì tiếp tục tăng pre_count.
             state.pre_count += 1
             return
+        # Đổi phía neo: reset pre_count về 1 tại phía mới.
         state.armed_side = current_side
         state.pre_count = 1
 
@@ -1726,6 +1773,7 @@ class ViolationLogic:
         if previous_sample is None:
             return False
         for start_point, end_point in zip(previous_sample.contacts, sample.contacts):
+            # Chỉ cần một trong ba contact segment cắt line là đủ coi như crossing.
             if line.intersects_segment(start_point, end_point):
                 return True
         return False
@@ -1916,18 +1964,21 @@ class ViolationLogic:
             lifecycle.last_seen_ts = ts
             return
 
+        # Lần đầu đủ điều kiện trong event window hiện tại -> emit payload.
         lifecycle.phase = "emitted"
         lifecycle.emitted_ts = ts
         lifecycle.phase = "active"
         lifecycle.last_seen_ts = ts
         payload = {"lane_id": lane_id, "violation": violation}
         if evidence_summary:
+            # Evidence summary đi kèm để UI/debug hiển thị lý do xác nhận vi phạm.
             payload["evidence_summary"] = evidence_summary
         violations.append(payload)
 
     def _touch_violation_lifecycle(self, *, st: VehicleState, key: str, ts: datetime) -> ViolationLifecycle:
         lifecycle = st.violation_lifecycles.get(key)
         if lifecycle is None:
+            # Tạo lifecycle mới khi loại vi phạm này xuất hiện lần đầu.
             lifecycle = ViolationLifecycle(first_ts=ts, last_seen_ts=ts)
             st.violation_lifecycles[key] = lifecycle
             return lifecycle
@@ -1942,6 +1993,7 @@ class ViolationLogic:
                 lifecycle.emitted_ts = None
 
         if lifecycle.phase == "expired":
+            # Event window mới bắt đầu lại từ pha candidate.
             lifecycle.phase = "candidate"
         lifecycle.last_seen_ts = ts
         return lifecycle
@@ -1968,6 +2020,7 @@ class ViolationLogic:
         *,
         reference_point: Optional[tuple[float, float]] = None,
     ) -> Optional[tuple[float, float]]:
+        # Ưu tiên vector hướng khai báo tường minh trong direction_rule.
         direction_rule = getattr(lane, "direction_rule", None)
         if direction_rule is None:
             return None
@@ -2061,6 +2114,7 @@ class ViolationLogic:
             return None
 
         raw_vectors = [vec for _, vec in samples]
+        # Trục thô để bắt hướng chung trước khi lọc inlier.
         coarse = self._normalized_mean_vector(raw_vectors)
         if coarse is None:
             return None
@@ -2097,6 +2151,7 @@ class ViolationLogic:
     ) -> Optional[tuple[float, float]]:
         explicit_direction_path_vec = self._lane_direction_vectors.get(source_lane_id)
         if explicit_direction_path_vec is not None:
+            # Có direction_path tường minh thì luôn ưu tiên.
             return explicit_direction_path_vec
 
         lane_model_vec = self._lane_fallback_reference_vector(
@@ -2104,6 +2159,7 @@ class ViolationLogic:
             ts=ts,
         )
         if lane_model_vec is not None:
+            # Có consensus lane thì có thể blend nhẹ với trajectory entry để theo thực tế.
             return self._blend_lane_consensus_with_trajectory(
                 lane_consensus_vec=lane_model_vec,
                 trajectory_entry_vector=trajectory_entry_vector,
@@ -2154,6 +2210,7 @@ class ViolationLogic:
         self,
         lane_polygons: list[LanePolygon],
     ) -> dict[int, set[str]]:
+        # Gom toàn bộ maneuver hợp lệ theo lane để phục vụ bước scoring.
         by_lane: dict[int, set[str]] = {}
         for lane in lane_polygons:
             lane_set: set[str] = set()
@@ -2178,6 +2235,7 @@ class ViolationLogic:
         self,
         lane_polygons: list[LanePolygon],
     ) -> dict[int, dict[str, tuple[float, float]]]:
+        # Anchor dùng để suy dấu quay trái/phải so với hướng lane.
         anchors_by_lane: dict[int, dict[str, tuple[float, float]]] = {}
         for lane in lane_polygons:
             maneuvers = getattr(lane, "maneuvers", None) or {}
@@ -2189,6 +2247,7 @@ class ViolationLogic:
                     continue
                 exit_line = self._extract_maneuver_points(maneuver_cfg=maneuver_cfg, field="exit_line")
                 if exit_line:
+                    # Ưu tiên anchor theo exit_line nếu có vì phản ánh đích maneuver rõ nhất.
                     lane_anchors[maneuver] = self._line_midpoint(exit_line)
                     continue
                 exit_zone = self._extract_maneuver_points(maneuver_cfg=maneuver_cfg, field="exit_zone")
@@ -2225,6 +2284,7 @@ class ViolationLogic:
             return ViolationLogic._centroid_of_points(points)
         start = points[0]
         end = points[1]
+        # Midpoint của line dùng làm mốc hình học đơn giản cho anchor/commit.
         return ((float(start[0]) + float(end[0])) / 2.0, (float(start[1]) + float(end[1])) / 2.0)
 
     @staticmethod
@@ -2243,6 +2303,7 @@ class ViolationLogic:
             return None
         sum_x = sum(vec[0] for vec in vectors)
         sum_y = sum(vec[1] for vec in vectors)
+        # Chuẩn hóa tổng vector để trả kết quả dạng đơn vị.
         mag = hypot(sum_x, sum_y)
         if mag <= 1e-6:
             return None
@@ -2293,6 +2354,7 @@ class ViolationLogic:
         vehicle_type: Optional[str] = None,
         min_points: int = 3,
     ) -> list[dict]:
+        # Snapshot trajectory runtime cho API debug/giám sát.
         rows: list[dict] = []
         for state in self._vehicle_states.values():
             if lane_id is not None and state.current_stable_lane_id != lane_id:
@@ -2315,12 +2377,14 @@ class ViolationLogic:
                     "turn_reject_reasons": dict(state.turn_state.last_reject_reasons),
                 }
             )
+        # Ưu tiên xe mới xuất hiện gần nhất lên đầu danh sách.
         rows.sort(key=lambda row: row.get("last_seen_ts") or "", reverse=True)
         return rows[: max(int(limit), 1)]
 
     def get_direction_status_for_vehicle(self, *, vehicle_id: int) -> tuple[str, Optional[float]]:
         st = self._vehicle_states.get(vehicle_id)
         if st is None:
+            # Fallback query trực tiếp DirectionLogic khi state vehicle đã bị prune.
             return self._direction_logic.status_for_vehicle(vehicle_id=vehicle_id)
         return (st.direction_status, st.direction_dot)
 

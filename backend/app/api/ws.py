@@ -57,10 +57,12 @@ def create_ws_router(manager: CameraManager) -> APIRouter:
 
         if queue_task.cancelled():
             return "noop", None
+        # Nhánh queue hoàn tất trước: trả payload cho vòng lặp websocket handler.
         return "queue", queue_task.result()
 
     @router.websocket("/ws/tracks")
     async def ws_tracks(ws: WebSocket, camera_id: Optional[str] = None):
+        # Chấp nhận kết nối ngay để client bắt đầu nhận stream.
         await ws.accept()
         manager.register_track_websocket(ws)
         q: Optional[asyncio.Queue] = None  # type: ignore[name-defined]
@@ -74,6 +76,7 @@ def create_ws_router(manager: CameraManager) -> APIRouter:
                     continue
                 msg = payload
                 if msg is None:
+                    # Sentinel None báo server đang shutdown hoặc listener bị đóng.
                     break
                 # Filter theo camera_id ngay trước khi gửi để giảm tải phía client.
                 if camera_id and msg.camera_id != camera_id:

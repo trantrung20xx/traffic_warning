@@ -1,6 +1,8 @@
 # Traffic Warning
 
-Hệ thống giám sát giao thông thời gian thực, phát hiện phương tiện bằng YOLOv8, theo dõi bằng ByteTrack, gán xe vào làn bằng polygon cấu hình thủ công, phát hiện vi phạm và hiển thị kết quả trên giao diện web.
+Traffic Warning là hệ thống giám sát giao thông thời gian thực. Backend đọc camera/video, phát hiện phương tiện bằng YOLOv8, theo dõi bằng ByteTrack, gán xe vào làn bằng polygon cấu hình thủ công, phân tích hướng di chuyển/quỹ đạo để phát hiện vi phạm, lưu bằng chứng và đẩy dữ liệu realtime lên frontend React.
+
+Ngày cập nhật tài liệu: 2026-05-08.
 
 ## Mục Lục
 
@@ -8,73 +10,84 @@ Hệ thống giám sát giao thông thời gian thực, phát hiện phương ti
 - [Luồng xử lý](#luồng-xử-lý)
 - [Cấu trúc thư mục](#cấu-trúc-thư-mục)
 - [Khởi chạy nhanh](#khởi-chạy-nhanh)
-- [Model AI `.pt`](#model-ai-pt)
+- [Model AI và OCR](#model-ai-và-ocr)
 - [Cấu hình hệ thống](#cấu-hình-hệ-thống)
 - [Các loại vi phạm](#các-loại-vi-phạm)
 - [API và WebSocket](#api-và-websocket)
 - [Kiểm thử](#kiểm-thử)
-- [Tài liệu theo module](#tài-liệu-theo-module)
+- [Tài liệu liên quan](#tài-liệu-liên-quan)
 
 ## Tổng Quan
 
-Hệ thống gồm 3 phần chính:
-
 | Thành phần | Vai trò |
 |---|---|
-| `backend` | FastAPI, YOLOv8, ByteTrack, logic gán làn, phát hiện vi phạm, OCR biển số, lưu SQLite, REST API và WebSocket. |
-| `frontend` | React + Vite cho giám sát realtime, xem lịch sử/thống kê, cấu hình camera/làn/vùng hình học. |
-| `config` | Cấu hình camera, cấu hình làn, settings runtime, ảnh nền, ảnh bằng chứng và database SQLite. |
+| `backend` | FastAPI, OpenCV, YOLOv8, ByteTrack, ổn định track ID, gán làn, phát hiện hướng/vi phạm, OCR biển số, lưu SQLite, REST API và WebSocket. |
+| `frontend` | React + Vite cho màn hình giám sát realtime, thống kê, lịch sử vi phạm, quản lý camera/lane/maneuver và cấu hình hình học. |
+| `config` | Cấu hình camera, lane config, settings runtime, ảnh nền, ảnh bằng chứng và SQLite database. |
 
-Các khả năng chính:
+Khả năng chính:
 
-- Nhận diện và tracking các class YOLO được bật trong `detection.allowed_classes`, mặc định: `motorcycle`, `car`, `truck`, `bus`.
-- Gán xe vào làn bằng polygon thủ công theo từng camera.
-- Phát hiện sai làn, sai loại phương tiện, đi ngược chiều, rẽ trái/rẽ phải/đi thẳng/quay đầu không đúng quy định.
-- Nhận diện biển số bằng detector biển số + OCR, có trạng thái minh bạch: `pending`, `confirmed`, `uncertain`, `unreadable`.
-- Hiển thị realtime qua MJPEG preview và WebSocket.
-- Lưu lịch sử vi phạm, ảnh bằng chứng, ảnh biển số, thống kê dashboard, export CSV/XLSX.
-- Quản lý camera/lane/maneuver trực tiếp trên UI, có ảnh nền hỗ trợ căn chỉnh polygon.
+- Nhận diện phương tiện theo `detection.allowed_classes`, mặc định gồm `motorcycle`, `car`, `truck`, `bus`.
+- Tracking bằng ByteTrack, sau đó ổn định `vehicle_id` bằng IoU và khoảng cách tâm bbox.
+- Làm mượt loại xe và lane theo thời gian để giảm nhiễu theo từng frame.
+- Gán xe vào lane bằng polygon/vùng đáy bbox, không dùng AI nhận diện lane.
+- Phát hiện `wrong_lane`, `wrong_direction`, `vehicle_type_not_allowed` và các lỗi rẽ/đi thẳng/quay đầu không đúng quy định.
+- OCR biển số bằng detector biển số + `paddleocr` hoặc `easyocr`, có voting theo thời gian với trạng thái `pending`, `confirmed`, `uncertain`, `unreadable`.
+- Lưu ảnh bằng chứng tổng quan và ảnh crop biển số nếu có.
+- Stream realtime qua WebSocket và MJPEG preview.
+- Quản lý camera/lane/maneuver trên UI, có ảnh nền hỗ trợ căn chỉnh và cảnh báo cấu hình hình học.
+- Xuất lịch sử vi phạm ra CSV/XLSX.
 
 ## Luồng Xử Lý
 
 ```text
-Nguồn video
-  -> YOLOv8 phát hiện phương tiện
-  -> ByteTrack theo dõi object qua các frame
-  -> ổn định ID và loại xe
-  -> gán lane bằng polygon
-  -> kiểm tra hướng đi, chuyển làn, loại xe, maneuver
-  -> đọc biển số nếu bật OCR
-  -> lưu DB, lưu ảnh bằng chứng, đẩy realtime lên frontend
+Nguồn video RTSP/HTTP/file local
+  -> RtspFrameReader đọc frame nền bằng OpenCV
+  -> YOLOv8 + ByteTrack phát hiện và theo dõi phương tiện
+  -> StableTrackIdAssigner ổn định vehicle_id
+  -> TemporalVehicleTypeAssigner ổn định loại xe
+  -> LaneLogic tính raw lane bằng polygon + đáy bbox
+  -> TemporalLaneAssigner ổn định lane_id bằng majority/hysteresis
+  -> ViolationLogic phân tích wrong lane, direction, maneuver, lifecycle
+  -> License plate detector/OCR chạy nền nếu bật
+  -> lưu SQLite + ảnh bằng chứng
+  -> REST API, WebSocket, MJPEG preview cho frontend
 ```
 
-Một số điểm cần hiểu:
+Một số khái niệm quan trọng:
 
-- `vehicle_id` là ID tracking trong phiên chạy, dùng để theo dõi bbox/quỹ đạo realtime.
-- `track_session_id` giúp phân biệt các phiên chạy khác nhau, tránh nhầm `vehicle_id` sau khi restart backend.
-- Biển số là thông tin bổ sung. Nếu OCR chưa chắc chắn hoặc thất bại, hệ thống vẫn phát hiện và lưu vi phạm.
-- Tọa độ cấu hình hình học được lưu theo dạng chuẩn hóa `[0, 1]`, nên không phụ thuộc kích thước canvas frontend.
+- `vehicle_id`: ID ổn định trong phiên runtime, có thể thay đổi sau khi backend restart.
+- `track_session_id`: ID phiên chạy của camera context, dùng để phân biệt vòng đời track giữa các lần reload/restart.
+- `raw_lane_id`: lane tính trực tiếp ở frame hiện tại.
+- `lane_id`: lane ổn định sau temporal smoothing.
+- `direction_dot`: cosine giữa vector chuyển động và vector hướng hợp lệ của lane.
+- `evidence_summary`: thông tin giải thích quyết định vi phạm trong pipeline runtime.
+- Tọa độ lane config được lưu normalized `[0, 1]`; backend denormalize sang pixel lúc chạy.
 
 ## Cấu Trúc Thư Mục
 
 | Đường dẫn | Nội dung |
 |---|---|
-| `backend/app/api` | REST API và WebSocket router. |
-| `backend/app/core` | Load cấu hình, export dữ liệu, ảnh nền, ảnh bằng chứng, timezone. |
-| `backend/app/logic` | Logic gán làn, phát hiện hướng, sai làn, maneuver, OCR temporal voting. |
-| `backend/app/managers` | Quản lý camera runtime, vòng đời camera context, phát sự kiện realtime. |
-| `backend/app/tracking` | Wrapper ByteTrack/Ultralytics tracking. |
-| `backend/app/vision` | YOLO detector phương tiện, detector biển số, OCR biển số. |
+| `backend/app/api` | REST API, MJPEG preview và WebSocket router. |
+| `backend/app/core` | Load/validate config, ảnh nền, ảnh bằng chứng, export CSV/XLSX, timezone. |
+| `backend/app/db` | SQLAlchemy model, SQLite engine/session, repository query/insert. |
+| `backend/app/logic` | Lane assignment, direction detection, violation logic, OCR temporal resolver, stable track ID, geometry validator. |
+| `backend/app/managers` | Quản lý nhiều camera và pipeline runtime của từng camera. |
+| `backend/app/rtsp` | Thread đọc frame từ RTSP/HTTP/file local bằng OpenCV. |
+| `backend/app/tracking` | Wrapper Ultralytics ByteTrack. |
+| `backend/app/vision` | YOLO detector phương tiện, detector biển số, OCR Paddle/EasyOCR, backend/device resolver. |
 | `backend/tests` | Test backend. |
-| `frontend/src/views` | 3 màn hình chính: Monitoring, Analytics, Management. |
-| `frontend/src/components` | Canvas, icon, biểu đồ và component UI. |
+| `frontend/src/views` | Màn hình Monitoring, Analytics, Management. |
+| `frontend/src/components` | Canvas, overlay, chart, icon và component UI. |
 | `config/cameras.json` | Danh sách camera. |
-| `config/lane_configs` | Cấu hình lane theo từng camera. |
-| `config/settings.json` | Tham số runtime toàn hệ thống. |
+| `config/lane_configs` | Lane config theo từng camera. |
+| `config/settings.json` | Settings runtime toàn hệ thống. |
+| `config/background_images` | Ảnh nền cấu hình lane. |
+| `config/evidence_images` | Ảnh bằng chứng vi phạm. |
 
 ## Khởi Chạy Nhanh
 
-### 1. Backend
+### Backend
 
 ```powershell
 cd backend
@@ -86,7 +99,7 @@ uvicorn app.server:app --host 0.0.0.0 --port 8000
 
 Backend mặc định chạy tại `http://localhost:8000`.
 
-### 2. Frontend
+### Frontend
 
 ```powershell
 cd frontend
@@ -96,29 +109,26 @@ npm run dev
 
 Frontend mặc định chạy tại `http://localhost:5173`.
 
-Mặc định frontend tự lấy host hiện tại và gọi backend ở port `8000`.
-Ví dụ mở UI ở `http://192.168.1.20:5173` thì frontend sẽ gọi `http://192.168.1.20:8000`.
-
-Nếu backend chạy host/port khác, tạo file `frontend/.env`:
+Nếu backend không chạy ở port `8000`, tạo `frontend/.env`:
 
 ```env
 VITE_API_BASE=http://localhost:8000
 VITE_API_PORT=8000
 ```
 
-## Model AI `.pt`
+## Model AI Và OCR
 
-### Model phát hiện phương tiện YOLOv8
+### YOLOv8 phát hiện phương tiện
 
-Nguồn chính thức: Ultralytics Assets trên GitHub Releases.
+`config/settings.json` đang trỏ `detection.weights_path` tới `backend/yolov8m.pt`. Có thể dùng các model Ultralytics `.pt` khác tùy phần cứng.
 
-| Model | Link tải | Gợi ý sử dụng |
+| Model | Link tải | Gợi ý |
 |---|---|---|
-| `yolov8n.pt` | [Tải yolov8n.pt](https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8n.pt) | Nhẹ nhất, FPS cao, phù hợp máy yếu hoặc nhiều camera. |
-| `yolov8s.pt` | [Tải yolov8s.pt](https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8s.pt) | Cân bằng tốc độ và độ chính xác. |
-| `yolov8m.pt` | [Tải yolov8m.pt](https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8m.pt) | Độ chính xác tốt hơn, cần máy khỏe hơn. |
-| `yolov8l.pt` | [Tải yolov8l.pt](https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8l.pt) | Nặng hơn `m`, phù hợp khi ưu tiên chất lượng. |
-| `yolov8x.pt` | [Tải yolov8x.pt](https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8x.pt) | Nặng nhất, nên dùng GPU mạnh. |
+| `yolov8n.pt` | [Ultralytics asset](https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8n.pt) | Nhẹ nhất, FPS cao. |
+| `yolov8s.pt` | [Ultralytics asset](https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8s.pt) | Cân bằng tốc độ/độ chính xác. |
+| `yolov8m.pt` | [Ultralytics asset](https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8m.pt) | Độ chính xác tốt hơn, cần máy khỏe hơn. |
+| `yolov8l.pt` | [Ultralytics asset](https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8l.pt) | Nặng, ưu tiên chất lượng. |
+| `yolov8x.pt` | [Ultralytics asset](https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8x.pt) | Nặng nhất, nên dùng GPU mạnh. |
 
 Ví dụ tải `yolov8m.pt`:
 
@@ -126,7 +136,7 @@ Ví dụ tải `yolov8m.pt`:
 Invoke-WebRequest -Uri "https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8m.pt" -OutFile ".\backend\yolov8m.pt"
 ```
 
-Sau đó trỏ `config/settings.json` tới model:
+Cấu hình liên quan:
 
 ```json
 {
@@ -140,307 +150,144 @@ Sau đó trỏ `config/settings.json` tới model:
 }
 ```
 
-Ý nghĩa nhanh:
+Backend có cơ chế fallback khi load YOLO `.pt`: nếu file cấu hình không load được, detector thử các model cùng thư mục theo thứ tự `yolov8x.pt`, `yolov8l.pt`, `yolov8m.pt`, `yolov8s.pt`, `yolov8n.pt` nếu file tồn tại.
 
-- `weights_path`: đường dẫn file YOLO `.pt`.
-- `device`: `auto` để backend tự chọn GPU nếu có; cũng có thể đặt `cpu`, `cuda`, `cuda:0`.
-- `confidence_threshold`: ngưỡng tin cậy tối thiểu. Tăng lên sẽ giảm nhận nhầm nhưng dễ bỏ sót vật thể nhỏ/mờ.
-- `iou_threshold`: ngưỡng NMS để gộp bbox trùng nhau.
-- `allowed_classes`: class YOLO được nhận diện/tracking. Xóa class khỏi danh sách để tắt nhận diện class đó.
+### Backend inference
 
-Backend có cơ chế fallback: nếu model `.pt` được cấu hình không load được, detector sẽ thử các model cùng thư mục theo thứ tự `yolov8x.pt`, `yolov8l.pt`, `yolov8m.pt`, `yolov8s.pt`, `yolov8n.pt` nếu các file đó tồn tại.
+Source hỗ trợ các backend inference: `pytorch`, `tensorrt`, `openvino`, `onnxruntime`.
 
-### Model biển số
+Backend thực sự được chọn theo cả cấu hình và định dạng weight:
 
-Pipeline biển số dùng:
+- `pytorch`: `.pt`
+- `tensorrt`: `.engine`
+- `openvino`: `.xml` hoặc thư mục `_openvino_model`
+- `onnxruntime`: `.onnx`
 
-- Detector biển số tại `license_plate.detector_weights_path`, mặc định: `backend/license_plate_yolov8.pt`.
-- OCR backend theo `license_plate.ocr_backend`, mặc định hiện tại trong settings là `paddleocr`.
-- PaddleOCR model names được cấu hình qua `paddle_text_detection_model_name` và `paddle_text_recognition_model_name`.
+Nếu cấu hình backend không khớp định dạng weight, hệ thống fallback về `pytorch`.
 
-File `backend/license_plate_yolov8.pt` không được commit vào Git vì là file model lớn. Cần tải model detector biển số riêng trước khi bật `license_plate.enabled`.
+### OCR biển số
 
-| Model | Link tải | Khuyến nghị sử dụng |
-|---|---|---|
-| `Koushim/yolov8-license-plate-detection/best.pt` | [Tải best.pt](https://huggingface.co/Koushim/yolov8-license-plate-detection/resolve/main/best.pt?download=true) | **Khuyến nghị cho hệ thống hiện tại.** YOLOv8n, 1 class `license_plate`, nhẹ khoảng 6.25 MB, license MIT. Phù hợp vì code hiện crop vùng xe rồi detect biển số, không cần lọc nhiều class. Nhược điểm: là model generic, vẫn nên kiểm thử lại với biển số Việt Nam, góc camera và điều kiện ánh sáng thực tế. |
-| `Murd0ck/LicensePlateDetector_YOLOv8n/best.pt` | [Tải best.pt](https://huggingface.co/Murd0ck/LicensePlateDetector_YOLOv8n/resolve/main/best.pt?download=true) | YOLOv8n một class, có công bố metric tốt trên tập validation và có cả bản ONNX. Nhược điểm: fine-tune chủ yếu cho biển số Ukraine/AUTO.RIA, license CC BY 4.0, cần kiểm thử domain Việt Nam trước khi dùng production. |
-| `orionwambert/yolov8-license-plate-detection/best.pt` | [Tải best.pt](https://huggingface.co/orionwambert/yolov8-license-plate-detection/resolve/main/best.pt?download=true) | Có thể dùng để thử nghiệm vì nhận diện cả biển số và xe. Vì model có nhiều class (`License Plates`, `Vehicles`), cần giữ `license_plate.detector_allowed_classes` trỏ đúng class biển số, ví dụ `"License Plates"`, để backend bỏ qua bbox xe. |
+Pipeline biển số gồm hai bước:
 
-Tải nhanh model khuyến nghị về đúng tên file mặc định:
+- Detector biển số YOLOv8: `license_plate.detector_weights_path`, mặc định `backend/license_plate_yolov8.pt`.
+- OCR text: `license_plate.ocr_backend`, hỗ trợ `paddleocr` và `easyocr`.
 
-```powershell
-Invoke-WebRequest -Uri "https://huggingface.co/Koushim/yolov8-license-plate-detection/resolve/main/best.pt?download=true" -OutFile ".\backend\license_plate_yolov8.pt"
-```
-
-Sau khi tải, giữ cấu hình mặc định hoặc trỏ lại đúng đường dẫn:
+Cấu hình hiện tại bật OCR biển số:
 
 ```json
 {
   "license_plate": {
     "enabled": true,
     "detector_weights_path": "backend/license_plate_yolov8.pt",
-    "detector_confidence_threshold": 0.35,
     "detector_allowed_classes": ["license_plate", "License Plates"],
-    "ocr_backend": "paddleocr"
+    "ocr_backend": "paddleocr",
+    "easyocr_lang": "en",
+    "easyocr_use_gpu": true,
+    "paddle_ocr_version": "PP-OCRv5",
+    "paddle_text_detection_model_name": "PP-OCRv5_mobile_det",
+    "paddle_text_recognition_model_name": "PP-OCRv5_mobile_rec",
+    "paddle_lang": "en",
+    "paddle_use_gpu": false
   }
 }
 ```
 
-`license_plate.detector_allowed_classes` là allowlist class của model detector biển số. Backend so khớp không phân biệt hoa/thường/khoảng trắng/gạch dưới, nên `license_plate`, `License Plates` và `license-plate` đều có thể được cấu hình theo tên class của model. Nếu dùng model nhiều class, bắt buộc để class biển số trong danh sách này và không đưa class xe vào.
+Đổi sang EasyOCR:
 
-### Cài PyTorch
-
-PyTorch nên cài theo phần cứng đang chạy.
-
-CPU:
-
-```powershell
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+```json
+{
+  "license_plate": {
+    "enabled": true,
+    "ocr_backend": "easyocr",
+    "easyocr_lang": "en",
+    "easyocr_use_gpu": true
+  }
+}
 ```
 
-GPU NVIDIA, ví dụ CUDA 13.0:
+Lưu ý:
 
-```powershell
-pip install torch==2.10.0 torchvision==0.25.0 --index-url https://download.pytorch.org/whl/cu130
-```
+- `easyocr_lang` có thể chứa nhiều ngôn ngữ, phân tách bằng dấu phẩy, dấu chấm phẩy hoặc khoảng trắng.
+- `detector_allowed_classes` phải khớp tên class biển số của model detector. Backend normalize tên class để giảm lỗi hoa/thường/khoảng trắng/gạch dưới.
+- Nếu detector/OCR khởi tạo lỗi, backend tự tắt nhánh biển số để pipeline vi phạm chính vẫn chạy.
 
 ## Cấu Hình Hệ Thống
 
-Cấu hình chính nằm trong 3 nhóm file:
+### File cấu hình chính
 
 | File | Mục đích |
 |---|---|
-| `config/cameras.json` | Khai báo camera và thông tin nguồn video. |
-| `config/lane_configs/<camera_id>.json` | Khai báo polygon lane, hướng đi, maneuver và luật theo từng lane. |
-| `config/settings.json` | Tham số runtime: model AI, tracking, gán làn, vi phạm, OCR, UI, export/thống kê. |
+| `config/cameras.json` | Camera, nguồn video, frame size, vị trí và lane đang giám sát. |
+| `config/lane_configs/<camera_id>.json` | Polygon lane, approach/commit, direction rule, maneuver và luật theo lane. |
+| `config/settings.json` | Model, tracking, lane smoothing, violation thresholds, evidence, OCR, WebSocket, UI, analytics. |
 
 ### `config/cameras.json`
 
-| Trường | Giải thích |
+| Trường | Ý nghĩa |
 |---|---|
-| `camera_id` | ID duy nhất của camera. ID này cũng là tên file lane config tương ứng. |
-| `rtsp_url` | Nguồn video. Hỗ trợ `rtsp://`, `rtsps://`, `http://`, `https://` hoặc file local. |
-| `camera_type` | Loại camera: `roadside`, `overhead`, `intersection`. |
-| `view_direction` | Mô tả hướng nhìn, dùng để đọc hiểu cấu hình. |
-| `location.road_name` | Tên tuyến đường. |
-| `location.intersection_name` | Tên nút giao, nếu có. |
-| `location.gps_lat`, `location.gps_lng` | Tọa độ GPS, phục vụ báo cáo/thống kê nếu cần. |
-| `monitored_lanes` | Danh sách lane ID camera giám sát. |
-| `frame_width`, `frame_height` | Kích thước frame chuẩn khi backend xử lý và giải chuẩn hóa polygon. |
+| `camera_id` | ID duy nhất của camera. |
+| `rtsp_url` | Nguồn video `rtsp://`, `rtsps://`, `http://`, `https://` hoặc file local. |
+| `camera_type` | `roadside`, `overhead`, `intersection`. |
+| `view_direction` | Mô tả hướng nhìn. |
+| `location` | Tên đường, nút giao, GPS. |
+| `monitored_lanes` | Danh sách lane ID thuộc camera. |
+| `frame_width`, `frame_height` | Kích thước frame chuẩn để xử lý và denormalize polygon. |
 
 ### `config/lane_configs/<camera_id>.json`
 
-Toàn bộ điểm hình học là `[x, y]` chuẩn hóa từ `0.0` đến `1.0`.
-
-| Trường | Giải thích |
+| Trường | Ý nghĩa |
 |---|---|
-| `camera_id` | Phải trùng với camera đang cấu hình. |
-| `frame_width`, `frame_height` | Kích thước tham chiếu khi chuyển giữa tọa độ chuẩn hóa và pixel. |
-| `lanes` | Danh sách lane của camera. |
-| `lanes[].lane_id` | ID lane trong camera. |
-| `lanes[].polygon` | Biên lane, dùng để xác định xe đang thuộc lane nào. |
-| `lanes[].approach_zone` | Vùng xe đi vào trước khi thực hiện maneuver, giúp khóa lane nguồn. |
-| `lanes[].commit_gate` | Vùng xác nhận xe bắt đầu commit một hướng đi. |
-| `lanes[].commit_line` | Vạch xác nhận xe bắt đầu commit một hướng đi. |
-| `lanes[].allowed_lane_changes` | Lane đích được phép chuyển sang. Nếu xe sang lane ngoài danh sách sẽ bị xét `wrong_lane`. |
-| `lanes[].allowed_vehicle_types` | Loại phương tiện được phép trong lane: `motorcycle`, `car`, `truck`, `bus`. |
-| `lanes[].allowed_maneuvers` | Danh sách hướng đi được phép theo lane. |
-| `lanes[].direction_rule.enabled` | Bật/tắt kiểm tra đi ngược chiều cho lane. |
-| `lanes[].direction_rule.direction_path` | Vector hướng đúng chiều, dạng polyline (vẽ từ đầu lane đến cuối theo chiều xe chạy hợp lệ). |
-| `lanes[].direction_rule.check_zone` | Vùng áp dụng kiểm tra hướng. |
-| `lanes[].maneuvers` | Cấu hình cho `straight`, `left`, `right`, `u_turn`. |
+| `lanes[].polygon` | Biên lane chính dùng để gán xe vào làn. |
+| `lanes[].approach_zone` | Vùng tiếp cận để khóa lane nguồn khi xét maneuver. |
+| `lanes[].commit_gate` | Polygon xác nhận xe bắt đầu maneuver. |
+| `lanes[].commit_line` | Vạch xác nhận xe bắt đầu maneuver. |
+| `lanes[].allowed_lane_changes` | Lane đích hợp lệ khi chuyển làn. |
+| `lanes[].allowed_vehicle_types` | Loại xe được phép trong lane. |
+| `lanes[].allowed_maneuvers` | Maneuver được phép theo lane. Nếu không khai báo, backend suy ra từ `maneuvers.*.allowed`. |
+| `lanes[].direction_rule.enabled` | Bật/tắt phát hiện ngược chiều. |
+| `lanes[].direction_rule.direction_path` | Polyline hướng đúng chiều. |
+| `lanes[].direction_rule.check_zone` | Vùng áp dụng đánh giá hướng. |
+| `lanes[].maneuvers.<maneuver>.turn_zone` | Vùng hỗ trợ nhận diện hướng rẽ/đi thẳng/quay đầu. |
+| `lanes[].maneuvers.<maneuver>.exit_line` | Vạch đầu ra xác nhận maneuver. |
+| `lanes[].maneuvers.<maneuver>.exit_zone` | Vùng đầu ra xác nhận maneuver. |
 
-Mỗi `lanes[].maneuvers.<maneuver>` gồm:
-
-| Trường | Giải thích |
-|---|---|
-| `enabled` | Bật/tắt nhận diện maneuver này. |
-| `allowed` | Cho phép hoặc cấm maneuver này theo luật. |
-| `turn_zone` | Vùng rẽ (polygon) dùng để khớp trajectory và tích lũy evidence cho maneuver. |
-| `exit_line` | Vạch xác nhận xe đi ra đúng nhánh của maneuver. |
-| `exit_zone` | Vùng xác nhận xe đi ra đúng nhánh của maneuver. |
+Maneuver hợp lệ: `straight`, `right`, `left`, `u_turn`.
 
 ### `config/settings.json`
 
-#### Nhóm cơ bản
+Các nhóm chính:
 
-| Key | Giải thích |
+| Nhóm | Nội dung |
 |---|---|
-| `database.path` | Đường dẫn SQLite. Nếu là đường dẫn tương đối, backend tính từ repo root. |
-| `camera.stream.rtsp_reconnect_delay_s` | Số giây chờ trước khi thử kết nối lại nguồn video sau lỗi. |
-
-#### `detection`
-
-| Key | Giải thích |
-|---|---|
-| `detection.weights_path` | File YOLO `.pt` dùng để phát hiện phương tiện. |
-| `detection.device` | Thiết bị suy luận: `auto`, `cpu`, `cuda`, `cuda:0`, ... |
-| `detection.confidence_threshold` | Ngưỡng tin cậy tối thiểu của detector. |
-| `detection.iou_threshold` | Ngưỡng IoU cho NMS, giúp xử lý bbox trùng nhau. |
-| `detection.allowed_classes` | Danh sách class YOLO được nhận diện/tracking. Đây là bật/tắt nhận diện thật ở detector. |
-
-#### `tracking`
-
-| Key | Giải thích |
-|---|---|
-| `tracking.tracker_config` | File cấu hình ByteTrack truyền cho Ultralytics. |
-| `tracking.vehicle_type_history.window_ms` | Khoảng thời gian giữ các dự đoán loại xe gần đây để làm mượt nhãn. |
-| `tracking.vehicle_type_history.size` | Số mẫu loại xe tối đa giữ cho mỗi `vehicle_id`. |
-| `tracking.vehicle_type_history.recency_weight_bias` | Mức ưu tiên nhẹ cho mẫu mới hơn khi vote loại xe. |
-| `tracking.stable_track.max_idle_ms` | Thời gian cho phép track tạm biến mất trước khi không nối lại nữa. |
-| `tracking.stable_track.min_iou_for_rebind` | IoU tối thiểu để nối track mới với track ổn định cũ. |
-| `tracking.stable_track.max_normalized_distance` | Khoảng cách tâm tối đa khi xét nối lại track. |
-
-#### `lane_assignment`
-
-| Key | Giải thích |
-|---|---|
-| `lane_assignment.temporal.observation_window_ms` | Cửa sổ quan sát lane raw trước khi chọn lane ổn định. |
-| `lane_assignment.temporal.min_majority_hits` | Số lần lane phải xuất hiện trong cửa sổ để được chốt. |
-| `lane_assignment.temporal.switch_min_duration_ms` | Thời gian tối thiểu trước khi chấp nhận đổi lane ổn định. |
-| `lane_assignment.overlap_preference.preferred_lane_overlap_ratio` | Tỷ lệ overlap giúp giữ lane ổn định khi xe nằm sát ranh giới. |
-| `lane_assignment.overlap_preference.preferred_lane_overlap_margin_px` | Biên pixel cho phép khi so sánh overlap giữa các lane. |
-
-#### `wrong_lane` và `direction_detection`
-
-| Key | Giải thích |
-|---|---|
-| `wrong_lane.min_duration_ms` | Xe phải vi phạm sai làn tối thiểu bao lâu trước khi phát sự kiện. |
-| `direction_detection.defaults.same_direction_cos_threshold` | Ngưỡng cosine để xem chuyển động là đúng chiều. |
-| `direction_detection.defaults.opposite_direction_cos_threshold` | Ngưỡng cosine để xem chuyển động là ngược chiều. |
-| `direction_detection.defaults.min_duration_ms` | Thời gian tối thiểu cần quan sát trước khi kết luận hướng. |
-| `direction_detection.defaults.min_displacement_px` | Quãng dịch chuyển tối thiểu để tránh kết luận từ xe đứng yên/rung nhẹ. |
-| `direction_detection.defaults.min_samples` | Số mẫu trajectory tối thiểu để đánh giá hướng. |
-
-#### `turn_detection`
-
-| Key | Giải thích |
-|---|---|
-| `turn_detection.turn_region_min_hits` | Số lần xe cần xuất hiện trong corridor/zone khi chưa có bằng chứng đầu ra mạnh. |
-| `turn_detection.turn_state_timeout_ms` | Thời gian không còn tín hiệu thì reset trạng thái nhận diện rẽ. |
-| `turn_detection.trajectory_history_window_ms` | Khoảng thời gian giữ trajectory để tính hướng, độ cong và evidence. |
-| `turn_detection.heading.straight_max_deg` | Góc lệch tối đa để hỗ trợ nhận diện đi thẳng. |
-| `turn_detection.heading.turn_min_deg` | Góc đổi hướng tối thiểu để hỗ trợ nhận diện rẽ. |
-| `turn_detection.heading.turn_max_deg` | Góc đổi hướng tối đa cho rẽ thường. |
-| `turn_detection.heading.u_turn_min_change_deg` | Góc đổi hướng tối thiểu để hỗ trợ nhận diện quay đầu. |
-| `turn_detection.heading.side_sign_tolerance` | Sai số nhỏ khi xác định phía trái/phải. |
-| `turn_detection.heading.value_sign_tolerance` | Sai số nhỏ khi xác định dấu của chuyển động. |
-| `turn_detection.heading.straight_curvature_max_for_heading_support` | Độ cong tối đa để heading còn được xem là hỗ trợ đi thẳng. |
-| `turn_detection.curvature.u_turn_min` | Độ cong tối thiểu hỗ trợ quay đầu. |
-| `turn_detection.curvature.straight_max` | Độ cong tối đa hỗ trợ đi thẳng. |
-| `turn_detection.curvature.turn_min` | Độ cong tối thiểu hỗ trợ rẽ. |
-| `turn_detection.curvature.fallback_min` | Ngưỡng dự phòng khi evidence chưa đủ mạnh. |
-| `turn_detection.opposite_direction.cos_threshold` | Ngưỡng cosine để nhận biết chuyển động ngược hướng khi xét quay đầu. |
-| `turn_detection.trajectory.sample_inside_polygon_min_hits` | Số mẫu nằm trong polygon tối thiểu để tính là có hit. |
-| `turn_detection.trajectory.entry_heading_lookback_points` | Số điểm nhìn lại để ước lượng hướng vào maneuver. |
-| `turn_detection.trajectory.heading_local_window_points` | Số điểm dùng cho heading cục bộ. |
-
-#### `evidence_fusion`
-
-| Key | Giải thích |
-|---|---|
-| `evidence_fusion.line_crossing.side_tolerance_px` | Sai số khi xác định xe ở phía nào của vạch. |
-| `evidence_fusion.line_crossing.min_pre_frames` | Số frame ổn định tối thiểu trước khi qua vạch. |
-| `evidence_fusion.line_crossing.min_post_frames` | Số frame ổn định tối thiểu sau khi qua vạch. |
-| `evidence_fusion.line_crossing.min_displacement_px` | Quãng dịch chuyển tối thiểu để xác nhận crossing. |
-| `evidence_fusion.line_crossing.min_displacement_ratio` | Quãng dịch chuyển tối thiểu theo tỷ lệ chiều dài vạch. |
-| `evidence_fusion.line_crossing.max_gap_ms` | Gap tối đa giữa các mẫu crossing trước khi reset. |
-| `evidence_fusion.line_crossing.cooldown_ms` | Thời gian nghỉ sau một crossing để tránh double-count. |
-| `evidence_fusion.evidence_expire_ms` | Thời gian evidence còn hiệu lực trước khi bị giảm/xóa. |
-| `evidence_fusion.motion_window_samples` | Số mẫu trajectory dùng để tính chuyển động ngắn hạn. |
-| `evidence_fusion.turn_scoring.decay_per_frame` | Mức giảm điểm evidence qua mỗi frame. |
-| `evidence_fusion.turn_scoring.score_cap` | Điểm tối đa của một evidence. |
-| `evidence_fusion.turn_scoring.*_weight` | Trọng số cho corridor, exit zone, exit line, heading, curvature, opposite direction. |
-| `evidence_fusion.turn_scoring.temporal_continuity_bonus` | Điểm cộng khi evidence liên tục theo thời gian. |
-| `evidence_fusion.turn_scoring.no_signal_penalty` | Điểm trừ khi thiếu tín hiệu mới. |
-| `evidence_fusion.turn_scoring.temporal_hits_min` | Số hit liên tục tối thiểu để tăng độ tin cậy. |
-| `evidence_fusion.turn_scoring.strong_exit_min_temporal_hits` | Số hit thời gian tối thiểu cho evidence đầu ra mạnh. |
-| `evidence_fusion.turn_scoring.strong_exit_min_corridor_hits` | Số hit corridor tối thiểu cho evidence đầu ra mạnh. |
-| `evidence_fusion.turn_scoring.threshold_*` | Ngưỡng điểm để xác nhận từng nhóm maneuver. |
-
-#### `event_lifecycle`, `geometry`, `performance`, `websocket`
-
-| Key | Giải thích |
-|---|---|
-| `event_lifecycle.violation_rearm_window_ms` | Thời gian chờ trước khi cho phép phát lại cùng loại vi phạm trong lifecycle mới. |
-| `event_lifecycle.state_prune_max_age_s` | Tuổi tối đa của state xe trước khi dọn bộ nhớ. |
-| `geometry.evidence_crop.expand_x_ratio` | Tỷ lệ nới bbox sang ngang khi cắt ảnh bằng chứng. |
-| `geometry.evidence_crop.expand_y_top_ratio` | Tỷ lệ nới bbox lên phía trên. |
-| `geometry.evidence_crop.expand_y_bottom_ratio` | Tỷ lệ nới bbox xuống phía dưới. |
-| `geometry.evidence_crop.min_size_px` | Kích thước crop tối thiểu; quá nhỏ thì fallback phù hợp hơn. |
-| `geometry.evidence_image.jpeg_quality` | Chất lượng JPEG ảnh bằng chứng. |
-| `performance.preview.max_fps` | FPS tối đa của MJPEG preview. |
-| `performance.preview.jpeg_quality` | Chất lượng JPEG preview. |
-| `performance.processing.fps_window_s` | Cửa sổ tính FPS xử lý. |
-| `websocket.track_push_interval_ms` | Chu kỳ tối thiểu gửi track realtime. |
-| `websocket.listener_queue_maxsize` | Kích thước queue listener để tránh backlog realtime. |
-
-#### `ui.monitoring`
-
-| Key | Giải thích |
-|---|---|
-| `ui.monitoring.trajectory.default_limit` | Số trajectory mặc định hiển thị trên màn hình giám sát. |
-| `ui.monitoring.trajectory.min_limit`, `max_limit` | Giới hạn cho bộ chọn số trajectory. |
-| `ui.monitoring.trajectory.max_points_per_vehicle` | Số điểm tối đa giữ cho mỗi trajectory. |
-| `ui.monitoring.trajectory.stale_ms` | Sau thời gian này không cập nhật thì trajectory bị coi là cũ. |
-| `ui.monitoring.trajectory.min_point_distance_px` | Khoảng cách tối thiểu giữa 2 điểm để tránh vẽ nhiễu. |
-| `ui.monitoring.violation.list_max_rows` | Số dòng vi phạm realtime tối đa giữ trên UI. |
-| `ui.monitoring.violation.highlight_duration_ms` | Thời gian highlight sự kiện mới. |
-| `ui.monitoring.processing_fps.stale_after_ms` | Sau thời gian này FPS xử lý bị coi là cũ. |
-| `ui.monitoring.processing_fps.poll_interval_ms` | Chu kỳ UI poll/refresh trạng thái FPS. |
-
-#### `license_plate`
-
-| Key | Giải thích |
-|---|---|
-| `license_plate.enabled` | Bật/tắt pipeline biển số. |
-| `license_plate.detector_weights_path` | File `.pt` dùng để detect vùng biển số trong crop xe. |
-| `license_plate.detector_confidence_threshold` | Ngưỡng tin cậy tối thiểu của detector biển số. |
-| `license_plate.detector_allowed_classes` | Danh sách class detector biển số được giữ lại. Dùng để tránh model nhiều class chọn nhầm bbox xe thay vì bbox biển số. |
-| `license_plate.ocr_backend` | OCR engine: `paddleocr` hoặc `easyocr`. |
-| `license_plate.easyocr_lang` | Ngôn ngữ EasyOCR nếu chọn backend `easyocr`. |
-| `license_plate.easyocr_use_gpu` | Bật GPU cho EasyOCR. |
-| `license_plate.paddle_ocr_version` | Phiên bản PaddleOCR muốn dùng. |
-| `license_plate.paddle_text_detection_model_name` | Tên model PaddleOCR phát hiện text. |
-| `license_plate.paddle_text_recognition_model_name` | Tên model PaddleOCR nhận dạng text. |
-| `license_plate.paddle_lang` | Ngôn ngữ PaddleOCR. |
-| `license_plate.paddle_use_gpu` | Bật GPU cho PaddleOCR. |
-| `license_plate.read_interval_ms` | Chu kỳ đọc biển số theo mỗi xe, không OCR mọi frame. |
-| `license_plate.min_ocr_confidence` | Ngưỡng confidence tối thiểu để giữ kết quả OCR. |
-| `license_plate.consensus_min_hits` | Số lần OCR trùng nhau tối thiểu để xác nhận biển số. |
-| `license_plate.candidate_window_ms` | Cửa sổ thời gian dùng để vote biển số. |
-| `license_plate.max_attempts_before_unreadable` | Số lần thử trước khi đánh dấu biển số là `unreadable`. |
-| `license_plate.crop_expand_x_ratio` | Tỷ lệ nới ngang crop xe trước khi tìm biển số. |
-| `license_plate.crop_expand_y_ratio` | Tỷ lệ nới dọc crop xe trước khi tìm biển số. |
-| `license_plate.image_jpeg_quality` | Chất lượng JPEG ảnh crop biển số. |
-
-#### `analytics` và `logging`
-
-| Key | Giải thích |
-|---|---|
-| `analytics.chart.minute_granularity_max_range_hours` | Khoảng lọc tối đa để biểu đồ giữ mức chi tiết theo phút. |
-| `analytics.chart.hour_granularity_max_range_days` | Khoảng lọc tối đa để biểu đồ giữ mức chi tiết theo giờ. |
-| `analytics.chart.day_granularity_max_range_days` | Khoảng lọc tối đa để biểu đồ giữ mức chi tiết theo ngày. |
-| `analytics.chart.week_granularity_max_range_days` | Khoảng lọc tối đa để biểu đồ giữ mức chi tiết theo tuần. |
-| `analytics.chart.minute_axis_label_interval_minutes` | Khoảng cách nhãn trục X khi xem theo phút. |
-| `analytics.chart.minute_axis_max_ticks` | Số tick tối đa của chart theo phút. |
-| `analytics.chart.hour_axis_max_ticks` | Số tick tối đa của chart theo giờ. |
-| `analytics.chart.overview_axis_max_ticks` | Số tick tối đa của chart tổng quan. |
-| `analytics.chart.point_markers_max_points` | Nhiều hơn số điểm này thì UI giảm marker để chart dễ nhìn. |
-| `logging.level` | Mức log mong muốn. Hiện là key dự phòng. |
-| `logging.verbose_violation_trace` | Bật log trace vi phạm chi tiết. Hiện là key dự phòng. |
+| `database` | Đường dẫn SQLite. |
+| `camera.stream` | Delay reconnect video source. |
+| `detection` | YOLO weights, backend, device, confidence, IoU, allowed classes. |
+| `tracking` | ByteTrack config, stable track, smoothing loại xe. |
+| `lane_assignment` | Cửa sổ temporal lane, majority hit, switch delay, overlap preference. |
+| `wrong_lane` | Thời gian tối thiểu trước khi xác nhận sai làn. |
+| `direction_detection` | Ngưỡng cosine, displacement, warmup, consensus, vector blending cho ngược chiều. |
+| `turn_detection` | Heading, curvature, trajectory và fallback reference cho maneuver. |
+| `evidence_fusion` | Line crossing, decay/score/threshold cho maneuver evidence. |
+| `event_lifecycle` | Chống phát trùng và prune state runtime. |
+| `geometry` | Crop ảnh bằng chứng và JPEG quality. |
+| `performance` | Preview FPS/JPEG quality, cửa sổ tính processing FPS. |
+| `websocket` | Chu kỳ push track và queue listener. |
+| `ui.monitoring` | Cấu hình trajectory, highlight violation, trạng thái FPS cho UI. |
+| `license_plate` | Detector biển số, OCR backend, interval đọc, consensus, crop và JPEG quality. |
+| `analytics` | Granularity/tick/marker cho dashboard time series. |
+| `logging` | Key dự phòng cho logging. |
 
 ## Các Loại Vi Phạm
 
-| Mã | Ý nghĩa |
-|---|---|
-| `wrong_lane` | Xe đi sang lane không được phép. |
-| `wrong_direction` | Xe đi ngược chiều trong vùng kiểm tra hướng. |
-| `vehicle_type_not_allowed` | Loại phương tiện không được phép trong lane. |
-| `turn_left_not_allowed` | Rẽ trái không đúng quy định. |
-| `turn_right_not_allowed` | Rẽ phải không đúng quy định. |
-| `turn_straight_not_allowed` | Đi thẳng không đúng quy định. |
-| `turn_u_turn_not_allowed` | Quay đầu không đúng quy định. |
+| Mã | Ý nghĩa | Logic chính |
+|---|---|---|
+| `wrong_lane` | Xe chuyển sang lane không được phép. | Stable lane transition + `allowed_lane_changes` + duration/evidence. |
+| `wrong_direction` | Xe đi ngược chiều. | `direction_rule` + trajectory vector + cosine/consensus/candidate duration. |
+| `vehicle_type_not_allowed` | Loại phương tiện không được phép trong lane. | `allowed_vehicle_types` theo lane. |
+| `turn_left_not_allowed` | Rẽ trái không đúng quy định. | Evidence fusion xác nhận `left`, so với `allowed_maneuvers`. |
+| `turn_right_not_allowed` | Rẽ phải không đúng quy định. | Evidence fusion xác nhận `right`, so với `allowed_maneuvers`. |
+| `turn_straight_not_allowed` | Đi thẳng không đúng quy định. | Evidence fusion xác nhận `straight`, so với `allowed_maneuvers`. |
+| `turn_u_turn_not_allowed` | Quay đầu không đúng quy định. | Heading change, curvature, opposite direction và exit/zone evidence. |
 
 ## API Và WebSocket
 
@@ -448,32 +295,34 @@ Mỗi `lanes[].maneuvers.<maneuver>` gồm:
 
 | Method | Endpoint | Chức năng |
 |---|---|---|
-| `GET` | `/api/health` | Kiểm tra backend đang chạy. |
-| `GET` | `/api/cameras` | Lấy danh sách camera. |
-| `GET` | `/api/cameras/{camera_id}` | Lấy chi tiết camera, lane config, validation, runtime status và UI config. |
-| `POST` | `/api/cameras` | Tạo camera mới kèm lane config. |
+| `GET` | `/api/health` | Healthcheck backend. |
+| `GET` | `/api/cameras` | Danh sách camera. |
+| `GET` | `/api/cameras/{camera_id}` | Chi tiết camera, lane config, validation, runtime status, UI config. |
+| `POST` | `/api/cameras` | Tạo camera kèm lane config. |
 | `PUT` | `/api/cameras/{camera_id}` | Cập nhật camera và lane config. |
-| `DELETE` | `/api/cameras/{camera_id}` | Xóa camera và dữ liệu liên quan. |
-| `GET` | `/api/cameras/{camera_id}/lanes` | Lấy lane config dạng pixel để overlay. |
-| `GET` | `/api/cameras/{camera_id}/trajectories` | Lấy trajectory gần đây, có `limit`, `lane_id`, `vehicle_type`. |
-| `GET` | `/api/cameras/{camera_id}/preview` | Luồng MJPEG preview. |
-| `POST` | `/api/camera/{camera_id}/background-image` | Upload ảnh nền `.jpg`/`.png` cho màn hình cấu hình. |
-| `GET` | `/api/camera/{camera_id}/background-image` | Lấy ảnh nền hiện tại. |
+| `DELETE` | `/api/cameras/{camera_id}` | Xóa camera, lane config, ảnh nền và evidence liên quan. |
+| `GET` | `/api/cameras/{camera_id}/lanes` | Lane polygons dạng pixel cho overlay/editor. |
+| `GET` | `/api/cameras/{camera_id}/trajectories` | Trajectory runtime gần đây, có `limit`, `lane_id`, `vehicle_type`. |
+| `GET` | `/api/cameras/{camera_id}/preview` | MJPEG preview. |
+| `POST` | `/api/camera/{camera_id}/background-image` | Upload ảnh nền `.jpg`/`.png`. |
+| `GET` | `/api/camera/{camera_id}/background-image` | Lấy ảnh nền. |
 | `DELETE` | `/api/camera/{camera_id}/background-image` | Xóa ảnh nền. |
-| `GET` | `/api/violations/evidence/{evidence_path}` | Lấy ảnh bằng chứng vi phạm hoặc ảnh crop biển số. |
-| `GET` | `/api/violations/history` | Lấy lịch sử vi phạm, lọc theo `camera_id`, `license_plate`, `from_ts`, `to_ts`, `limit`. |
-| `GET` | `/api/violations/export` | Export CSV/XLSX, lọc theo thời gian/camera/biển số. |
-| `GET` | `/api/analytics/dashboard` | Lấy dashboard, time series và chart config. |
-| `GET` | `/api/stats` | Thống kê tổng hợp theo `from_ts`, `to_ts`. |
+| `GET` | `/api/violations/evidence/{evidence_path}` | Lấy ảnh evidence hoặc ảnh crop biển số. |
+| `GET` | `/api/violations/history` | Lịch sử vi phạm, filter theo camera, biển số, thời gian, limit. |
+| `GET` | `/api/violations/export` | Export CSV/XLSX. |
+| `GET` | `/api/analytics/dashboard` | Dashboard overview, summary và time series. |
+| `GET` | `/api/stats` | Thống kê count theo filter thời gian. |
 
 ### WebSocket
 
-| Endpoint | Chức năng |
-|---|---|
-| `WS /ws/tracks?camera_id=...` | Stream track realtime để vẽ bbox, lane, biển số, trạng thái hướng. |
-| `WS /ws/violations?camera_id=...` | Stream sự kiện vi phạm realtime. |
+| Endpoint | Payload | Chức năng |
+|---|---|---|
+| `WS /ws/tracks?camera_id=...` | `TrackMessage` | Xe realtime, bbox, lane, raw lane, biển số, direction status, FPS. |
+| `WS /ws/violations?camera_id=...` | `{ "type": "violation", "event": ... }` | Sự kiện vi phạm realtime. |
 
 ## Kiểm Thử
+
+Backend:
 
 ```powershell
 cd backend
@@ -481,7 +330,21 @@ cd backend
 python -m pytest tests -q
 ```
 
-## Tài Liệu Theo Module
+Kiểm tra cú pháp backend:
 
+```powershell
+python -m compileall backend/app
+```
+
+Frontend:
+
+```powershell
+cd frontend
+npm run build
+```
+
+## Tài Liệu Liên Quan
+
+- [Phân tích kỹ thuật hệ thống](SYSTEM_TECHNICAL_ANALYSIS.md)
 - [Backend README](backend/README.md)
 - [Frontend README](frontend/README.md)

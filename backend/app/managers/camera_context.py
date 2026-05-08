@@ -176,11 +176,16 @@ class CameraContext:
         license_plate_crop_expand_y_ratio: float = 0.08,
         license_plate_image_jpeg_quality: int = 92,
     ):
+        # Root dùng để lưu evidence/config theo camera.
         self.repo_root = Path(repo_root)
+        # Snapshot cấu hình camera (RTSP, location, frame size...).
         self.camera_config = camera_config
+        # Lane config đã denormalize về pixel để dùng trực tiếp trong runtime.
         self.lane_config = lane_config
 
+        # Callback đẩy track realtime lên manager/websocket layer.
         self.on_track = on_track
+        # Callback đẩy vi phạm realtime lên manager/websocket layer.
         self.on_violation = on_violation
 
         # Reader luôn resize frame về đúng kích thước đã cấu hình để polygon sau khi
@@ -375,6 +380,7 @@ class CameraContext:
             name=f"preview-worker-{self.camera_id}",
             daemon=True,
         )
+        # Worker preview chạy nền, tách khỏi luồng event loop realtime.
         self._preview_worker.start()
 
         self._license_plate_resolver_lock = threading.Lock()
@@ -393,6 +399,7 @@ class CameraContext:
                 name=f"license-plate-worker-{self.camera_id}",
                 daemon=True,
             )
+            # Worker OCR biển số chạy song song để không block vòng lặp chính.
             self._license_plate_worker.start()
 
         # Cấu hình crop evidence tổng quan (khác với crop OCR biển số).
@@ -464,6 +471,7 @@ class CameraContext:
 
     def request_shutdown(self) -> None:
         """Signal camera resources to close promptly during server shutdown."""
+        # Dừng worker nền trước để tránh thread đụng vào stream đã đóng.
         self._stop_background_workers()
         try:
             self.rtsp_reader.close()
@@ -522,6 +530,7 @@ class CameraContext:
         bbox_xyxy: list[float],
         vehicle_crop_bgr,
     ) -> None:
+        # Freeze toàn bộ dữ liệu cần thiết ngay lúc enqueue để worker đọc độc lập.
         job = _LicensePlateJob(
             # camera_id/track_session_id đi kèm job để chặn job "mồ côi" sau khi reload camera.
             camera_id=self.camera_id,
@@ -544,11 +553,13 @@ class CameraContext:
                     # Quá tải thì bỏ job cũ nhất toàn cục để bảo vệ độ trễ realtime.
                     self._license_plate_pending_jobs.popitem(last=False)
                 self._license_plate_pending_jobs[job.vehicle_id] = job
+            # Đánh thức worker để xử lý batch mới.
             self._license_plate_jobs_cond.notify()
 
     def _dequeue_license_plate_jobs(self) -> list[_LicensePlateJob]:
         with self._license_plate_jobs_cond:
             while not self._license_plate_worker_stop_event.is_set() and not self._license_plate_pending_jobs:
+                # Wait timeout ngắn để vẫn phản ứng nhanh với tín hiệu stop.
                 self._license_plate_jobs_cond.wait(timeout=0.2)
 
             if self._license_plate_worker_stop_event.is_set():
@@ -693,12 +704,14 @@ class CameraContext:
         """Vòng lặp xử lý liên tục cho một camera cho đến khi nhận tín hiệu dừng."""
         try:
             while not stop_event.is_set():
+                # only_new=True: chỉ lấy frame mới nhất, tránh backlog khi xử lý chậm.
                 frame = self.rtsp_reader.read(only_new=True)
                 if frame is None:
                     # Không có frame mới: sleep ngắn để tránh vòng lặp busy-wait.
                     await asyncio.sleep(0.01)
                     continue
 
+                # Đẩy frame sang worker preview để encode JPEG phục vụ endpoint /preview.
                 self._submit_preview_frame(frame.bgr)
 
                 # ts_dt là timestamp chuẩn UTC dùng đồng nhất cho DB, WebSocket và state prune.
@@ -706,6 +719,7 @@ class CameraContext:
                 # Các bước nặng CPU/GPU chạy qua thread để không block event loop FastAPI.
                 tracks = await asyncio.to_thread(self.tracker.track, frame.bgr)
                 tracks = await asyncio.to_thread(self.stable_track_id_assigner.assign, raw_tracks=tracks, ts=ts_dt)
+                # OCR snapshot chạy bất đồng bộ; tại frame hiện tại dùng snapshot đã hội tụ tới thời điểm này.
                 plate_snapshots = self._prepare_license_plate_snapshots_and_enqueue(
                     frame.bgr,
                     tracks,
@@ -762,6 +776,7 @@ class CameraContext:
                     direction_status, direction_dot = self.violation_logic.get_direction_status_for_vehicle(
                         vehicle_id=tr.vehicle_id
                     )
+                    # direction_* gắn vào payload xe để overlay realtime hiển thị ngược chiều tức thời.
                     vehicles[-1].direction_status = direction_status
                     vehicles[-1].direction_dot = direction_dot
                     for c in candidates:
@@ -848,6 +863,7 @@ class CameraContext:
             return {}
 
         snapshots: dict[int, LicensePlateSnapshot] = {}
+        # Tập vehicle_id có mặt ở frame hiện tại để dọn lịch đọc stale.
         active_vehicle_ids: set[int] = set()
 
         for track in tracks:
@@ -954,6 +970,7 @@ class CameraContext:
         crop_x2 = min(int(round(x2 + expand_x)), frame_width)
         crop_y2 = min(int(round(y2 + expand_y_bottom)), frame_height)
         if crop_x2 <= crop_x1 or crop_y2 <= crop_y1:
+            # Sau clamp mà bbox rỗng thì bỏ.
             return None
 
         return (crop_x1, crop_y1, crop_x2, crop_y2)
@@ -1020,6 +1037,7 @@ class CameraContext:
                 jpeg_quality=self._license_plate_image_jpeg_quality,
             )
         except Exception:
+            # Lỗi evidence biển số không làm hỏng pipeline vi phạm chính.
             return None
 
     def _mark_processed_frame(self) -> None:
@@ -1038,6 +1056,7 @@ class CameraContext:
                 (len(self._processed_frame_times_s) - 1) / duration_s if duration_s > 0 else None
             )
         else:
+            # Không đủ mẫu thì để None, frontend sẽ hiểu là stale/chưa sẵn sàng.
             self._processing_fps = None
 
     async def _handle_violations(
