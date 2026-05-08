@@ -156,7 +156,7 @@
 	},
 	"performance": {
 		"preview": {
-			"max_fps": 15.0,
+			"max_fps": 24.0,
 			"jpeg_quality": 75
 		},
 		"processing": {
