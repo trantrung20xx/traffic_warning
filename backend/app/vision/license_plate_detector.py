@@ -7,6 +7,7 @@ from typing import Optional
 
 import numpy as np
 from ultralytics import YOLO
+from app.vision.inference_utils import resolve_inference_backend, resolve_inference_device
 
 
 @dataclass(frozen=True)
@@ -32,11 +33,19 @@ class YoloV8LicensePlateDetector:
     ):
         self.model = self._load_model(weights_path)
         self.requested_backend = (inference_backend or "pytorch").strip().lower()
-        self.inference_backend = self._resolve_inference_backend(self.requested_backend, weights_path)
+        self.inference_backend = resolve_inference_backend(self.requested_backend, weights_path)
         self.conf_threshold = float(conf_threshold)
         self.iou_threshold = float(iou_threshold)
         self.requested_device = (device or "auto").strip()
-        self.device = self._resolve_inference_device(self.requested_device)
+        self.device = resolve_inference_device(
+            self.requested_device,
+            missing_torch_error=(
+                "license plate detector requests CUDA but PyTorch is not installed in this environment."
+            ),
+            cuda_unavailable_error=(
+                "license plate detector requests CUDA but torch.cuda.is_available() is False."
+            ),
+        )
         self.class_names: dict[int, str] = dict(self.model.names)
         self.allowed_classes = self._normalize_allowed_classes(allowed_classes)
         self.allowed_class_set = {self._normalize_class_name(item) for item in self.allowed_classes}
@@ -128,23 +137,6 @@ class YoloV8LicensePlateDetector:
         rows.sort(key=lambda row: row.confidence, reverse=True)
         return rows
 
-    def _resolve_inference_backend(self, backend: str, weights_path: str) -> str:
-        normalized = str(backend or "pytorch").strip().lower()
-        if normalized in {"", "pytorch", "auto"}:
-            return "pytorch"
-        if normalized in {"tensorrt", "openvino", "onnxruntime"}:
-            candidate = Path(weights_path)
-            if normalized == "tensorrt" and candidate.suffix.lower() == ".engine":
-                return "tensorrt"
-            if normalized == "openvino" and (
-                candidate.suffix.lower() == ".xml" or candidate.name.endswith("_openvino_model")
-            ):
-                return "openvino"
-            if normalized == "onnxruntime" and candidate.suffix.lower() == ".onnx":
-                return "onnxruntime"
-            return "pytorch"
-        return "pytorch"
-
     def _normalize_allowed_classes(
         self,
         allowed_classes: Optional[Iterable[str]],
@@ -164,36 +156,6 @@ class YoloV8LicensePlateDetector:
 
     def _normalize_class_name(self, value: object) -> str:
         return str(value).strip().lower().replace("_", "").replace("-", "").replace(" ", "")
-
-    def _resolve_inference_device(self, requested_device: str) -> str:
-        normalized = requested_device.lower()
-        if normalized == "auto":
-            torch = self._safe_import_torch()
-            if torch is not None and torch.cuda.is_available():
-                return "cuda:0"
-            return "cpu"
-
-        if normalized.startswith("cuda"):
-            torch = self._safe_import_torch()
-            if torch is None:
-                raise RuntimeError(
-                    "license plate detector requests CUDA but PyTorch is not installed in this environment."
-                )
-            if not torch.cuda.is_available():
-                raise RuntimeError(
-                    "license plate detector requests CUDA but torch.cuda.is_available() is False."
-                )
-            if normalized == "cuda":
-                return "cuda:0"
-            return normalized
-        return normalized
-
-    def _safe_import_torch(self) -> Optional[object]:
-        try:
-            import torch
-        except Exception:
-            return None
-        return torch
 
     def _load_model(self, weights_path: str):
         candidate = Path(weights_path)

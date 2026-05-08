@@ -860,7 +860,15 @@ class CameraContext:
                 )
         self._prune_license_plate_read_schedule(current_ts=ts_dt)
 
-    def _crop_vehicle_for_license_plate(self, frame_bgr, bbox_xyxy: list[float]):
+    def _expanded_bbox_bounds(
+        self,
+        frame_bgr,
+        bbox_xyxy: list[float],
+        *,
+        expand_x_ratio: float,
+        expand_y_top_ratio: float,
+        expand_y_bottom_ratio: float,
+    ) -> Optional[tuple[int, int, int, int]]:
         frame_height, frame_width = frame_bgr.shape[:2]
         if frame_height <= 0 or frame_width <= 0:
             return None
@@ -869,16 +877,30 @@ class CameraContext:
         box_width = max(x2 - x1, 1.0)
         box_height = max(y2 - y1, 1.0)
 
-        expand_x = box_width * self._license_plate_crop_expand_x_ratio
-        expand_y = box_height * self._license_plate_crop_expand_y_ratio
+        expand_x = box_width * float(expand_x_ratio)
+        expand_y_top = box_height * float(expand_y_top_ratio)
+        expand_y_bottom = box_height * float(expand_y_bottom_ratio)
 
         crop_x1 = max(int(round(x1 - expand_x)), 0)
-        crop_y1 = max(int(round(y1 - expand_y)), 0)
+        crop_y1 = max(int(round(y1 - expand_y_top)), 0)
         crop_x2 = min(int(round(x2 + expand_x)), frame_width)
-        crop_y2 = min(int(round(y2 + expand_y)), frame_height)
+        crop_y2 = min(int(round(y2 + expand_y_bottom)), frame_height)
         if crop_x2 <= crop_x1 or crop_y2 <= crop_y1:
             return None
 
+        return (crop_x1, crop_y1, crop_x2, crop_y2)
+
+    def _crop_vehicle_for_license_plate(self, frame_bgr, bbox_xyxy: list[float]):
+        bounds = self._expanded_bbox_bounds(
+            frame_bgr,
+            bbox_xyxy,
+            expand_x_ratio=self._license_plate_crop_expand_x_ratio,
+            expand_y_top_ratio=self._license_plate_crop_expand_y_ratio,
+            expand_y_bottom_ratio=self._license_plate_crop_expand_y_ratio,
+        )
+        if bounds is None:
+            return None
+        crop_x1, crop_y1, crop_x2, crop_y2 = bounds
         vehicle_crop = frame_bgr[crop_y1:crop_y2, crop_x1:crop_x2]
         if vehicle_crop is None or vehicle_crop.size == 0:
             return None
@@ -1010,22 +1032,16 @@ class CameraContext:
 
     def _crop_violation_evidence(self, frame_bgr, bbox_xyxy: list[float]):
         """Cắt vùng ảnh quanh xe vi phạm, có nới biên để giữ thêm ngữ cảnh mặt đường."""
-        frame_height, frame_width = frame_bgr.shape[:2]
-        if frame_height <= 0 or frame_width <= 0:
+        bounds = self._expanded_bbox_bounds(
+            frame_bgr,
+            bbox_xyxy,
+            expand_x_ratio=self._evidence_crop_expand_x_ratio,
+            expand_y_top_ratio=self._evidence_crop_expand_y_top_ratio,
+            expand_y_bottom_ratio=self._evidence_crop_expand_y_bottom_ratio,
+        )
+        if bounds is None:
             return frame_bgr
-
-        x1, y1, x2, y2 = [float(value) for value in bbox_xyxy]
-        box_width = max(x2 - x1, 1.0)
-        box_height = max(y2 - y1, 1.0)
-
-        expand_x = box_width * self._evidence_crop_expand_x_ratio
-        expand_y_top = box_height * self._evidence_crop_expand_y_top_ratio
-        expand_y_bottom = box_height * self._evidence_crop_expand_y_bottom_ratio
-
-        crop_x1 = max(int(round(x1 - expand_x)), 0)
-        crop_y1 = max(int(round(y1 - expand_y_top)), 0)
-        crop_x2 = min(int(round(x2 + expand_x)), frame_width)
-        crop_y2 = min(int(round(y2 + expand_y_bottom)), frame_height)
+        crop_x1, crop_y1, crop_x2, crop_y2 = bounds
 
         if (
             crop_x2 - crop_x1 < self._evidence_crop_min_size_px

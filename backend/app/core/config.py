@@ -12,6 +12,7 @@ DEFAULT_DETECTOR_ALLOWED_CLASSES = ("motorcycle", "car", "truck", "bus")
 ALLOWED_VEHICLE_TYPES = set(DEFAULT_DETECTOR_ALLOWED_CLASSES)
 ALLOWED_MANEUVERS = {"straight", "left", "right", "u_turn"}
 MANEUVER_ORDER = ("straight", "right", "left", "u_turn")
+SUPPORTED_INFERENCE_BACKENDS = ("pytorch", "tensorrt", "openvino", "onnxruntime")
 
 
 def _validate_polygon_points(value: list[list[float]], *, field_name: str) -> list[list[float]]:
@@ -76,6 +77,14 @@ def _normalize_allowed_maneuvers(value: Optional[list[str]]) -> Optional[list[st
     invalid = [item for item in normalized if item not in ALLOWED_MANEUVERS]
     if invalid:
         raise ValueError(f"unsupported maneuvers: {', '.join(invalid)}")
+    return normalized
+
+
+def _normalize_inference_backend(value: str, *, field_name: str) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized not in SUPPORTED_INFERENCE_BACKENDS:
+        supported = ", ".join(SUPPORTED_INFERENCE_BACKENDS)
+        raise ValueError(f"{field_name} must be one of: {supported}")
     return normalized
 
 
@@ -248,12 +257,10 @@ class LicensePlateConfig(BaseModel):
     @field_validator("detector_backend")
     @classmethod
     def validate_detector_backend(cls, value: str) -> str:
-        normalized = str(value or "").strip().lower()
-        if normalized not in {"pytorch", "tensorrt", "openvino", "onnxruntime"}:
-            raise ValueError(
-                "license_plate.detector_backend must be one of: pytorch, tensorrt, openvino, onnxruntime"
-            )
-        return normalized
+        return _normalize_inference_backend(
+            value,
+            field_name="license_plate.detector_backend",
+        )
 
     @field_validator("easyocr_lang", "paddle_lang")
     @classmethod
@@ -641,10 +648,10 @@ class AppConfig(BaseModel):
     @field_validator("detector_backend")
     @classmethod
     def validate_detector_backend(cls, value: str) -> str:
-        normalized = str(value or "").strip().lower()
-        if normalized not in {"pytorch", "tensorrt", "openvino", "onnxruntime"}:
-            raise ValueError("detection.backend must be one of: pytorch, tensorrt, openvino, onnxruntime")
-        return normalized
+        return _normalize_inference_backend(
+            value,
+            field_name="detection.backend",
+        )
 
 
 def _read_json(path: Path) -> dict[str, Any]:

@@ -114,6 +114,12 @@ function cloneDraftState(value) {
 	return JSON.parse(JSON.stringify(value));
 }
 
+function toggleUniqueListValue(items, value, checked) {
+	const current = Array.isArray(items) ? items : [];
+	if (checked) return [...new Set([...current, value])];
+	return current.filter((item) => item !== value);
+}
+
 function getToastTone(message) {
 	const normalized = String(message || "").toLowerCase();
 	if (!normalized) return "info";
@@ -1612,24 +1618,11 @@ export default function ManagementView({
 															(lane) => ({
 																...lane,
 																allowed_lane_changes:
-																	checked
-																		? [
-																				...new Set(
-																					[
-																						...(lane.allowed_lane_changes ||
-																							[]),
-																						laneOption.lane_id,
-																					],
-																				),
-																			]
-																		: (
-																				lane.allowed_lane_changes ||
-																				[]
-																			).filter(
-																				(value) =>
-																					value !==
-																					laneOption.lane_id,
-																			),
+																	toggleUniqueListValue(
+																		lane.allowed_lane_changes,
+																		laneOption.lane_id,
+																		checked,
+																	),
 															}),
 														)
 													}
@@ -1672,24 +1665,11 @@ export default function ManagementView({
 															(lane) => ({
 																...lane,
 																allowed_vehicle_types:
-																	checked
-																		? [
-																				...new Set(
-																					[
-																						...(lane.allowed_vehicle_types ||
-																							[]),
-																						vehicleType,
-																					],
-																				),
-																			]
-																		: (
-																				lane.allowed_vehicle_types ||
-																				[]
-																			).filter(
-																				(value) =>
-																					value !==
-																					vehicleType,
-																			),
+																	toggleUniqueListValue(
+																		lane.allowed_vehicle_types,
+																		vehicleType,
+																		checked,
+																	),
 															}),
 														)
 													}

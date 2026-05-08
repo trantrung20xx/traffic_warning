@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Optional
 
 from ultralytics import YOLO
+from app.vision.inference_utils import resolve_inference_backend, resolve_inference_device
 
 class YoloV8VehicleDetector:
     """
@@ -24,11 +25,19 @@ class YoloV8VehicleDetector:
     ):
         self.model = self._load_model_with_fallback(weights_path)
         self.requested_backend = (inference_backend or "pytorch").strip().lower()
-        self.inference_backend = self._resolve_inference_backend(self.requested_backend, weights_path)
+        self.inference_backend = resolve_inference_backend(self.requested_backend, weights_path)
         self.conf_threshold = float(conf_threshold)
         self.iou_threshold = float(iou_threshold)
         self.requested_device = (device or "auto").strip()
-        self.device = self._resolve_inference_device(self.requested_device)
+        self.device = resolve_inference_device(
+            self.requested_device,
+            missing_torch_error=(
+                "detector_device requests CUDA but PyTorch is not installed in this environment."
+            ),
+            cuda_unavailable_error=(
+                "detector_device requests CUDA but torch.cuda.is_available() is False."
+            ),
+        )
         self.allowed_classes = self._normalize_allowed_classes(allowed_classes)
         self.allowed_class_set = set(self.allowed_classes)
 
@@ -58,37 +67,6 @@ class YoloV8VehicleDetector:
             raise ValueError("detector allowed_classes must contain at least one class")
         return normalized
 
-    def _resolve_inference_device(self, requested_device: str) -> str:
-        normalized = requested_device.lower()
-        if normalized == "auto":
-            torch = self._safe_import_torch()
-            if torch is not None and torch.cuda.is_available():
-                return "cuda:0"
-            return "cpu"
-
-        if normalized.startswith("cuda"):
-            torch = self._safe_import_torch()
-            if torch is None:
-                raise RuntimeError(
-                    "detector_device requests CUDA but PyTorch is not installed in this environment."
-                )
-            if not torch.cuda.is_available():
-                raise RuntimeError(
-                    "detector_device requests CUDA but torch.cuda.is_available() is False."
-                )
-            if normalized == "cuda":
-                return "cuda:0"
-            return normalized
-
-        return normalized
-
-    def _safe_import_torch(self) -> Optional[object]:
-        try:
-            import torch
-        except Exception:
-            return None
-        return torch
-
     def _load_model_with_fallback(self, weights_path: str):
         candidate_paths = self._build_weight_candidates(weights_path)
         errors: list[str] = []
@@ -117,21 +95,3 @@ class YoloV8VehicleDetector:
                     candidates.append(candidate)
 
         return [str(path) for path in candidates]
-
-    def _resolve_inference_backend(self, backend: str, weights_path: str) -> str:
-        normalized = str(backend or "pytorch").strip().lower()
-        if normalized in {"", "pytorch", "auto"}:
-            return "pytorch"
-        if normalized in {"tensorrt", "openvino", "onnxruntime"}:
-            candidate = Path(weights_path)
-            if normalized == "tensorrt" and candidate.suffix.lower() == ".engine":
-                return "tensorrt"
-            if normalized == "openvino" and (
-                candidate.suffix.lower() == ".xml" or candidate.name.endswith("_openvino_model")
-            ):
-                return "openvino"
-            if normalized == "onnxruntime" and candidate.suffix.lower() == ".onnx":
-                return "onnxruntime"
-            return "pytorch"
-        return "pytorch"
-
