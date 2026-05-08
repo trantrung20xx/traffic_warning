@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "traffic-camera-node"
+version = "0.1.0"
+description = "Raspberry Pi 5 edge camera node for stable RTSP streaming"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+  { name = "Traffic Warning Team" }
+]
+dependencies = [
+  "psutil>=5.9,<7.0",
+  "gpiozero>=2.0,<3.0",
+  "lgpio>=0.2.2.0,<1.0",
+  "Pillow>=10.0,<12.0",
+  "spidev>=3.6,<4.0"
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0,<9.0"
+]
+
+[project.scripts]
+traffic-camera-node = "traffic_camera_node.main:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]

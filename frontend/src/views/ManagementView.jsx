@@ -2,13 +2,20 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import AppIcon from "../components/AppIcon";
 import CameraCanvas from "../components/CameraCanvas";
 import ConfirmDialog from "../components/ConfirmDialog";
+import EdgeCameraHealthModal from "../components/EdgeCameraHealthModal";
 import Toast from "../components/Toast";
 import {
 	createCamera,
 	deleteBackgroundImage,
 	deleteCamera,
+	fetchEdgeHealth,
+	fetchEdgeIdentity,
 	fetchCameraDetail,
+	getEdgeHealthBaseUrl,
 	getBackgroundImageUrl,
+	triggerEdgeRestartService,
+	triggerEdgeStreamStart,
+	triggerEdgeStreamStop,
 	uploadBackgroundImage,
 	updateCamera,
 } from "../api";
@@ -511,6 +518,15 @@ export default function ManagementView({
 	const [backgroundBusy, setBackgroundBusy] = useState(false);
 	const [configValidation, setConfigValidation] = useState([]);
 	const [confirmDialog, setConfirmDialog] = useState(null);
+	const [confirmBusy, setConfirmBusy] = useState(false);
+	const [edgePopupCameraId, setEdgePopupCameraId] = useState(null);
+	const [edgeHealthBaseUrl, setEdgeHealthBaseUrl] = useState("");
+	const [edgeHealthData, setEdgeHealthData] = useState(null);
+	const [edgeIdentityData, setEdgeIdentityData] = useState(null);
+	const [edgeLoading, setEdgeLoading] = useState(false);
+	const [edgeError, setEdgeError] = useState("");
+	const [edgeActionBusy, setEdgeActionBusy] = useState(false);
+	const edgeHealthPollTimeoutRef = useRef(null);
 	const undoStackRef = useRef([]);
 	const redoStackRef = useRef([]);
 	const [historyRevision, setHistoryRevision] = useState(0);
@@ -561,6 +577,28 @@ export default function ManagementView({
 				resetDraftHistory();
 			});
 	}, [activeCameraId, selectedCameraId, isNewCamera, resetDraftHistory]);
+
+	useEffect(
+		() => () => {
+			if (edgeHealthPollTimeoutRef.current) {
+				window.clearTimeout(edgeHealthPollTimeoutRef.current);
+				edgeHealthPollTimeoutRef.current = null;
+			}
+		},
+		[],
+	);
+
+	const edgePopupCamera = useMemo(
+		() => cameras.find((camera) => camera.camera_id === edgePopupCameraId) || null,
+		[cameras, edgePopupCameraId],
+	);
+	const edgeStreamEnabled = useMemo(() => {
+		if (!edgeHealthData) return false;
+		if (typeof edgeHealthData.stream_enabled === "boolean") {
+			return edgeHealthData.stream_enabled;
+		}
+		return Boolean(edgeHealthData.stream_running);
+	}, [edgeHealthData]);
 
 	const selectedLane = useMemo(
 		() =>
@@ -990,9 +1028,164 @@ export default function ManagementView({
 		setLaneMessage("Đã xóa toàn bộ polygon hiện tại.");
 	};
 
+	const clearEdgeHealthPolling = useCallback(() => {
+		if (edgeHealthPollTimeoutRef.current) {
+			window.clearTimeout(edgeHealthPollTimeoutRef.current);
+			edgeHealthPollTimeoutRef.current = null;
+		}
+	}, []);
+
+	const loadEdgeNodeStatus = useCallback(
+		async (camera, { silent = false } = {}) => {
+			if (!camera?.rtsp_url) {
+				throw new Error("Camera chưa có RTSP URL.");
+			}
+			if (!silent) setEdgeLoading(true);
+			setEdgeError("");
+			try {
+				const baseUrl = getEdgeHealthBaseUrl(camera.rtsp_url);
+				setEdgeHealthBaseUrl(baseUrl);
+				const [health, identity] = await Promise.all([
+					fetchEdgeHealth(camera.rtsp_url),
+					fetchEdgeIdentity(camera.rtsp_url),
+				]);
+				setEdgeHealthData(health);
+				setEdgeIdentityData(identity);
+				return { health, identity, baseUrl };
+			} catch (error) {
+				const detail = error?.message || "Không thể kết nối edge node.";
+				setEdgeError(detail);
+				throw new Error(detail);
+			} finally {
+				if (!silent) setEdgeLoading(false);
+			}
+		},
+		[],
+	);
+
+	const pollEdgeNodeAfterRestart = useCallback(
+		(camera, attempt = 0) => {
+			clearEdgeHealthPolling();
+			edgeHealthPollTimeoutRef.current = window.setTimeout(async () => {
+				try {
+					await loadEdgeNodeStatus(camera, { silent: true });
+					setEdgeActionBusy(false);
+					setMessage("Edge node đã khởi động lại và kết nối lại thành công.");
+				} catch (_error) {
+					if (attempt >= 30) {
+						setEdgeActionBusy(false);
+						setMessage("Đã gửi lệnh restart nhưng edge node chưa phản hồi lại.");
+						return;
+					}
+					pollEdgeNodeAfterRestart(camera, attempt + 1);
+				}
+			}, 2000);
+		},
+		[clearEdgeHealthPolling, loadEdgeNodeStatus],
+	);
+
+	const openEdgeHealthPopup = useCallback(
+		(camera) => {
+			setEdgePopupCameraId(camera.camera_id);
+			setEdgeHealthData(null);
+			setEdgeIdentityData(null);
+			setEdgeError("");
+			setEdgeActionBusy(false);
+			clearEdgeHealthPolling();
+			loadEdgeNodeStatus(camera).catch((error) => {
+				setMessage(error.message || "Không thể tải health của edge node.");
+			});
+		},
+		[clearEdgeHealthPolling, loadEdgeNodeStatus],
+	);
+
+	const closeEdgeHealthPopup = useCallback(() => {
+		if (edgeActionBusy) return;
+		clearEdgeHealthPolling();
+		setEdgePopupCameraId(null);
+		setEdgeHealthBaseUrl("");
+		setEdgeHealthData(null);
+		setEdgeIdentityData(null);
+		setEdgeError("");
+		setEdgeLoading(false);
+	}, [clearEdgeHealthPolling, edgeActionBusy]);
+
+	const requestEdgeToggleStream = useCallback(() => {
+		if (!edgePopupCamera) return;
+		const camera = edgePopupCamera;
+		const nextEnabled = !edgeStreamEnabled;
+		setConfirmDialog({
+			tone: nextEnabled ? "info" : "warning",
+			icon: nextEnabled ? "video" : "camera-off",
+			confirmIcon: nextEnabled ? "video" : "camera-off",
+			title: nextEnabled
+				? `Bật stream cho ${camera.camera_id}?`
+				: `Tắt stream của ${camera.camera_id}?`,
+			description: nextEnabled
+				? "Edge node sẽ khởi chạy lại pipeline để phát RTSP."
+				: "Pipeline RTSP sẽ dừng và giữ trạng thái tắt cho đến khi bật lại.",
+			confirmLabel: nextEnabled ? "Bật stream" : "Tắt stream",
+			cancelLabel: "Hủy",
+			onConfirm: async () => {
+				setConfirmBusy(true);
+				setEdgeActionBusy(true);
+				try {
+					if (nextEnabled) {
+						await triggerEdgeStreamStart(camera.rtsp_url);
+					} else {
+						await triggerEdgeStreamStop(camera.rtsp_url);
+					}
+					setConfirmDialog(null);
+					setMessage(
+						nextEnabled
+							? `Đã gửi lệnh bật stream cho ${camera.camera_id}.`
+							: `Đã gửi lệnh tắt stream cho ${camera.camera_id}.`,
+					);
+					await loadEdgeNodeStatus(camera);
+				} catch (error) {
+					setMessage(error.message || "Không thể đổi trạng thái stream từ xa.");
+				} finally {
+					setConfirmBusy(false);
+					setEdgeActionBusy(false);
+				}
+			},
+		});
+	}, [edgePopupCamera, edgeStreamEnabled, loadEdgeNodeStatus]);
+
+	const requestEdgeRestartService = useCallback(() => {
+		if (!edgePopupCamera) return;
+		const camera = edgePopupCamera;
+		setConfirmDialog({
+			tone: "danger",
+			icon: "settings",
+			confirmIcon: "settings",
+			title: `Restart edge node ${camera.camera_id}?`,
+			description:
+				"Service edge_camera_node sẽ restart ngay. Popup sẽ tự kiểm tra kết nối lại sau khi service lên lại.",
+			confirmLabel: "Restart edge node",
+			cancelLabel: "Hủy",
+			onConfirm: async () => {
+				setConfirmBusy(true);
+				setEdgeActionBusy(true);
+				try {
+					await triggerEdgeRestartService(camera.rtsp_url);
+					setConfirmDialog(null);
+					setMessage(`Đã gửi lệnh restart edge node ${camera.camera_id}.`);
+					pollEdgeNodeAfterRestart(camera, 0);
+				} catch (error) {
+					setEdgeActionBusy(false);
+					setMessage(error.message || "Không thể restart edge node từ xa.");
+				} finally {
+					setConfirmBusy(false);
+				}
+			},
+		});
+	}, [edgePopupCamera, pollEdgeNodeAfterRestart]);
+
 	const closeConfirmDialog = () => {
-		if (saving) return;
+		if (saving || confirmBusy) return;
 		setConfirmDialog(null);
+		setConfirmBusy(false);
 	};
 
 	const requestDiscardChanges = (description, onConfirm) => {
@@ -1198,25 +1391,35 @@ export default function ManagementView({
 					</div>
 					<div className="entity-list management-camera-list">
 						{cameras.map((camera) => (
-							<button
+							<div
 								key={camera.camera_id}
 								className={
 									camera.camera_id === activeCameraId && !isNewCamera
 										? "camera-card active"
 										: "camera-card"
-								}
-								onClick={() => handleSelectCamera(camera.camera_id)}>
-								<div className="row-title icon-label">
-									<AppIcon name="camera" />
-									{camera.camera_id}
+								}>
+								<div className="camera-card-item">
+									<button className="camera-card-main" onClick={() => handleSelectCamera(camera.camera_id)}>
+										<div className="row-title icon-label">
+											<AppIcon name="camera" />
+											{camera.camera_id}
+										</div>
+										<div className="row-sub">
+											{camera.location.road_name}
+											{camera.location.intersection
+												? ` · ${camera.location.intersection}`
+												: ""}
+										</div>
+									</button>
+									<button
+										className="camera-card-tools"
+										onClick={() => openEdgeHealthPopup(camera)}
+										title="Edge node health"
+										aria-label={`Xem edge health ${camera.camera_id}`}>
+										<AppIcon name="server" size={16} />
+									</button>
 								</div>
-								<div className="row-sub">
-									{camera.location.road_name}
-									{camera.location.intersection
-										? ` · ${camera.location.intersection}`
-										: ""}
-								</div>
-							</button>
+							</div>
 						))}
 					</div>
 				</aside>
@@ -2005,6 +2208,26 @@ export default function ManagementView({
 					</section>
 				</section>
 			</div>
+			<EdgeCameraHealthModal
+				open={Boolean(edgePopupCamera)}
+				camera={edgePopupCamera}
+				healthBaseUrl={edgeHealthBaseUrl}
+				health={edgeHealthData}
+				identity={edgeIdentityData}
+				streamEnabled={edgeStreamEnabled}
+				loading={edgeLoading}
+				error={edgeError}
+				actionBusy={edgeActionBusy}
+				onClose={closeEdgeHealthPopup}
+				onRefresh={() => {
+					if (!edgePopupCamera) return;
+					loadEdgeNodeStatus(edgePopupCamera).catch((error) => {
+						setMessage(error.message || "Không thể tải lại health edge node.");
+					});
+				}}
+				onToggleStream={requestEdgeToggleStream}
+				onRestartService={requestEdgeRestartService}
+			/>
 			<Toast
 				message={message}
 				tone={getToastTone(message)}
@@ -2020,7 +2243,7 @@ export default function ManagementView({
 				tone={confirmDialog?.tone}
 				icon={confirmDialog?.icon}
 				confirmIcon={confirmDialog?.confirmIcon}
-				loading={saving}
+				loading={saving || confirmBusy}
 				onCancel={closeConfirmDialog}
 				onConfirm={confirmDialog?.onConfirm}
 			/>

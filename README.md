@@ -93,6 +93,7 @@ Video input
 | `backend/app` | Toàn bộ server, xử lý video, AI, logic vi phạm, API và database. |
 | `backend/tests` | Bộ test backend. |
 | `frontend/src` | Giao diện React. |
+| `edge_camera_node` | Node phần cứng chạy trên Raspberry Pi 5 để phát RTSP ổn định cho server. |
 | `config/cameras.json` | Danh sách camera. |
 | `config/lane_configs` | Cấu hình làn theo từng camera. |
 | `config/settings.json` | Tham số chung của hệ thống. |
@@ -389,4 +390,5 @@ npm run build
 
 - [Backend README](backend/README.md)
 - [Frontend README](frontend/README.md)
+- [Edge Camera Node Raspberry Pi 5](edge_camera_node/README.md)
 - [Phân tích kỹ thuật hệ thống](SYSTEM_TECHNICAL_ANALYSIS.md)

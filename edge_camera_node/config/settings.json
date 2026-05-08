@@ -1,0 +1,44 @@
+{
+  "camera": {
+    "width": 2560,
+    "height": 1440,
+    "fps": 30
+  },
+  "image_tuning": {
+    "profile": "normal"
+  },
+  "gpio": {
+    "enabled": true,
+    "buttons": {
+      "mode": 5,
+      "restart_stream": 6,
+      "safe_shutdown": 13,
+      "reset_watchdog": 19
+    },
+    "leds": {
+      "online": 17,
+      "warning": 27,
+      "error": 22,
+      "streaming": 23
+    }
+  },
+  "display": {
+    "enabled": true,
+    "update_hz": 1,
+    "spi_bus": 0,
+    "spi_device": 0,
+    "dc_pin": 25,
+    "reset_pin": 24,
+    "backlight_pin": null
+  },
+  "stream": {
+    "bitrate": 6000000,
+    "udp_sink": "udp://127.0.0.1:1234?pkt_size=1316"
+  },
+  "watchdog": {
+    "fps_warning_threshold": 15
+  },
+  "health_api": {
+    "allow_restart_endpoint": true
+  }
+}

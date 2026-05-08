@@ -702,6 +702,48 @@ select {
   background: rgba(255, 255, 255, 0.03);
 }
 
+.camera-card-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+}
+
+.camera-card-main {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+  padding: 0;
+}
+
+.camera-card-tools {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--muted);
+  cursor: pointer;
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.camera-card-tools:hover {
+  color: var(--text);
+  border-color: rgba(28, 166, 255, 0.34);
+  background: rgba(28, 166, 255, 0.16);
+}
+
 .tracked-vehicle-row {
   align-items: flex-start;
   min-height: 88px;
@@ -1058,6 +1100,92 @@ select {
   border: 1px solid rgba(160, 210, 229, 0.18);
   background: linear-gradient(180deg, rgba(8, 29, 44, 0.98), rgba(12, 37, 55, 0.96));
   box-shadow: var(--shadow);
+}
+
+.edge-health-modal {
+  width: min(940px, 100%);
+  max-height: min(88vh, 920px);
+  overflow: auto;
+  padding: 24px;
+  border-radius: 24px;
+  border: 1px solid rgba(160, 210, 229, 0.18);
+  background: linear-gradient(180deg, rgba(8, 29, 44, 0.98), rgba(12, 37, 55, 0.96));
+  box-shadow: var(--shadow);
+}
+
+.edge-health-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.edge-health-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.edge-health-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  margin-top: 16px;
+}
+
+.edge-health-card {
+  padding: 16px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.03);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.edge-health-card .panel-kicker {
+  margin-bottom: 6px;
+}
+
+.edge-health-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: flex-start;
+  padding: 10px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.edge-health-row:last-child {
+  border-bottom: 0;
+}
+
+.edge-health-row span {
+  color: var(--muted);
+  flex: 0 0 42%;
+  min-width: 0;
+}
+
+.edge-health-row strong {
+  flex: 1 1 auto;
+  text-align: left;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.edge-health-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 20px;
+}
+
+.button.warning-action {
+  background: rgba(255, 190, 61, 0.16);
+  border-color: rgba(255, 190, 61, 0.3);
+  color: #ffe0a3;
 }
 
 .toast-viewport {
@@ -1875,6 +2003,10 @@ select {
     grid-template-columns: 1fr;
   }
 
+  .edge-health-grid {
+    grid-template-columns: 1fr;
+  }
+
   .lane-inline-fields,
   .lane-field-target,
   .lane-field-changes,
@@ -1913,6 +2045,11 @@ select {
   }
 
   .violation-modal {
+    padding: 16px;
+    border-radius: 20px;
+  }
+
+  .edge-health-modal {
     padding: 16px;
     border-radius: 20px;
   }

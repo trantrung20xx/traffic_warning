@@ -249,3 +249,83 @@ export function getCameraPreviewUrl(cameraId) {
   return apiUrl(`/api/cameras/${cameraId}/preview`);
 }
 
+function parseRtspHost(rtspUrl) {
+  const value = String(rtspUrl || "").trim();
+  const match = value.match(/^rtsp:\/\/([^\/?#]+)(?:[\/?#]|$)/i);
+  if (!match?.[1]) {
+    throw new Error("RTSP URL không hợp lệ.");
+  }
+
+  const authority = match[1];
+  const withoutCredentials = authority.includes("@") ? authority.split("@").pop() : authority;
+  if (!withoutCredentials) {
+    throw new Error("RTSP URL không hợp lệ.");
+  }
+
+  if (withoutCredentials.startsWith("[")) {
+    const closingIndex = withoutCredentials.indexOf("]");
+    if (closingIndex <= 1) {
+      throw new Error("RTSP URL không hợp lệ.");
+    }
+    return withoutCredentials.slice(1, closingIndex);
+  }
+
+  return withoutCredentials.split(":")[0];
+}
+
+function buildEdgeBaseUrl(rtspUrl, healthPort = 8088) {
+  const host = parseRtspHost(rtspUrl);
+  return `http://${host}:${healthPort}`;
+}
+
+async function requestAbsoluteJson(url, options) {
+  const response = await fetch(url, options);
+  if (!response.ok) {
+    let detail = `${response.status}`;
+    try {
+      const body = await response.json();
+      detail = body.detail || JSON.stringify(body);
+    } catch {
+      detail = `${response.status}`;
+    }
+    throw new Error(detail);
+  }
+  if (response.status === 204) return null;
+  return await response.json();
+}
+
+function buildRestartQuery(token) {
+  if (!token) return "";
+  return `?token=${encodeURIComponent(token)}`;
+}
+
+export function getEdgeHealthBaseUrl(rtspUrl, healthPort = 8088) {
+  return buildEdgeBaseUrl(rtspUrl, healthPort);
+}
+
+export async function fetchEdgeHealth(rtspUrl, healthPort = 8088) {
+  return await requestAbsoluteJson(`${buildEdgeBaseUrl(rtspUrl, healthPort)}/health`);
+}
+
+export async function fetchEdgeIdentity(rtspUrl, healthPort = 8088) {
+  return await requestAbsoluteJson(`${buildEdgeBaseUrl(rtspUrl, healthPort)}/identity`);
+}
+
+export async function triggerEdgeStreamStart(rtspUrl, { token = null, healthPort = 8088 } = {}) {
+  return await requestAbsoluteJson(
+    `${buildEdgeBaseUrl(rtspUrl, healthPort)}/stream/start${buildRestartQuery(token)}`,
+  );
+}
+
+export async function triggerEdgeStreamStop(rtspUrl, { token = null, healthPort = 8088 } = {}) {
+  return await requestAbsoluteJson(
+    `${buildEdgeBaseUrl(rtspUrl, healthPort)}/stream/stop${buildRestartQuery(token)}`,
+  );
+}
+
+export async function triggerEdgeRestartService(rtspUrl, { token = null, healthPort = 8088 } = {}) {
+  return await requestAbsoluteJson(
+    `${buildEdgeBaseUrl(rtspUrl, healthPort)}/restart-service${buildRestartQuery(token)}`,
+  );
+}
+

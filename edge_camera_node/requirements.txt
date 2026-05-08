@@ -1,0 +1,6 @@
+psutil>=5.9,<7.0
+gpiozero>=2.0,<3.0
+lgpio>=0.2.2.0,<1.0
+Pillow>=10.0,<12.0
+spidev>=3.6,<4.0
+pytest>=8.0,<9.0
