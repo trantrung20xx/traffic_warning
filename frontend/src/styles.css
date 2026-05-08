@@ -1127,6 +1127,15 @@ select {
   margin-top: 14px;
 }
 
+/* Tách rõ các khối trạng thái trong popup edge camera. */
+.edge-health-badges + .message-bar {
+  margin-top: 12px;
+}
+
+.edge-health-modal .message-bar + .message-bar {
+  margin-top: 10px;
+}
+
 .edge-health-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
