@@ -10,6 +10,7 @@ Thumbs.db
 # Python
 __pycache__/
 *.py[cod]
+*.pyc
 *.pyc.*
 .pytest_cache/
 .mypy_cache/
@@ -18,7 +19,7 @@ __pycache__/
 .coverage.*
 htmlcov/
 backend/.venv/
-*.pyc
+
 
 # Frontend
 frontend/node_modules/
@@ -30,3 +31,7 @@ pnpm-debug.log*
 
 # Local model weights
 backend/yolov8*.pt
+backend/license_plate_yolov8.pt
+
+# DB
+config/traffic_warning.sqlite
