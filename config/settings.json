@@ -44,10 +44,27 @@
 	"direction_detection": {
 		"defaults": {
 			"same_direction_cos_threshold": 0.25,
-			"opposite_direction_cos_threshold": -0.25,
-			"min_duration_ms": 600,
-			"min_displacement_px": 8.0,
-			"min_samples": 3
+			"opposite_direction_cos_threshold": -0.45,
+			"min_duration_ms": 700,
+			"min_displacement_px": 7.0,
+			"min_samples": 3,
+			"evaluation_window_samples": 12,
+			"segment_min_displacement_px": 2.0,
+			"segment_max_gap_ms": 450,
+			"warmup_min_duration_ms": 0,
+			"warmup_min_samples": 3,
+			"opposite_consensus_min_segments": 2,
+			"opposite_consensus_ratio_min": 0.55,
+			"opposite_min_displacement_px": 10.0,
+			"opposite_min_displacement_lane_ratio": 0.1,
+			"lane_consensus_sample_window": 48,
+			"lane_consensus_min_samples": 6,
+			"lane_consensus_inlier_dot_min": 0.75,
+			"lane_consensus_blend_weight": 0.28,
+			"lane_consensus_alignment_min_dot": 0.2,
+			"lane_consensus_max_age_ms": 180000,
+			"trajectory_blend_weight": 0.16,
+			"trajectory_blend_min_alignment_dot": 0.5
 		}
 	},
 	"turn_detection": {

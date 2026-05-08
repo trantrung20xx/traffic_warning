@@ -285,12 +285,35 @@ class RuntimeManeuverConfig(BaseModel):
 
 class DirectionDetectionDefaultsConfig(BaseModel):
     same_direction_cos_threshold: float = 0.25
-    opposite_direction_cos_threshold: float = -0.25
-    min_duration_ms: int = 600
-    min_displacement_px: float = 8.0
+    opposite_direction_cos_threshold: float = -0.45
+    min_duration_ms: int = 700
+    min_displacement_px: float = 7.0
     min_samples: int = 3
+    evaluation_window_samples: int = 12
+    segment_min_displacement_px: float = 2.0
+    segment_max_gap_ms: int = 450
+    warmup_min_duration_ms: int = 0
+    warmup_min_samples: int = 3
+    opposite_consensus_min_segments: int = 2
+    opposite_consensus_ratio_min: float = 0.55
+    opposite_min_displacement_px: float = 10.0
+    opposite_min_displacement_lane_ratio: float = 0.10
+    lane_consensus_sample_window: int = 48
+    lane_consensus_min_samples: int = 6
+    lane_consensus_inlier_dot_min: float = 0.75
+    lane_consensus_blend_weight: float = 0.28
+    lane_consensus_alignment_min_dot: float = 0.20
+    lane_consensus_max_age_ms: int = 180000
+    trajectory_blend_weight: float = 0.16
+    trajectory_blend_min_alignment_dot: float = 0.50
 
-    @field_validator("same_direction_cos_threshold", "opposite_direction_cos_threshold")
+    @field_validator(
+        "same_direction_cos_threshold",
+        "opposite_direction_cos_threshold",
+        "lane_consensus_inlier_dot_min",
+        "lane_consensus_alignment_min_dot",
+        "trajectory_blend_min_alignment_dot",
+    )
     @classmethod
     def validate_cos_threshold(cls, value: float) -> float:
         parsed = float(value)
@@ -298,7 +321,17 @@ class DirectionDetectionDefaultsConfig(BaseModel):
             raise ValueError("direction cosine thresholds must be within [-1, 1]")
         return parsed
 
-    @field_validator("min_duration_ms", "min_samples")
+    @field_validator(
+        "min_duration_ms",
+        "min_samples",
+        "evaluation_window_samples",
+        "segment_max_gap_ms",
+        "warmup_min_samples",
+        "opposite_consensus_min_segments",
+        "lane_consensus_sample_window",
+        "lane_consensus_min_samples",
+        "lane_consensus_max_age_ms",
+    )
     @classmethod
     def validate_positive_int(cls, value: int) -> int:
         parsed = int(value)
@@ -306,18 +339,47 @@ class DirectionDetectionDefaultsConfig(BaseModel):
             raise ValueError("direction detection integer values must be > 0")
         return parsed
 
-    @field_validator("min_displacement_px")
+    @field_validator("warmup_min_duration_ms")
+    @classmethod
+    def validate_non_negative_int(cls, value: int) -> int:
+        parsed = int(value)
+        if parsed < 0:
+            raise ValueError("direction detection warmup_min_duration_ms must be >= 0")
+        return parsed
+
+    @field_validator(
+        "min_displacement_px",
+        "segment_min_displacement_px",
+        "opposite_min_displacement_px",
+    )
     @classmethod
     def validate_positive_displacement(cls, value: float) -> float:
         parsed = float(value)
         if parsed <= 0.0:
-            raise ValueError("direction detection min_displacement_px must be > 0")
+            raise ValueError("direction detection displacement values must be > 0")
+        return parsed
+
+    @field_validator(
+        "opposite_consensus_ratio_min",
+        "opposite_min_displacement_lane_ratio",
+        "lane_consensus_blend_weight",
+        "trajectory_blend_weight",
+    )
+    @classmethod
+    def validate_unit_interval(cls, value: float) -> float:
+        parsed = float(value)
+        if parsed < 0.0 or parsed > 1.0:
+            raise ValueError("direction detection ratio/weight values must be within [0, 1]")
         return parsed
 
     @model_validator(mode="after")
     def validate_threshold_order(self):
         if self.opposite_direction_cos_threshold >= self.same_direction_cos_threshold:
             raise ValueError("opposite_direction_cos_threshold must be smaller than same_direction_cos_threshold")
+        if self.opposite_consensus_min_segments > self.evaluation_window_samples:
+            raise ValueError("opposite_consensus_min_segments must be <= evaluation_window_samples")
+        if self.lane_consensus_min_samples > self.lane_consensus_sample_window:
+            raise ValueError("lane_consensus_min_samples must be <= lane_consensus_sample_window")
         return self
 
 
