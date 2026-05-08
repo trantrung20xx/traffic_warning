@@ -141,6 +141,8 @@ class TurnDetectionFallbackReferenceConfig(BaseModel):
     inlier_dot_min: float = Field(default=0.60, ge=-1.0, le=1.0)
     inlier_ratio_min: float = Field(default=0.78, ge=0.0, le=1.0)
     max_age_ms: int = Field(default=180000, ge=1000)
+    trajectory_blend_max_weight: float = Field(default=0.35, ge=0.0, le=1.0)
+    trajectory_blend_min_alignment_dot: float = Field(default=0.35, ge=-1.0, le=1.0)
 
 
 class TurnDetectionTrajectoryConfig(BaseModel):

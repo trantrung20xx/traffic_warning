@@ -48,7 +48,10 @@ http://localhost:5173
 
 Frontend đọc backend base URL từ biến môi trường `VITE_API_BASE`.
 
-Nếu không khai báo, mặc định là:
+Nếu không khai báo `VITE_API_BASE`, frontend tự lấy `hostname` hiện tại trên trình duyệt và gọi backend ở port `8000`.
+Ví dụ truy cập UI qua `http://192.168.1.20:5173` thì frontend sẽ gọi `http://192.168.1.20:8000`.
+
+Fallback cuối cùng (khi không xác định được host, ví dụ môi trường đặc biệt) là:
 
 ```text
 http://localhost:8000
@@ -58,6 +61,7 @@ Ví dụ `frontend/.env`:
 
 ```env
 VITE_API_BASE=http://localhost:8000
+VITE_API_PORT=8000
 ```
 
 Sau khi đổi `.env`, restart `npm run dev`.

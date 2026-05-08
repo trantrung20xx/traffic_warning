@@ -1541,6 +1541,110 @@ class LaneFeatureTests(unittest.TestCase):
         self.assertIsNotNone(resolved_vec)
         self.assertTrue(abs((resolved_vec[0] * explicit_vec[0]) + (resolved_vec[1] * explicit_vec[1])) > 0.98)
 
+    def test_turn_reference_prefers_lane_consensus_over_vehicle_vector(self) -> None:
+        lane_config = CameraLaneConfig.model_validate(
+            {
+                "camera_id": "cam_turn_runtime_prefer_lane_consensus",
+                "frame_width": 100,
+                "frame_height": 100,
+                "lanes": [
+                    {
+                        "lane_id": 1,
+                        "polygon": [[0.10, 0.10], [0.90, 0.10], [0.90, 0.98], [0.10, 0.98]],
+                        "allowed_maneuvers": ["straight"],
+                        "allowed_lane_changes": [1],
+                        "allowed_vehicle_types": ["car"],
+                        "direction_rule": {"enabled": True},
+                    }
+                ],
+            }
+        )
+        runtime_lane_config = denormalize_lane_config(lane_config)
+        logic = ViolationLogic(runtime_lane_config.lanes, turn_region_min_hits=2)
+        ts = datetime(2026, 5, 2, 11, 42, 0, tzinfo=timezone.utc)
+
+        for idx, raw_vec in enumerate(
+            (
+                (0.00, -1.00),
+                (0.12, -0.99),
+                (-0.10, -0.99),
+                (0.06, -0.998),
+            )
+        ):
+            normalized = logic._normalize_vector(raw_vec)
+            assert normalized is not None
+            logic._update_lane_fallback_reference_vector(
+                source_lane_id=1,
+                ts=ts + timedelta(milliseconds=idx * 120),
+                vector=normalized,
+            )
+
+        consensus_vec = logic._lane_fallback_reference_vector(
+            source_lane_id=1,
+            ts=ts + timedelta(milliseconds=1000),
+        )
+        self.assertIsNotNone(consensus_vec)
+        resolved_vec = logic._resolve_turn_reference_vector(
+            source_lane_id=1,
+            ts=ts + timedelta(milliseconds=1000),
+            trajectory_entry_vector=(1.0, 0.0),
+        )
+        self.assertIsNotNone(resolved_vec)
+        assert consensus_vec is not None and resolved_vec is not None
+        self.assertGreater((resolved_vec[0] * consensus_vec[0]) + (resolved_vec[1] * consensus_vec[1]), 0.92)
+        self.assertLess((resolved_vec[0] * 1.0) + (resolved_vec[1] * 0.0), 0.6)
+
+    def test_turn_reference_blends_trajectory_when_aligned_with_lane_consensus(self) -> None:
+        lane_config = CameraLaneConfig.model_validate(
+            {
+                "camera_id": "cam_turn_runtime_blend_lane_consensus",
+                "frame_width": 100,
+                "frame_height": 100,
+                "lanes": [
+                    {
+                        "lane_id": 1,
+                        "polygon": [[0.10, 0.10], [0.90, 0.10], [0.90, 0.98], [0.10, 0.98]],
+                        "allowed_maneuvers": ["straight"],
+                        "allowed_lane_changes": [1],
+                        "allowed_vehicle_types": ["car"],
+                        "direction_rule": {"enabled": True},
+                    }
+                ],
+            }
+        )
+        runtime_lane_config = denormalize_lane_config(lane_config)
+        logic = ViolationLogic(
+            runtime_lane_config.lanes,
+            turn_region_min_hits=2,
+            lane_fallback_reference_trajectory_blend_max_weight=0.5,
+            lane_fallback_reference_trajectory_blend_min_alignment_dot=0.0,
+        )
+        ts = datetime(2026, 5, 2, 11, 44, 0, tzinfo=timezone.utc)
+
+        for idx in range(4):
+            logic._update_lane_fallback_reference_vector(
+                source_lane_id=1,
+                ts=ts + timedelta(milliseconds=idx * 120),
+                vector=(0.0, -1.0),
+            )
+
+        consensus_vec = logic._lane_fallback_reference_vector(
+            source_lane_id=1,
+            ts=ts + timedelta(milliseconds=1000),
+        )
+        self.assertIsNotNone(consensus_vec)
+        trajectory_vec = logic._normalize_vector((0.6, -0.8))
+        assert trajectory_vec is not None
+        resolved_vec = logic._resolve_turn_reference_vector(
+            source_lane_id=1,
+            ts=ts + timedelta(milliseconds=1000),
+            trajectory_entry_vector=trajectory_vec,
+        )
+        self.assertIsNotNone(resolved_vec)
+        assert consensus_vec is not None and resolved_vec is not None
+        self.assertGreater(resolved_vec[0], 0.05)
+        self.assertGreater((resolved_vec[0] * consensus_vec[0]) + (resolved_vec[1] * consensus_vec[1]), 0.9)
+
     def test_direction_detection_handles_forward_reverse_and_cross_lane_orientations(self) -> None:
         lane_config = CameraLaneConfig.model_validate(
             {

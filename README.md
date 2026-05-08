@@ -96,10 +96,14 @@ npm run dev
 
 Frontend mặc định chạy tại `http://localhost:5173`.
 
-Nếu backend không chạy ở `http://localhost:8000`, tạo file `frontend/.env`:
+Mặc định frontend tự lấy host hiện tại và gọi backend ở port `8000`.
+Ví dụ mở UI ở `http://192.168.1.20:5173` thì frontend sẽ gọi `http://192.168.1.20:8000`.
+
+Nếu backend chạy host/port khác, tạo file `frontend/.env`:
 
 ```env
 VITE_API_BASE=http://localhost:8000
+VITE_API_PORT=8000
 ```
 
 ## Model AI `.pt`

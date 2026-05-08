@@ -83,7 +83,9 @@
 				"consensus_min": 0.78,
 				"inlier_dot_min": 0.6,
 				"inlier_ratio_min": 0.78,
-				"max_age_ms": 180000
+				"max_age_ms": 180000,
+				"trajectory_blend_max_weight": 0.35,
+				"trajectory_blend_min_alignment_dot": 0.35
 			}
 		}
 	},

@@ -178,7 +178,7 @@ function drawTrajectory(ctx, points, metrics = null) {
 	}
 
 	ctx.strokeStyle = "rgba(0, 255, 128, 0.92)";
-	ctx.lineWidth = metrics?.px(3) || 3;
+	ctx.lineWidth = metrics?.px(1.65) || 1.65;
 	ctx.lineCap = "round";
 	ctx.lineJoin = "round";
 	ctx.setLineDash([]);

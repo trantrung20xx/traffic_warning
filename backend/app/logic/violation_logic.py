@@ -192,6 +192,8 @@ class ViolationLogic:
         lane_fallback_reference_inlier_dot_min: float = 0.60,
         lane_fallback_reference_inlier_ratio_min: float = 0.78,
         lane_fallback_reference_max_age_ms: int = 180000,
+        lane_fallback_reference_trajectory_blend_max_weight: float = 0.35,
+        lane_fallback_reference_trajectory_blend_min_alignment_dot: float = 0.35,
         direction_detection_settings: Optional[DirectionDetectionSettings] = None,
     ):
         if not lane_polygons:
@@ -301,6 +303,14 @@ class ViolationLogic:
             1.0,
         )
         self._lane_fallback_reference_max_age_ms = max(int(lane_fallback_reference_max_age_ms), 1000)
+        self._lane_fallback_reference_trajectory_blend_max_weight = min(
+            max(float(lane_fallback_reference_trajectory_blend_max_weight), 0.0),
+            1.0,
+        )
+        self._lane_fallback_reference_trajectory_blend_min_alignment_dot = min(
+            max(float(lane_fallback_reference_trajectory_blend_min_alignment_dot), -1.0),
+            0.999,
+        )
         self._lane_known_maneuvers = self._build_lane_known_maneuvers(lane_polygons)
         self._lane_maneuver_anchor_points = self._build_lane_maneuver_anchor_points(lane_polygons)
         self._direction_logic = DirectionLogic(
@@ -1885,15 +1895,54 @@ class ViolationLogic:
         if explicit_direction_path_vec is not None:
             return explicit_direction_path_vec
 
-        if trajectory_entry_vector is not None:
-            return trajectory_entry_vector
         lane_model_vec = self._lane_fallback_reference_vector(
             source_lane_id=source_lane_id,
             ts=ts,
         )
         if lane_model_vec is not None:
-            return lane_model_vec
+            return self._blend_lane_consensus_with_trajectory(
+                lane_consensus_vec=lane_model_vec,
+                trajectory_entry_vector=trajectory_entry_vector,
+            )
+        if trajectory_entry_vector is not None:
+            return trajectory_entry_vector
         return None
+
+    def _blend_lane_consensus_with_trajectory(
+        self,
+        *,
+        lane_consensus_vec: tuple[float, float],
+        trajectory_entry_vector: Optional[tuple[float, float]],
+    ) -> tuple[float, float]:
+        if trajectory_entry_vector is None:
+            return lane_consensus_vec
+
+        blend_cap = self._lane_fallback_reference_trajectory_blend_max_weight
+        if blend_cap <= 0.0:
+            return lane_consensus_vec
+
+        alignment = (
+            (lane_consensus_vec[0] * trajectory_entry_vector[0])
+            + (lane_consensus_vec[1] * trajectory_entry_vector[1])
+        )
+        min_alignment = self._lane_fallback_reference_trajectory_blend_min_alignment_dot
+        if alignment < min_alignment:
+            return lane_consensus_vec
+
+        alignment_span = max(1.0 - min_alignment, 1e-6)
+        alignment_ratio = min(max((alignment - min_alignment) / alignment_span, 0.0), 1.0)
+        trajectory_weight = blend_cap * alignment_ratio
+        if trajectory_weight <= 1e-6:
+            return lane_consensus_vec
+
+        lane_weight = 1.0 - trajectory_weight
+        blended = self._normalize_vector(
+            (
+                (lane_consensus_vec[0] * lane_weight) + (trajectory_entry_vector[0] * trajectory_weight),
+                (lane_consensus_vec[1] * lane_weight) + (trajectory_entry_vector[1] * trajectory_weight),
+            )
+        )
+        return blended or lane_consensus_vec
 
     def _build_lane_known_maneuvers(
         self,

@@ -125,6 +125,8 @@ class CameraContext:
         lane_fallback_reference_inlier_dot_min: float = 0.60,
         lane_fallback_reference_inlier_ratio_min: float = 0.78,
         lane_fallback_reference_max_age_ms: int = 180000,
+        lane_fallback_reference_trajectory_blend_max_weight: float = 0.35,
+        lane_fallback_reference_trajectory_blend_min_alignment_dot: float = 0.35,
         direction_detection_settings: Optional[DirectionDetectionSettings] = None,
         state_prune_max_age_s: float = 60.0,
         rtsp_reconnect_delay_s: float = 2.0,
@@ -265,6 +267,10 @@ class CameraContext:
             lane_fallback_reference_inlier_dot_min=lane_fallback_reference_inlier_dot_min,
             lane_fallback_reference_inlier_ratio_min=lane_fallback_reference_inlier_ratio_min,
             lane_fallback_reference_max_age_ms=lane_fallback_reference_max_age_ms,
+            lane_fallback_reference_trajectory_blend_max_weight=lane_fallback_reference_trajectory_blend_max_weight,
+            lane_fallback_reference_trajectory_blend_min_alignment_dot=(
+                lane_fallback_reference_trajectory_blend_min_alignment_dot
+            ),
             direction_detection_settings=direction_detection_settings,
         )
 

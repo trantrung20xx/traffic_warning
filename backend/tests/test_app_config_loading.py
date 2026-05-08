@@ -72,6 +72,8 @@ def test_load_app_config_reads_grouped_settings_schema(tmp_path: Path) -> None:
                     "inlier_dot_min": 0.62,
                     "inlier_ratio_min": 0.82,
                     "max_age_ms": 150000,
+                    "trajectory_blend_max_weight": 0.4,
+                    "trajectory_blend_min_alignment_dot": 0.25,
                 },
             },
         },
@@ -160,6 +162,8 @@ def test_load_app_config_reads_grouped_settings_schema(tmp_path: Path) -> None:
     assert cfg.turn_detection_trajectory.fallback_reference.inlier_dot_min == 0.62
     assert cfg.turn_detection_trajectory.fallback_reference.inlier_ratio_min == 0.82
     assert cfg.turn_detection_trajectory.fallback_reference.max_age_ms == 150000
+    assert cfg.turn_detection_trajectory.fallback_reference.trajectory_blend_max_weight == 0.4
+    assert cfg.turn_detection_trajectory.fallback_reference.trajectory_blend_min_alignment_dot == 0.25
     assert cfg.direction_detection_defaults.same_direction_cos_threshold == 0.24
     assert cfg.direction_detection_defaults.opposite_direction_cos_threshold == -0.28
     assert cfg.direction_detection_defaults.min_duration_ms == 550

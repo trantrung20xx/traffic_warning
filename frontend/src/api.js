@@ -1,4 +1,27 @@
-const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
+const DEFAULT_API_PORT = Number.parseInt(import.meta.env.VITE_API_PORT || "8000", 10);
+
+function normalizeBaseUrl(value) {
+  return String(value || "").trim().replace(/\/+$/, "");
+}
+
+function resolveApiBase() {
+  const explicitBase = normalizeBaseUrl(import.meta.env.VITE_API_BASE);
+  if (explicitBase) {
+    return explicitBase;
+  }
+
+  if (typeof window !== "undefined") {
+    const { protocol, hostname } = window.location;
+    if ((protocol === "http:" || protocol === "https:") && hostname) {
+      const apiPort = Number.isFinite(DEFAULT_API_PORT) && DEFAULT_API_PORT > 0 ? DEFAULT_API_PORT : 8000;
+      return `${protocol}//${hostname}:${apiPort}`;
+    }
+  }
+
+  return "http://localhost:8000";
+}
+
+const API_BASE = resolveApiBase();
 
 function apiUrl(path) {
   return `${API_BASE}${path}`;

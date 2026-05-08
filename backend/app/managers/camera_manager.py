@@ -424,6 +424,12 @@ class CameraManager:
                 self.cfg.turn_detection_trajectory.fallback_reference.inlier_ratio_min
             ),
             lane_fallback_reference_max_age_ms=self.cfg.turn_detection_trajectory.fallback_reference.max_age_ms,
+            lane_fallback_reference_trajectory_blend_max_weight=(
+                self.cfg.turn_detection_trajectory.fallback_reference.trajectory_blend_max_weight
+            ),
+            lane_fallback_reference_trajectory_blend_min_alignment_dot=(
+                self.cfg.turn_detection_trajectory.fallback_reference.trajectory_blend_min_alignment_dot
+            ),
             direction_detection_settings=DirectionDetectionSettings.from_values(
                 **self.cfg.direction_detection_defaults.model_dump()
             ),
