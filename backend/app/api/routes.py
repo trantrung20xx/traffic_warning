@@ -26,6 +26,7 @@ def create_api_router(manager: CameraManager) -> APIRouter:
     allowed_upload_content_types = {"image/jpeg": ".jpg", "image/png": ".png"}
 
     def _get_upload_suffix(upload: UploadFile) -> str:
+        # Ưu tiên kiểm tra MIME; fallback sang đuôi file để tương thích client cũ.
         content_type = (upload.content_type or "").lower()
         if content_type in allowed_upload_content_types:
             return allowed_upload_content_types[content_type]
@@ -44,6 +45,7 @@ def create_api_router(manager: CameraManager) -> APIRouter:
         license_plate: Optional[str],
         limit: Optional[int],
     ):
+        # Tách helper để history API và export API dùng cùng một logic query.
         return manager.query_history(
             from_ts=from_ts,
             to_ts=to_ts,
@@ -79,6 +81,7 @@ def create_api_router(manager: CameraManager) -> APIRouter:
     @router.put("/api/cameras/{camera_id}")
     async def update_camera(camera_id: str, payload: dict):
         try:
+            # camera_id trên path luôn ghi đè payload để tránh lệch định danh.
             camera = CameraConfig.model_validate({**payload.get("camera", {}), "camera_id": camera_id})
             lane_payload = {**payload.get("lane_config", {}), "camera_id": camera_id}
             lane_config = CameraLaneConfig.model_validate(lane_payload)
@@ -160,6 +163,7 @@ def create_api_router(manager: CameraManager) -> APIRouter:
             boundary = b"--frame"
             preview_fps = max(float(manager.cfg.preview_max_fps), 0.1)
             while True:
+                # Chỉ stream JPEG đã encode sẵn từ context, không chạy lại inference tại endpoint.
                 jpg = manager.get_camera_preview_jpeg(camera_id)
                 if jpg:
                     yield boundary + b"\r\nContent-Type: image/jpeg\r\n\r\n" + jpg + b"\r\n"
@@ -219,6 +223,7 @@ def create_api_router(manager: CameraManager) -> APIRouter:
 
         export_rows = build_violation_export_rows(rows, base_url=str(request.base_url))
         try:
+            # Build file ở bộ nhớ tạm rồi stream về client.
             if format == "xlsx":
                 payload = build_violation_history_xlsx(export_rows)
                 filename = build_violation_export_filename(extension="xlsx", from_ts=from_ts, to_ts=to_ts)
@@ -233,6 +238,7 @@ def create_api_router(manager: CameraManager) -> APIRouter:
         return StreamingResponse(
             BytesIO(payload),
             media_type=media_type,
+            # Content-Disposition giúp trình duyệt tải file thay vì render inline.
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
 

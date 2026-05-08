@@ -12,6 +12,7 @@ from app.vision.inference_utils import resolve_inference_backend, resolve_infere
 
 @dataclass(frozen=True)
 class LicensePlateDetection:
+    # BBox biển số theo hệ tọa độ của vehicle crop.
     bbox_xyxy: list[float]
     confidence: float
 
@@ -32,6 +33,7 @@ class YoloV8LicensePlateDetector:
         allowed_classes: Optional[Iterable[str]] = None,
     ):
         self.model = self._load_model(weights_path)
+        # Giữ cả requested và resolved backend để truy vết cấu hình runtime.
         self.requested_backend = (inference_backend or "pytorch").strip().lower()
         self.inference_backend = resolve_inference_backend(self.requested_backend, weights_path)
         self.conf_threshold = float(conf_threshold)
@@ -49,6 +51,7 @@ class YoloV8LicensePlateDetector:
         self.class_names: dict[int, str] = dict(self.model.names)
         self.allowed_classes = self._normalize_allowed_classes(allowed_classes)
         self.allowed_class_set = {self._normalize_class_name(item) for item in self.allowed_classes}
+        # allowed_class_ids truyền trực tiếp vào YOLO để chỉ detect các lớp biển số mong muốn.
         self.allowed_class_ids = [
             cls_id
             for cls_id, name in self.class_names.items()
@@ -58,6 +61,7 @@ class YoloV8LicensePlateDetector:
     def detect(self, image_bgr: np.ndarray) -> list[LicensePlateDetection]:
         if image_bgr is None or image_bgr.size == 0:
             return []
+        # Nhánh single-image dùng cho fallback hoặc xử lý ngoài batch worker.
         results = self.model.predict(
             image_bgr,
             device=self.device,
@@ -74,6 +78,7 @@ class YoloV8LicensePlateDetector:
         if not images_bgr:
             return []
 
+        # outputs giữ nguyên thứ tự index đầu vào, kể cả khi một số ảnh rỗng.
         outputs: list[list[LicensePlateDetection]] = [[] for _ in images_bgr]
         valid_indices: list[int] = []
         valid_images: list[np.ndarray] = []
@@ -87,6 +92,7 @@ class YoloV8LicensePlateDetector:
             return outputs
 
         try:
+            # Batch predict để giảm overhead gọi model nhiều lần.
             results = self.model.predict(
                 valid_images,
                 device=self.device,
@@ -96,6 +102,7 @@ class YoloV8LicensePlateDetector:
                 verbose=False,
             )
         except Exception:
+            # Fallback tuần tự để không làm hỏng toàn bộ batch khi có một mẫu lỗi.
             for index in valid_indices:
                 outputs[index] = self.detect(images_bgr[index])
             return outputs
@@ -103,6 +110,7 @@ class YoloV8LicensePlateDetector:
         for idx, result in enumerate(results or []):
             if idx >= len(valid_indices):
                 break
+            # Map ngược kết quả batch về đúng vị trí của ảnh gốc.
             outputs[valid_indices[idx]] = self._detections_from_result(result)
         return outputs
 
@@ -134,6 +142,7 @@ class YoloV8LicensePlateDetector:
                     confidence=float(conf[idx]),
                 )
             )
+        # Ưu tiên bbox confidence cao nhất cho bước OCR kế tiếp.
         rows.sort(key=lambda row: row.confidence, reverse=True)
         return rows
 
@@ -155,6 +164,7 @@ class YoloV8LicensePlateDetector:
         return normalized
 
     def _normalize_class_name(self, value: object) -> str:
+        # Chuẩn hóa tên lớp để so khớp ổn định giữa các naming style khác nhau.
         return str(value).strip().lower().replace("_", "").replace("-", "").replace(" ", "")
 
     def _load_model(self, weights_path: str):

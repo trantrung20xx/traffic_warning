@@ -37,10 +37,12 @@ const MONITOR_OVERLAY = {
 };
 
 function clamp(value, min, max) {
+	// Kẹp toạ độ/giá trị trong khoảng hợp lệ.
 	return Math.min(Math.max(value, min), max);
 }
 
 function clampPoint([x, y], frameWidth, frameHeight) {
+	// Giữ điểm trong biên frame và làm tròn để thao tác kéo mượt hơn.
 	return [clamp(Math.round(x), 0, frameWidth), clamp(Math.round(y), 0, frameHeight)];
 }
 
@@ -49,11 +51,13 @@ function getCanvasDisplayScale(canvas, frameWidth, frameHeight) {
 	const rect = canvas.getBoundingClientRect();
 	const scaleX = rect.width / frameWidth;
 	const scaleY = rect.height / frameHeight;
+	// Chọn scale nhỏ hơn để khớp cơ chế object-fit contain của canvas stage.
 	const scale = Math.min(scaleX, scaleY);
 	return Number.isFinite(scale) && scale > 0 ? scale : 1;
 }
 
 function createDisplayMetrics(canvas, frameWidth, frameHeight) {
+	// Quy đổi kích thước style (CSS pixel) sang hệ toạ độ frame thật của canvas.
 	const displayScale = getCanvasDisplayScale(canvas, frameWidth, frameHeight);
 	return {
 		displayScale,
@@ -68,6 +72,7 @@ function createDisplayMetrics(canvas, frameWidth, frameHeight) {
 }
 
 function pointInPolygon(point, polygon) {
+	// Ray-casting để kiểm tra click nằm trong polygon khi kéo cả vùng.
 	if (!polygon || polygon.length < 3) return false;
 	let inside = false;
 	const [x, y] = point;
@@ -95,9 +100,11 @@ function projectPointToSegment(point, start, end) {
 	const lengthSquared = dx * dx + dy * dy;
 
 	if (lengthSquared === 0) {
+		// Segment suy biến thành 1 điểm.
 		return { point: start, distance: distanceBetween(point, start) };
 	}
 
+	// Chiếu vuông góc point lên đoạn, t bị clamp trong [0,1].
 	const t = clamp(((px - x1) * dx + (py - y1) * dy) / lengthSquared, 0, 1);
 	const projected = [x1 + dx * t, y1 + dy * t];
 	return { point: projected, distance: distanceBetween(point, projected) };
@@ -131,6 +138,7 @@ function findClosestEdge(points, point, options = {}) {
 			projection.distance <= hitDistance &&
 			(!best || projection.distance < best.distance)
 		) {
+			// Giữ cạnh gần nhất để hỗ trợ chèn vertex đúng vị trí người dùng.
 			best = { index, distance: projection.distance, point: projection.point };
 		}
 	}
@@ -166,6 +174,7 @@ function drawTrajectory(ctx, points, metrics = null) {
 	if (pathPoints.length === 2) {
 		ctx.lineTo(Number(pathPoints[1][0]), Number(pathPoints[1][1]));
 	} else {
+		// Làm mượt polyline bằng quadratic curve theo midpoint.
 		for (let idx = 1; idx < pathPoints.length - 1; idx += 1) {
 			const current = pathPoints[idx];
 			const next = pathPoints[idx + 1];
@@ -292,6 +301,7 @@ export default function CameraCanvas({
 
 	const replaceEditableGeometry = (points) => {
 		if (!onPolygonReplace) return;
+		// Mọi thao tác kéo/chèn đều ghi lại dưới dạng normalized để đồng bộ state cấu hình.
 		onPolygonReplace(
 			points.map((point) =>
 				normalizePoint(
@@ -309,6 +319,7 @@ export default function CameraCanvas({
 		const rect = canvas.getBoundingClientRect();
 		const scaleX = frameWidth / rect.width;
 		const scaleY = frameHeight / rect.height;
+		// Quy đổi điểm chuột (CSS pixel) về hệ tọa độ frame thật.
 		return [(clientX - rect.left) * scaleX, (clientY - rect.top) * scaleY];
 	};
 
@@ -365,6 +376,7 @@ export default function CameraCanvas({
 
 		ctx.clearRect(0, 0, frameWidth, frameHeight);
 		drawBackgroundImage(ctx, backgroundImage, frameWidth, frameHeight);
+		// monitoring overlay chỉ hiển thị thông tin runtime, hạn chế nét chỉnh sửa.
 		const isMonitoringOverlay = Boolean(overlay && !editable);
 		const displayMetrics = createDisplayMetrics(canvas, frameWidth, frameHeight);
 		const editableLineWidth = displayMetrics.px(EDITABLE_LINE_WIDTH);
@@ -637,6 +649,7 @@ export default function CameraCanvas({
 		}
 
 		trajectoryOverlays.forEach((row) => {
+			// Quỹ đạo được backend/frontend làm mượt trước khi vẽ.
 			drawTrajectory(ctx, row?.points || [], displayMetrics);
 		});
 
@@ -664,6 +677,7 @@ export default function CameraCanvas({
 				: `#${v.vehicle_id}`;
 			const label = `${trackingLabel} ${getVehicleTypeLabel(v.vehicle_type)}${v.lane_id != null ? ` làn ${v.lane_id}` : ""}`;
 			if (isMonitoringOverlay) {
+				// Label được clamp biên để không tràn khỏi khung hình.
 				const labelHeight = displayMetrics.px(MONITOR_OVERLAY.labelHeightPx);
 				const labelPaddingX = displayMetrics.px(MONITOR_OVERLAY.labelPaddingXPx);
 				const labelGap = displayMetrics.px(MONITOR_OVERLAY.labelGapPx);
@@ -799,6 +813,7 @@ export default function CameraCanvas({
 			hitDistance: edgeHitDistance,
 		});
 		if (edge && onPolygonReplace && (targetIsPolygon || targetIsPolyline)) {
+			// Click cạnh sẽ chèn thêm vertex mới ngay tại vị trí chiếu vuông góc.
 			const nextPoint = clampPoint(edge.point, frameWidth, frameHeight);
 			const nextPoints = [
 				...points.slice(0, edge.index + 1),
@@ -830,6 +845,7 @@ export default function CameraCanvas({
 			pointInPolygon(point, points) &&
 			onPolygonReplace
 		) {
+			// Kéo trong vùng polygon để di chuyển toàn bộ hình học.
 			dragStateRef.current = {
 				mode: "geometry",
 				startPoint: point,

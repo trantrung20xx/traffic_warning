@@ -110,6 +110,7 @@ class CameraManager:
         }
 
     def upsert_camera(self, camera_config: CameraConfig, lane_config: CameraLaneConfig) -> dict:
+        # Guard nghiệp vụ: danh sách monitored_lanes phải khớp tuyệt đối với lane_config.
         if camera_config.camera_id != lane_config.camera_id:
             raise ValueError("camera_id mismatch between camera_config and lane_config")
         lane_ids = [lane.lane_id for lane in lane_config.lanes]
@@ -301,6 +302,7 @@ class CameraManager:
 
     async def stop(self) -> None:
         self._stop_event.set()
+        # Đẩy sentinel trước để consumer thoát vòng lặp đọc queue nhanh.
         self._notify_listener_shutdown()
         await self._close_active_websockets()
         for context in list(self._contexts.values()):
@@ -338,6 +340,7 @@ class CameraManager:
         cam = next(item for item in self.cameras if item.camera_id == camera_id)
         lane_cfg = load_lane_config_for_camera(self.repo_root, cam.camera_id)
         lane_cfg_pixels = denormalize_lane_config(lane_cfg)
+        # Context nhận full runtime config đã map từ settings + lane config đã denormalize.
         return CameraContext(
             repo_root=self.repo_root,
             camera_config=cam,
@@ -478,6 +481,7 @@ class CameraManager:
         ctx = self._build_context(camera_id)
         self._contexts[camera_id] = ctx
         if self._running or not self._stop_event.is_set():
+            # Mỗi camera chạy một task riêng, cô lập lỗi/độ trễ giữa các camera.
             self._tasks[camera_id] = asyncio.create_task(ctx.run_forever(stop_event=self._stop_event))
 
     def _stop_context(self, camera_id: str) -> None:
@@ -529,6 +533,7 @@ class CameraManager:
 
     @staticmethod
     def _broadcast_to_listeners(*, listeners: set[asyncio.Queue[Any]], message: Any) -> None:
+        # Queue full thì loại listener để tránh lan truyền backpressure toàn hệ thống.
         dead: list[asyncio.Queue[Any]] = []
         for queue in list(listeners):
             try:

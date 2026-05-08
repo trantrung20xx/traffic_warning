@@ -17,13 +17,17 @@ DIRECTION_STATUS_NOT_CONFIGURED = "not_configured"
 
 @dataclass
 class DirectionEvaluation:
+    # Kết quả đánh giá hướng ở frame hiện tại.
     status: str
+    # Dot(cos) giữa vector trajectory và vector hướng tham chiếu.
     dot: Optional[float]
+    # Cờ đã đủ điều kiện emit vi phạm ngược chiều.
     should_emit_violation: bool
 
 
 @dataclass
 class DirectionState:
+    # candidate_* dùng như state machine chống báo sai ngược chiều trong vài frame nhiễu.
     candidate_lane_id: Optional[int] = None
     candidate_started_ts: Optional[datetime] = None
     last_status: str = DIRECTION_STATUS_NOT_CONFIGURED
@@ -33,6 +37,7 @@ class DirectionState:
 
 @dataclass
 class DirectionRule:
+    # Quy tắc hướng theo từng lane đã được tiền xử lý về hình học runtime.
     lane_id: int
     direction_path: list[tuple[float, float]]
     check_shape: PreparedPolygon
@@ -42,9 +47,13 @@ class DirectionRule:
 
 @dataclass(frozen=True)
 class SegmentObservation:
+    # Timestamp của mẫu segment (lấy theo điểm cuối).
     ts: datetime
+    # Vector đơn vị thể hiện hướng dịch chuyển của xe trên segment.
     vector: tuple[float, float]
+    # Trung điểm segment để nội suy vector lane gần nhất.
     midpoint: tuple[float, float]
+    # Độ dài dịch chuyển pixel trên segment, dùng làm trọng số.
     displacement_px: float
 
 
@@ -102,6 +111,7 @@ class DirectionDetectionSettings:
     ) -> "DirectionDetectionSettings":
         same_threshold = float(same_direction_cos_threshold)
         opposite_threshold = float(opposite_direction_cos_threshold)
+        # Ngưỡng opposite phải nhỏ hơn ngưỡng same để có vùng "unknown" ở giữa.
         if opposite_threshold >= same_threshold:
             raise ValueError("opposite_direction_cos_threshold must be smaller than same_direction_cos_threshold")
         return cls(
@@ -147,15 +157,18 @@ class DirectionLogic:
         self._rules_by_lane: dict[int, DirectionRule] = {}
 
         for lane in lane_polygons:
+            # Bỏ lane không bật rule hướng để giảm chi phí runtime không cần thiết.
             raw_rule = getattr(lane, "direction_rule", None)
             if raw_rule is None or not bool(raw_rule.enabled):
                 continue
 
             raw_direction_path = list(raw_rule.direction_path or [])
+            # Cần ít nhất 1 đoạn thẳng (2 điểm) mới tạo được vector hướng.
             if len(raw_direction_path) < 2:
                 continue
 
             direction_path = [self._point_tuple(point) for point in raw_direction_path]
+            # Nếu không có check_zone riêng thì fallback dùng polygon lane.
             check_zone_points = raw_rule.check_zone if raw_rule.check_zone else lane.polygon
             if not check_zone_points or len(check_zone_points) < 3:
                 continue
@@ -169,10 +182,12 @@ class DirectionLogic:
                 direction_path=direction_path,
                 check_shape=PreparedPolygon.from_points(check_zone_points),
                 excluded_shapes=excluded_shapes,
+                # lane_span phục vụ ngưỡng displacement tỉ lệ theo kích thước lane.
                 lane_span_px=self._lane_span_px(lane),
             )
 
         self._states: dict[int, DirectionState] = {}
+        # Consensus theo lane học dần từ trajectory đúng chiều để ổn định vector tham chiếu.
         self._lane_consensus_vectors: dict[int, deque[tuple[datetime, tuple[float, float]]]] = {
             lane_id: deque(maxlen=self._settings.lane_consensus_sample_window)
             for lane_id in self._rules_by_lane.keys()
@@ -194,35 +209,45 @@ class DirectionLogic:
         state.last_seen_ts = ts
 
         if lane_id is None:
+            # Chưa có lane ổn định thì chưa đủ ngữ cảnh để kết luận hướng.
             return self._unknown_result(state, reset_candidate=True)
 
         rule = self._rules_by_lane.get(lane_id)
         if rule is None:
+            # Lane không cấu hình direction_rule thì trả "not_configured" thay vì suy đoán.
             return self._not_configured_result(state)
 
+        # Chỉ lấy trajectory kể từ lúc vào lane hiện tại để tránh dính dữ liệu lane trước.
         lane_samples = self._lane_samples_since(trajectory_centers=trajectory_centers, lane_started_ts=lane_started_ts)
+        # Cắt giữ đoạn liên tục gần nhất, bỏ phần có gap lớn do mất track/frame.
         lane_samples = self._tail_contiguous_samples(lane_samples=lane_samples)
+        # Warmup sau khi đổi lane để tránh kết luận từ trajectory còn dính lane trước.
         if self._is_warmup_active(lane_started_ts=lane_started_ts, ts=ts):
             return self._unknown_result(state, reset_candidate=True)
         if len(lane_samples) < self._settings.warmup_min_samples:
             return self._unknown_result(state, reset_candidate=True)
 
+        # Giới hạn cửa sổ đánh giá để tăng tính realtime và giảm kéo dài lịch sử cũ.
         lane_samples = lane_samples[-self._settings.evaluation_window_samples:]
         if len(lane_samples) < self._settings.min_samples:
             return self._unknown_result(state, reset_candidate=True)
 
         current_point = lane_samples[-1][1]
+        # Điểm hiện tại phải nằm trong vùng evaluable thì mới xét hướng.
         if not self._is_point_evaluable(rule=rule, point=current_point):
             return self._unknown_result(state, reset_candidate=True)
 
         observations = self._segment_observations(rule=rule, lane_samples=lane_samples)
+        # min_samples điểm tương ứng tối thiểu min_samples-1 segment hợp lệ.
         if len(observations) < max(self._settings.min_samples - 1, 2):
             return self._unknown_result(state, reset_candidate=True)
 
         total_displacement = sum(obs.displacement_px for obs in observations)
+        # Nếu xe hầu như đứng yên thì vector hướng không đáng tin.
         if total_displacement < self._settings.min_displacement_px:
             return self._unknown_result(state, reset_candidate=True)
 
+        # Vector quỹ đạo tổng hợp theo trọng số displacement để segment dài ảnh hưởng mạnh hơn.
         trajectory_vector = self._weighted_mean_vector(
             vectors=[obs.vector for obs in observations],
             weights=[obs.displacement_px for obs in observations],
@@ -245,6 +270,7 @@ class DirectionLogic:
             lane_vector = self._direction_vector_for_point(rule=rule, point=obs.midpoint)
             if lane_vector is None:
                 continue
+            # Do cả hai vector đã normalize nên dot chính là cosine(angle).
             dot = (obs.vector[0] * lane_vector[0]) + (obs.vector[1] * lane_vector[1])
             dots.append(dot)
             dot_weights.append(obs.displacement_px)
@@ -271,12 +297,15 @@ class DirectionLogic:
             return self._unknown_result(state, reset_candidate=True)
 
         dot = self._weighted_average(values=dots, weights=dot_weights)
+        # Tỉ lệ hit giúp giảm phụ thuộc vào một vài segment ngoại lệ.
         same_ratio = same_hits / len(dots)
         opposite_ratio = opposite_hits / len(dots)
+        # Ngưỡng displacement opposite lấy max giữa ngưỡng tuyệt đối và ngưỡng theo kích thước lane.
         opposite_min_displacement_px = max(
             self._settings.opposite_min_displacement_px,
             rule.lane_span_px * self._settings.opposite_min_displacement_lane_ratio,
         )
+        # Tail consensus chỉ nhìn dải segment cuối để bắt xu hướng hiện tại.
         tail_same_consecutive, tail_same_dot = self._tail_consensus(
             dots=dots,
             weights=dot_weights,
@@ -289,6 +318,9 @@ class DirectionLogic:
         )
         tail_opposite_displacement_px = sum(dot_weights[-tail_opposite_consecutive:]) if tail_opposite_consecutive > 0 else 0.0
 
+        # Same consensus cho phép qua 2 đường:
+        # - trung bình toàn cửa sổ tốt
+        # - hoặc tail gần nhất thể hiện đúng chiều rõ ràng.
         is_same_consensus = (
             (
                 dot >= self._settings.same_direction_cos_threshold
@@ -301,6 +333,7 @@ class DirectionLogic:
                 and tail_same_dot >= self._settings.same_direction_cos_threshold
             )
         )
+        # Opposite consensus yêu cầu chặt hơn: tỉ lệ, streak, và đủ displacement thực.
         is_opposite_consensus = (
             tail_opposite_dot is not None
             and tail_opposite_dot <= self._settings.opposite_direction_cos_threshold
@@ -314,10 +347,13 @@ class DirectionLogic:
             self._reset_candidate(state)
             same_dot = dot
             if tail_same_dot is not None:
+                # Ưu tiên độ mạnh từ đoạn cuối nếu tốt hơn trung bình toàn cửa sổ.
                 same_dot = max(same_dot, tail_same_dot)
             return self._set_state_result(state, DIRECTION_STATUS_CORRECT, same_dot, should_emit_violation=False)
 
         if is_opposite_consensus:
+            # Trạng thái opposite phải đi qua candidate window (min_duration_ms)
+            # trước khi emit vi phạm.
             opposite_dot = dot
             if tail_opposite_dot is not None:
                 opposite_dot = min(opposite_dot, tail_opposite_dot)
@@ -326,6 +362,7 @@ class DirectionLogic:
                 state.candidate_started_ts = ts
                 return self._unknown_result(state, dot=opposite_dot, reset_candidate=False)
 
+            # Chỉ emit vi phạm khi candidate kéo dài đủ lâu.
             elapsed_ms = int((ts - state.candidate_started_ts).total_seconds() * 1000.0)
             if elapsed_ms >= self._settings.min_duration_ms:
                 return self._set_state_result(state, DIRECTION_STATUS_WRONG, opposite_dot, should_emit_violation=True)
@@ -340,6 +377,7 @@ class DirectionLogic:
         return (state.last_status, state.last_dot)
 
     def prune(self, *, current_ts: datetime, max_age_s: float) -> None:
+        # Dọn state xe đã mất dấu quá lâu để tránh phình bộ nhớ runtime.
         cutoff_ts = current_ts.timestamp() - float(max_age_s)
         stale_vehicle_ids = [
             vehicle_id
@@ -391,6 +429,7 @@ class DirectionLogic:
     ) -> list[tuple[datetime, tuple[float, float]]]:
         if lane_started_ts is None:
             return list(trajectory_centers)
+        # Lọc theo mốc đổi lane để chỉ giữ quỹ đạo cùng lane hiện tại.
         return [sample for sample in trajectory_centers if sample[0] >= lane_started_ts]
 
     @staticmethod
@@ -406,6 +445,7 @@ class DirectionLogic:
         ys = [float(point[1]) for point in points]
         span_x = max(xs) - min(xs)
         span_y = max(ys) - min(ys)
+        # Lấy cạnh ngắn hơn như "bề rộng lane" xấp xỉ để scale ngưỡng displacement.
         return max(min(span_x, span_y), 0.0)
 
     @staticmethod
@@ -413,6 +453,7 @@ class DirectionLogic:
         vx = float(vector[0])
         vy = float(vector[1])
         mag = hypot(vx, vy)
+        # Vector quá ngắn coi như không có hướng đáng tin.
         if mag <= 1e-6:
             return None
         return (vx / mag, vy / mag)
@@ -434,14 +475,17 @@ class DirectionLogic:
                 continue
 
             distance = self._distance_point_to_segment(point=point, start=start, end=end)
+            # Chọn segment direction_path gần điểm đang xét nhất để tránh lệch tham chiếu.
             if best_distance is None or distance < best_distance:
                 best_distance = distance
                 best_vector = direction
         return best_vector
 
     def _is_point_evaluable(self, *, rule: DirectionRule, point: tuple[float, float]) -> bool:
+        # Điểm phải nằm trong check_zone.
         if not rule.check_shape.contains_xy(point[0], point[1]):
             return False
+        # Và không nằm trong các vùng loại trừ (commit/turn/exit) để tránh bias từ maneuver.
         for shape in rule.excluded_shapes:
             if shape.contains_xy(point[0], point[1]):
                 return False
@@ -453,6 +497,7 @@ class DirectionLogic:
         rule: DirectionRule,
         lane_samples: Sequence[tuple[datetime, tuple[float, float]]],
     ) -> list[SegmentObservation]:
+        # Chỉ giữ segment "hợp lệ": đủ dịch chuyển, không gap thời gian quá lớn, nằm trong vùng eval.
         observations: list[SegmentObservation] = []
         if len(lane_samples) < 2:
             return observations
@@ -466,12 +511,14 @@ class DirectionLogic:
                 continue
 
             dt_ms = int((curr_ts - prev_ts).total_seconds() * 1000.0)
+            # Gap lớn thường do drop frame/reconnect, không nên ghép thành 1 segment.
             if dt_ms > self._settings.segment_max_gap_ms:
                 continue
 
             dx = curr_point[0] - prev_point[0]
             dy = curr_point[1] - prev_point[1]
             displacement_px = hypot(dx, dy)
+            # Segment dịch chuyển quá nhỏ dễ là nhiễu detector/tracker.
             if displacement_px < self._settings.segment_min_displacement_px:
                 continue
 
@@ -483,6 +530,7 @@ class DirectionLogic:
                 SegmentObservation(
                     ts=curr_ts,
                     vector=vector,
+                    # Midpoint được dùng để lấy hướng lane gần nhất theo không gian.
                     midpoint=((curr_point[0] + prev_point[0]) * 0.5, (curr_point[1] + prev_point[1]) * 0.5),
                     displacement_px=displacement_px,
                 )
@@ -507,6 +555,7 @@ class DirectionLogic:
         if consensus_vector is not None:
             alignment = (blended[0] * consensus_vector[0]) + (blended[1] * consensus_vector[1])
             if alignment >= self._settings.lane_consensus_alignment_min_dot:
+                # Blend hướng lane tĩnh với vector consensus động học trong lane.
                 blended_candidate = self._normalize_vector(
                     (
                         (blended[0] * (1.0 - self._settings.lane_consensus_blend_weight))
@@ -520,6 +569,7 @@ class DirectionLogic:
 
         alignment_to_trajectory = (blended[0] * trajectory_vector[0]) + (blended[1] * trajectory_vector[1])
         if alignment_to_trajectory >= self._settings.trajectory_blend_min_alignment_dot:
+            # Chỉ blend thêm trajectory khi đang cùng hướng tương đối để tránh kéo lệch mạnh.
             trajectory_blended = self._normalize_vector(
                 (
                     (blended[0] * (1.0 - self._settings.trajectory_blend_weight))
@@ -541,6 +591,8 @@ class DirectionLogic:
         rule: DirectionRule,
         point: tuple[float, float],
     ) -> None:
+        # Chỉ học consensus từ vector có alignment tốt với hướng lane,
+        # tránh self-reinforce từ mẫu ngược chiều.
         lane_vector = self._direction_vector_for_point(rule=rule, point=point)
         if lane_vector is None:
             return
@@ -567,6 +619,7 @@ class DirectionLogic:
         if len(samples) < self._settings.lane_consensus_min_samples:
             return None
         vectors = [vec for _, vec in samples]
+        # Trung bình thô để tìm trục hướng chính trước khi loại outlier.
         coarse = self._weighted_mean_vector(vectors=vectors, weights=[1.0] * len(vectors))
         if coarse is None:
             return None
@@ -575,6 +628,7 @@ class DirectionLogic:
             for vec in vectors
             if ((vec[0] * coarse[0]) + (vec[1] * coarse[1])) >= self._settings.lane_consensus_inlier_dot_min
         ]
+        # Cần đủ inlier để tránh consensus bị nhiễu bởi số mẫu quá ít.
         if len(inliers) < self._settings.lane_consensus_min_samples:
             return None
         return self._weighted_mean_vector(vectors=inliers, weights=[1.0] * len(inliers))
@@ -588,6 +642,7 @@ class DirectionLogic:
         while samples:
             oldest_ts, _ = samples[0]
             age_ms = int((ts - oldest_ts).total_seconds() * 1000.0)
+            # Cửa sổ tuổi mẫu lane-consensus tránh học từ dữ liệu quá cũ.
             if age_ms <= self._settings.lane_consensus_max_age_ms:
                 break
             samples.popleft()
@@ -596,6 +651,7 @@ class DirectionLogic:
         if lane_started_ts is None:
             return False
         elapsed_ms = int((ts - lane_started_ts).total_seconds() * 1000.0)
+        # Warmup giữ trạng thái unknown một đoạn ngắn ngay sau đổi lane.
         return elapsed_ms < self._settings.warmup_min_duration_ms
 
     def _tail_contiguous_samples(
@@ -611,6 +667,7 @@ class DirectionLogic:
             curr_ts = lane_samples[index][0]
             dt_ms = int((curr_ts - prev_ts).total_seconds() * 1000.0)
             if dt_ms > self._settings.segment_max_gap_ms:
+                # Cứ gặp gap lớn thì reset mốc đầu, giữ lại đoạn liên tục gần hiện tại nhất.
                 start_index = index
         return list(lane_samples[start_index:])
 
@@ -619,6 +676,7 @@ class DirectionLogic:
         *,
         lane: LanePolygon,
     ) -> tuple[PreparedPolygon, ...]:
+        # Tập vùng loại trừ để không đánh giá hướng trong khu vực xe đang quay/rẽ.
         polygons: list[list[Sequence[float]]] = []
         if lane.commit_gate and len(lane.commit_gate) >= 3:
             polygons.append(list(lane.commit_gate))
@@ -655,6 +713,7 @@ class DirectionLogic:
                 continue
             if not isinstance(raw_points, list) or len(raw_points) < 3:
                 continue
+            # Chỉ đưa vào exclude khi maneuver bật và có polygon hợp lệ.
             polygons.append(raw_points)
         return polygons
 
@@ -662,8 +721,10 @@ class DirectionLogic:
     def _weighted_average(*, values: Sequence[float], weights: Sequence[float]) -> float:
         if not values:
             return 0.0
+        # Chặn trọng số âm để tránh làm lệch ý nghĩa trung bình có trọng số.
         total_weight = sum(max(float(weight), 0.0) for weight in weights)
         if total_weight <= 1e-6:
+            # Fallback trung bình cộng khi toàn bộ trọng số gần 0.
             return sum(float(value) for value in values) / len(values)
         weighted_sum = sum(float(value) * max(float(weight), 0.0) for value, weight in zip(values, weights))
         return weighted_sum / total_weight
@@ -686,6 +747,7 @@ class DirectionLogic:
             total_weight += w
         if total_weight <= 1e-6:
             return None
+        # Chuẩn hóa lại để vector đầu ra luôn nằm trên vòng tròn đơn vị.
         return self._normalize_vector((sum_x / total_weight, sum_y / total_weight))
 
     @staticmethod
@@ -709,6 +771,7 @@ class DirectionLogic:
         if streak <= 0:
             return (0, None)
         if tail_weight <= 1e-6:
+            # Nếu tail không có trọng số hợp lệ thì fallback trung bình thường.
             return (streak, sum(float(dots[-streak + k]) for k in range(streak)) / streak)
         return (streak, tail_sum / tail_weight)
 
@@ -726,9 +789,11 @@ class DirectionLogic:
         dx = x2 - x1
         dy = y2 - y1
         length_sq = (dx * dx) + (dy * dy)
+        # Segment suy biến: khoảng cách tính về điểm đầu.
         if length_sq <= 1e-9:
             return hypot(px - x1, py - y1)
 
+        # Chiếu vuông góc điểm lên đoạn [start, end] bằng hệ số t trong [0,1].
         t = ((px - x1) * dx + (py - y1) * dy) / length_sq
         t = max(0.0, min(1.0, t))
         proj_x = x1 + (dx * t)

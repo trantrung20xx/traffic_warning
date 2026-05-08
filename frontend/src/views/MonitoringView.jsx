@@ -38,11 +38,13 @@ const DEFAULT_MONITORING_UI_CONFIG = {
 };
 
 function toFiniteNumber(value, fallback) {
+	// Chuẩn hóa input số từ API/UI, fallback khi NaN/Infinity.
 	const parsed = Number(value);
 	return Number.isFinite(parsed) ? parsed : fallback;
 }
 
 function normalizeMonitoringUiConfig(rawConfig) {
+	// Chuẩn hóa toàn bộ tham số UI từ backend để tránh state lỗi do config ngoài biên.
 	const fallback = DEFAULT_MONITORING_UI_CONFIG;
 	const rawTrajectory = rawConfig?.trajectory || {};
 	const rawViolation = rawConfig?.violation || {};
@@ -54,6 +56,7 @@ function normalizeMonitoringUiConfig(rawConfig) {
 			toFiniteNumber(rawTrajectory.min_limit, fallback.trajectory.min_limit),
 		),
 	);
+	// max_limit luôn >= min_limit để input số lượng quỹ đạo không mâu thuẫn.
 	const trajectoryMaxLimit = Math.max(
 		trajectoryMinLimit,
 		Math.round(
@@ -146,6 +149,7 @@ function normalizeMonitoringUiConfig(rawConfig) {
 
 function clampTrajectoryLimit(value, trajectoryConfig) {
 	const next = Math.round(toFiniteNumber(value, trajectoryConfig.default_limit));
+	// Kẹp limit theo biên cấu hình UI để tránh render quá tải.
 	return Math.min(
 		Math.max(next, trajectoryConfig.min_limit),
 		trajectoryConfig.max_limit,
@@ -153,6 +157,7 @@ function clampTrajectoryLimit(value, trajectoryConfig) {
 }
 
 function getVehicleTrajectoryPoint(vehicle) {
+	// Dùng điểm đáy trung tâm bbox làm đại diện vị trí xe khi vẽ quỹ đạo.
 	const bbox = vehicle?.bbox;
 	if (!bbox) return null;
 
@@ -206,6 +211,7 @@ export default function MonitoringView({
 			monitoringUiConfig.trajectory,
 		);
 		if (normalizedLimit !== trajectoryLimit) {
+			// Đồng bộ lại state khi người dùng nhập ngoài biên.
 			setTrajectoryLimit(normalizedLimit);
 			return;
 		}
@@ -286,10 +292,12 @@ export default function MonitoringView({
 			if (!lastPoint) {
 				points.push(point);
 			} else if (
+				// Bỏ nhiễu dao động nhỏ bằng ngưỡng dịch chuyển tối thiểu.
 				pointDistance(lastPoint, point) >= trajectoryUi.min_point_distance_px
 			) {
 				points.push(point);
 			} else {
+				// Nếu chưa vượt ngưỡng thì cập nhật điểm cuối để bám theo vị trí mới nhất.
 				points[points.length - 1] = point;
 			}
 
@@ -297,12 +305,14 @@ export default function MonitoringView({
 				...current,
 				vehicle_type: vehicle.vehicle_type,
 				lane_id: vehicle.lane_id,
+				// Giới hạn số điểm mỗi xe để giữ hiệu năng render canvas.
 				points: points.slice(-trajectoryUi.max_points_per_vehicle),
 				lastSeenMs: now,
 			});
 		});
 
 		nextMap.forEach((row, vehicleId) => {
+			// Loại track stale để quỹ đạo phản ánh scene hiện tại.
 			if (now - row.lastSeenMs > trajectoryUi.stale_ms) {
 				nextMap.delete(vehicleId);
 			}
@@ -315,6 +325,7 @@ export default function MonitoringView({
 				.filter((row) => row.points.length >= 1)
 				.sort((left, right) => right.lastSeenMs - left.lastSeenMs)
 				.slice(0, trajectoryLimitRef.current)
+				// lastSeenMs chỉ dùng cho sắp xếp nội bộ, không cần đẩy xuống canvas.
 				.map(({ lastSeenMs, ...row }) => row),
 		);
 	};
@@ -333,6 +344,7 @@ export default function MonitoringView({
 			setVehicles(
 				(message.vehicles || []).map((vehicle) => ({
 					...vehicle,
+					// isViolating chỉ là cờ hiển thị tạm theo highlight window.
 					isViolating:
 						(violatingVehicleIdsRef.current.get(vehicle.vehicle_id) || 0) >
 						now,
@@ -344,6 +356,7 @@ export default function MonitoringView({
 			);
 		});
 		const violationWs = connectViolations(selectedCameraId, (event) => {
+			// Đánh dấu "xe đang vi phạm" trong một khoảng thời gian highlight ngắn.
 			violatingVehicleIdsRef.current.set(
 				event.vehicle_id,
 				Date.now() + violationUi.highlight_duration_ms,
@@ -362,6 +375,7 @@ export default function MonitoringView({
 		const timer = window.setInterval(() => {
 			const lastUpdate = lastTrackUpdateRef.current;
 			if (lastUpdate && Date.now() - lastUpdate > processingFpsUi.stale_after_ms) {
+				// Nếu không còn track mới thì xem FPS là stale.
 				setProcessingFps(null);
 			}
 		}, processingFpsUi.poll_interval_ms);
@@ -381,6 +395,7 @@ export default function MonitoringView({
 			}
 			return {
 				...vehicle,
+				// seenOrder giúp giữ thứ tự ổn định giữa các lần render.
 				seenOrder: vehicleSeenOrderRef.current.get(vehicle.vehicle_id) ?? 0,
 			};
 		})

@@ -24,6 +24,7 @@ class YoloV8VehicleDetector:
         allowed_classes: Optional[Iterable[str]] = None,
     ):
         self.model = self._load_model_with_fallback(weights_path)
+        # Tách requested_* và resolved_* để log/debug khi backend thực chạy khác cấu hình ban đầu.
         self.requested_backend = (inference_backend or "pytorch").strip().lower()
         self.inference_backend = resolve_inference_backend(self.requested_backend, weights_path)
         self.conf_threshold = float(conf_threshold)
@@ -43,6 +44,7 @@ class YoloV8VehicleDetector:
 
         # Ánh xạ id lớp COCO sang tên lớp rồi lọc chỉ giữ các loại xe cần dùng.
         self.class_names: dict[int, str] = dict(self.model.names)
+        # vehicle_class_ids là danh sách id truyền trực tiếp vào YOLO để giảm false-positive ngoài phạm vi.
         self.vehicle_class_ids: list[int] = [
             cls_id
             for cls_id, name in self.class_names.items()
@@ -54,6 +56,8 @@ class YoloV8VehicleDetector:
         self,
         allowed_classes: Optional[Iterable[str]],
     ) -> list[str]:
+        # Chuẩn hóa danh sách class để loại trùng và chặn cấu hình rỗng.
+        # Khi None sẽ fallback bộ class mặc định của hệ thống.
         raw_items = self.DEFAULT_ALLOWED_CLASSES if allowed_classes is None else allowed_classes
         if isinstance(raw_items, str):
             raw_items = [raw_items]
@@ -68,6 +72,8 @@ class YoloV8VehicleDetector:
         return normalized
 
     def _load_model_with_fallback(self, weights_path: str):
+        # Thử load theo danh sách candidate để tăng khả năng khởi động
+        # khi file weight cấu hình bị thiếu hoặc sai tên.
         candidate_paths = self._build_weight_candidates(weights_path)
         errors: list[str] = []
 
@@ -75,6 +81,7 @@ class YoloV8VehicleDetector:
             try:
                 return YOLO(candidate)
             except Exception as exc:
+                # Lưu lỗi từng candidate để trả thông báo chẩn đoán đầy đủ khi fail toàn bộ.
                 errors.append(f"{candidate}: {exc}")
 
         joined_errors = "\n".join(errors)
@@ -88,10 +95,12 @@ class YoloV8VehicleDetector:
         candidates: list[Path] = [requested]
 
         if requested.suffix == ".pt":
+            # Chỉ thử fallback cho weight PyTorch cùng thư mục.
             sibling_names = ["yolov8x.pt", "yolov8l.pt", "yolov8m.pt", "yolov8s.pt", "yolov8n.pt"]
             for name in sibling_names:
                 candidate = requested.with_name(name)
                 if candidate not in candidates and candidate.exists():
+                    # Chỉ append candidate tồn tại để tránh noise do path ảo.
                     candidates.append(candidate)
 
         return [str(path) for path in candidates]

@@ -9,6 +9,7 @@ import cv2
 
 @dataclass(frozen=True)
 class OcrReadout:
+    # Kết quả OCR đã chuẩn hóa về [text, confidence].
     text: str
     confidence: float
 
@@ -20,10 +21,12 @@ def _to_confidence(value) -> Optional[float]:
         return None
     if confidence < 0.0:
         return None
+    # Chuẩn hóa confidence về [0,1] để downstream xử lý đồng nhất.
     return min(max(confidence, 0.0), 1.0)
 
 
 def _iter_paddle_readouts(payload):
+    # PaddleOCR trả payload khác nhau giữa version; duyệt đệ quy để gom mọi định dạng.
     stack = [payload]
     while stack:
         current = stack.pop()
@@ -42,6 +45,7 @@ def _iter_paddle_readouts(payload):
                     if confidence is not None:
                         text = str(text_conf[0]).strip()
                         if text:
+                            # Format phổ biến: [bbox, [text, conf], ...]
                             yield text, confidence
                     continue
             if len(current) >= 2 and isinstance(current[0], str):
@@ -49,8 +53,10 @@ def _iter_paddle_readouts(payload):
                 if confidence is not None:
                     text = str(current[0]).strip()
                     if text:
+                        # Format rút gọn: [text, conf]
                         yield text, confidence
                 continue
+            # Duyệt sâu theo stack để tương thích payload lồng nhau nhiều tầng.
             stack.extend(reversed(current))
             continue
 
@@ -73,6 +79,7 @@ def _extract_best_from_paddle_payload(payload) -> Optional[OcrReadout]:
     best_text: Optional[str] = None
     best_conf: float = -1.0
     for text, confidence in _iter_paddle_readouts(payload):
+        # Chọn kết quả confidence cao nhất làm đại diện cho frame hiện tại.
         if confidence > best_conf:
             best_text = text
             best_conf = confidence
@@ -84,19 +91,22 @@ def _extract_best_from_paddle_payload(payload) -> Optional[OcrReadout]:
 def _run_paddleocr_inference(engine, image_rgb):
     predict = getattr(engine, "predict", None)
     if callable(predict):
+        # PaddleOCR 3.x thường expose predict().
         return predict(image_rgb)
 
     ocr = getattr(engine, "ocr", None)
     if not callable(ocr):
         raise RuntimeError("PaddleOCR engine exposes neither predict() nor ocr().")
 
-    # PaddleOCR 2.x uses cls=False; PaddleOCR 3.x rejects that legacy keyword.
+    # PaddleOCR 2.x cần cls=False; PaddleOCR 3.x lại lỗi với tham số này.
+    # Cơ chế retry giúp tương thích cả hai.
     try:
         return ocr(image_rgb, cls=False)
     except TypeError as exc:
         message = str(exc)
         if "cls" not in message or "unexpected keyword" not in message:
             raise
+        # PaddleOCR version mới bỏ tham số cls, retry không kèm cls.
         return ocr(image_rgb)
 
 
@@ -108,6 +118,7 @@ def _create_paddle_ocr_engine(
     lang: str,
     use_gpu: bool,
 ):
+    # Tắt model source check để tránh lỗi môi trường khi khởi tạo engine.
     os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
     from paddleocr import PaddleOCR
 
@@ -125,6 +136,7 @@ def _create_paddle_ocr_engine(
     if rec_model:
         kwargs["text_recognition_model_name"] = rec_model
     if not det_model and not rec_model:
+        # Khi không chỉ định model cụ thể thì dùng profile theo lang + phiên bản OCR.
         kwargs["lang"] = str(lang or "en").strip().lower()
         kwargs["ocr_version"] = str(ocr_version or "PP-OCRv5").strip()
     return PaddleOCR(**kwargs)
@@ -160,6 +172,7 @@ class LicensePlateOcr:
         self._paddle_lang = str(paddle_lang or "en").strip().lower()
         self._paddle_use_gpu = bool(paddle_use_gpu)
         self._engine = None
+        # available phản ánh backend đã init thành công và sẵn sàng nhận ảnh.
         self.available = False
         self._init_backend()
 
@@ -172,10 +185,12 @@ class LicensePlateOcr:
             return
 
     def _easyocr_languages(self) -> list[str]:
+        # Cho phép nhập nhiều lang bằng dấu phẩy/chấm phẩy/khoảng trắng.
         raw = self._easyocr_lang.replace(";", ",").replace(" ", ",")
         items = [item.strip() for item in raw.split(",") if item.strip()]
         if not items:
             return ["en"]
+        # Dùng dict.fromkeys để giữ thứ tự và loại trùng.
         return list(dict.fromkeys(items))
 
     def _init_easyocr(self) -> None:
@@ -212,11 +227,13 @@ class LicensePlateOcr:
         if image_bgr is None or getattr(image_bgr, "size", 0) == 0:
             return None
         try:
+            # Chuẩn hóa input sang RGB vì đa số OCR backend kỳ vọng RGB.
             image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
         except Exception:
             return None
 
         try:
+            # Cùng một interface read_best, backend OCR nào cũng trả OcrReadout.
             if self.backend == "easyocr":
                 return self._read_easyocr(image_rgb)
             if self.backend == "paddleocr":
@@ -239,6 +256,7 @@ class LicensePlateOcr:
             confidence = _to_confidence(item[2])
             if not text or confidence is None:
                 continue
+            # Lấy candidate có confidence cao nhất.
             if confidence > best_conf:
                 best_text = text
                 best_conf = confidence

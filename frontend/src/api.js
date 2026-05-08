@@ -1,10 +1,12 @@
 const DEFAULT_API_PORT = Number.parseInt(import.meta.env.VITE_API_PORT || "8000", 10);
 
 function normalizeBaseUrl(value) {
+  // Loại dấu "/" cuối để tránh tạo URL dạng "//api//path".
   return String(value || "").trim().replace(/\/+$/, "");
 }
 
 function resolveApiBase() {
+  // Ưu tiên biến môi trường; nếu không có thì suy ra cùng host với frontend.
   const explicitBase = normalizeBaseUrl(import.meta.env.VITE_API_BASE);
   if (explicitBase) {
     return explicitBase;
@@ -29,6 +31,7 @@ function apiUrl(path) {
 
 function wsUrl(path) {
   const base = new URL(API_BASE);
+  // Đồng bộ scheme ws/wss theo http/https của API base.
   const protocol = base.protocol === "https:" ? "wss:" : "ws:";
   return `${protocol}//${base.host}${path}`;
 }
@@ -37,6 +40,7 @@ function withQuery(path, params) {
   const search = new URLSearchParams();
   Object.entries(params || {}).forEach(([key, value]) => {
     if (value !== undefined && value !== null && value !== "") {
+      // Chỉ đưa tham số có giá trị thực để URL gọn và backend dễ parse.
       search.set(key, value);
     }
   });
@@ -46,6 +50,7 @@ function withQuery(path, params) {
 
 async function request(path, options) {
   const isFormData = options?.body instanceof FormData;
+  // FormData để trình duyệt tự set boundary multipart.
   const response = await fetch(apiUrl(path), {
     headers: isFormData
       ? options?.headers || {}
@@ -204,15 +209,19 @@ export function getViolationEvidenceUrl(imageUrlOrPath) {
   if (!imageUrlOrPath) return null;
   const value = String(imageUrlOrPath);
   if (/^https?:\/\//i.test(value)) {
+    // URL tuyệt đối từ backend/storage ngoài thì dùng trực tiếp.
     return value;
   }
   if (value.startsWith("/")) {
+    // Path tuyệt đối nội bộ API thì gắn base URL.
     return apiUrl(value);
   }
+  // Path tương đối evidence lưu trong DB.
   return apiUrl(`/api/violations/evidence/${encodeURIComponent(value).replaceAll("%2F", "/")}`);
 }
 
 export function connectTracks(cameraId, onMessage) {
+  // Luồng track đẩy liên tục: payload nguyên bản từ backend TrackMessage.
   const socket = new WebSocket(`${wsUrl("/ws/tracks")}?camera_id=${encodeURIComponent(cameraId)}`);
   socket.onmessage = (event) => {
     const message = JSON.parse(event.data);
@@ -224,6 +233,7 @@ export function connectTracks(cameraId, onMessage) {
 }
 
 export function connectViolations(cameraId, onMessage) {
+  // Luồng violation mang envelope {type, event} để hỗ trợ mở rộng message type.
   const path = cameraId ? `/ws/violations?camera_id=${encodeURIComponent(cameraId)}` : "/ws/violations";
   const socket = new WebSocket(wsUrl(path));
   socket.onmessage = (event) => {

@@ -39,6 +39,7 @@ from app.vision.license_plate_ocr import LicensePlateOcr
 
 @dataclass(slots=True)
 class _LicensePlateJob:
+    # Job OCR tách riêng khỏi vòng lặp chính để giảm blocking theo từng frame.
     camera_id: str
     track_session_id: str
     vehicle_id: int
@@ -286,10 +287,13 @@ class CameraContext:
         )
 
         self.stats = StatisticsEngine()
+        # Session id phân biệt các vòng đời context khác nhau của cùng camera_id.
         self.track_session_id = f"{self.camera_id}-{uuid4().hex[:12]}"
 
+        # Cụm state OCR biển số theo từng camera.
         self._license_plate_enabled = bool(license_plate_enabled)
         self._license_plate_last_read_ms: dict[int, int] = {}
+        # Áp ngưỡng tối thiểu 100ms để tránh cấu hình quá nhỏ gây quá tải OCR.
         self._license_plate_read_interval_ms = max(int(license_plate_read_interval_ms), 100)
         self._license_plate_crop_expand_x_ratio = float(license_plate_crop_expand_x_ratio)
         self._license_plate_crop_expand_y_ratio = float(license_plate_crop_expand_y_ratio)
@@ -299,6 +303,7 @@ class CameraContext:
         self._license_plate_resolver: Optional[LicensePlateTemporalResolver] = None
 
         if self._license_plate_enabled:
+            # Resolver giữ state OCR theo vehicle_id để vote nhiều lần đọc thành 1 kết quả ổn định.
             self._license_plate_resolver = LicensePlateTemporalResolver(
                 candidate_window_ms=license_plate_candidate_window_ms,
                 min_ocr_confidence=license_plate_min_ocr_confidence,
@@ -315,6 +320,8 @@ class CameraContext:
                     allowed_classes=license_plate_detector_allowed_classes,
                 )
             except Exception:
+                # Detector/OCR biển số lỗi khởi tạo thì degrade an toàn: tắt nhánh biển số,
+                # pipeline vi phạm chính vẫn chạy.
                 self._license_plate_enabled = False
                 self._license_plate_detector = None
                 self._license_plate_ocr = None
@@ -331,6 +338,7 @@ class CameraContext:
                     paddle_use_gpu=license_plate_paddle_use_gpu,
                 )
                 if self._license_plate_ocr is None or not self._license_plate_ocr.available:
+                    # OCR backend không khả dụng thì tắt hẳn nhánh biển số để tránh gọi null engine.
                     self._license_plate_enabled = False
                     self._license_plate_detector = None
                     self._license_plate_ocr = None
@@ -342,9 +350,11 @@ class CameraContext:
         self._last_track_push_ts_ms: int = 0
         self._track_push_interval_ms: int = int(track_push_interval_ms)
         self._state_prune_max_age_s: float = float(state_prune_max_age_s)
+        # Hàng đợi timestamp frame đã xử lý dùng cho công thức FPS cửa sổ trượt.
         self._processed_frame_times_s: deque[float] = deque()
         self._processing_fps: Optional[float] = None
         self._processing_fps_window_s: float = float(processing_fps_window_s)
+        # Chu kỳ prune tối thiểu 100ms để cân bằng hiệu năng và độ tươi state.
         self._prune_interval_ms: int = max(int(processing_prune_interval_ms), 100)
         self._last_prune_at_ms: int = 0
 
@@ -357,6 +367,7 @@ class CameraContext:
         self._preview_pending_event = threading.Event()
         self._preview_stop_event = threading.Event()
         self._preview_jpeg_quality: int = int(preview_jpeg_quality)
+        # Khoảng thời gian tối thiểu giữa hai lần encode preview.
         safe_preview_fps = max(float(preview_max_fps), 0.1)
         self._preview_min_interval_ms: int = max(int(round(1000.0 / safe_preview_fps)), 1)
         self._preview_worker = threading.Thread(
@@ -368,9 +379,12 @@ class CameraContext:
 
         self._license_plate_resolver_lock = threading.Lock()
         self._license_plate_worker_stop_event = threading.Event()
+        # Batch size >= 1 để worker luôn có thể tiến khi có job.
         self._license_plate_worker_batch_size = max(int(license_plate_worker_batch_size), 1)
+        # Giới hạn queue OCR để tránh dồn RAM khi luồng xe quá dày.
         self._license_plate_worker_max_pending_jobs = max(int(license_plate_worker_max_pending_jobs), 1)
         self._license_plate_jobs_cond = threading.Condition()
+        # Pending queue theo vehicle_id: mỗi xe chỉ giữ job mới nhất để tránh backlog cũ.
         self._license_plate_pending_jobs: OrderedDict[int, _LicensePlateJob] = OrderedDict()
         self._license_plate_worker: Optional[threading.Thread] = None
         if self._license_plate_enabled:
@@ -381,6 +395,7 @@ class CameraContext:
             )
             self._license_plate_worker.start()
 
+        # Cấu hình crop evidence tổng quan (khác với crop OCR biển số).
         self._evidence_crop_expand_x_ratio: float = float(evidence_crop_expand_x_ratio)
         self._evidence_crop_expand_y_top_ratio: float = float(evidence_crop_expand_y_top_ratio)
         self._evidence_crop_expand_y_bottom_ratio: float = float(evidence_crop_expand_y_bottom_ratio)
@@ -397,6 +412,7 @@ class CameraContext:
         """
         lanes = []
         for lp in self.lane_config.lanes:
+            # Dữ liệu trả về giữ nguyên cấu trúc đã denormalize để UI không phải suy luận thêm.
             lanes.append(
                 {
                     "lane_id": lp.lane_id,
@@ -427,6 +443,7 @@ class CameraContext:
         lane_id: Optional[int] = None,
         vehicle_type: Optional[str] = None,
     ) -> dict[str, Any]:
+        # API polling trajectory chỉ đọc snapshot hiện tại từ violation_logic.
         trajectories = self.violation_logic.get_recent_trajectories(
             limit=limit,
             lane_id=lane_id,
@@ -442,6 +459,7 @@ class CameraContext:
 
     def get_latest_preview_jpeg(self) -> Optional[bytes]:
         with self._preview_lock:
+            # Trả bytes JPEG mới nhất hoặc None nếu chưa có frame nào được encode.
             return self._latest_preview_jpeg
 
     def request_shutdown(self) -> None:
@@ -453,6 +471,7 @@ class CameraContext:
             pass
 
     def _stop_background_workers(self) -> None:
+        # Dừng mềm worker nền để shutdown không treo event loop.
         self._preview_stop_event.set()
         self._preview_pending_event.set()
         with self._license_plate_jobs_cond:
@@ -461,6 +480,7 @@ class CameraContext:
 
         preview_worker = getattr(self, "_preview_worker", None)
         if preview_worker is not None and preview_worker.is_alive():
+            # Join có timeout để tránh deadlock khi shutdown.
             preview_worker.join(timeout=0.5)
 
         license_plate_worker = self._license_plate_worker
@@ -468,18 +488,22 @@ class CameraContext:
             license_plate_worker.join(timeout=1.0)
 
     def _submit_preview_frame(self, frame_bgr) -> None:
+        # Chỉ giữ frame mới nhất; preview không cần xử lý mọi frame như pipeline AI.
         with self._preview_pending_lock:
             self._preview_pending_frame_bgr = frame_bgr
         self._preview_pending_event.set()
 
     def _preview_worker_loop(self) -> None:
         while not self._preview_stop_event.is_set():
+            # Chờ tín hiệu có frame mới; timeout ngắn để kiểm tra cờ dừng định kỳ.
             if not self._preview_pending_event.wait(timeout=0.25):
                 continue
+            # Clear event trước khi lấy frame để tránh xử lý lặp cùng một tín hiệu.
             self._preview_pending_event.clear()
             if self._preview_stop_event.is_set():
                 break
             with self._preview_pending_lock:
+                # Lấy frame mới nhất và xóa pending để các frame cũ tự bị bỏ.
                 frame_bgr = self._preview_pending_frame_bgr
                 self._preview_pending_frame_bgr = None
             if frame_bgr is None:
@@ -499,8 +523,10 @@ class CameraContext:
         vehicle_crop_bgr,
     ) -> None:
         job = _LicensePlateJob(
+            # camera_id/track_session_id đi kèm job để chặn job "mồ côi" sau khi reload camera.
             camera_id=self.camera_id,
             track_session_id=self.track_session_id,
+            # Ép kiểu ngay khi enqueue để worker luôn nhận dữ liệu sạch.
             vehicle_id=int(vehicle_id),
             ts_dt=ts_dt,
             frame_timestamp_utc_ms=int(frame_timestamp_utc_ms),
@@ -510,10 +536,12 @@ class CameraContext:
         with self._license_plate_jobs_cond:
             existing = self._license_plate_pending_jobs.get(job.vehicle_id)
             if existing is not None:
+                # Cùng 1 vehicle_id thì ghi đè để OCR luôn chạy trên crop mới nhất.
                 self._license_plate_pending_jobs[job.vehicle_id] = job
                 self._license_plate_pending_jobs.move_to_end(job.vehicle_id, last=True)
             else:
                 if len(self._license_plate_pending_jobs) >= self._license_plate_worker_max_pending_jobs:
+                    # Quá tải thì bỏ job cũ nhất toàn cục để bảo vệ độ trễ realtime.
                     self._license_plate_pending_jobs.popitem(last=False)
                 self._license_plate_pending_jobs[job.vehicle_id] = job
             self._license_plate_jobs_cond.notify()
@@ -527,6 +555,7 @@ class CameraContext:
                 return []
 
             jobs: list[_LicensePlateJob] = []
+            # Lấy batch FIFO để cân bằng giữa thông lượng và độ trễ.
             while self._license_plate_pending_jobs and len(jobs) < self._license_plate_worker_batch_size:
                 _, job = self._license_plate_pending_jobs.popitem(last=False)
                 jobs.append(job)
@@ -544,6 +573,8 @@ class CameraContext:
         if resolver is None:
             return
         with self._license_plate_resolver_lock:
+            # Mỗi lần thử đọc đều được ghi nhận để state OCR có thể chuyển
+            # pending -> confirmed/uncertain/unreadable theo thời gian.
             resolver.observe_attempt(
                 vehicle_id=vehicle_id,
                 ts=ts_dt,
@@ -552,17 +583,20 @@ class CameraContext:
             )
 
     def _extract_plate_crop_from_vehicle_crop(self, vehicle_crop_bgr, bbox_xyxy: list[float]):
+        # BBox biển số từ detector là float nên cần làm tròn + clamp biên crop.
         x1, y1, x2, y2 = [float(value) for value in bbox_xyxy]
         h, w = vehicle_crop_bgr.shape[:2]
         crop_x1 = max(int(round(x1)), 0)
         crop_y1 = max(int(round(y1)), 0)
         crop_x2 = min(int(round(x2)), w)
         crop_y2 = min(int(round(y2)), h)
+        # Crop rỗng hoặc âm kích thước thì bỏ ngay.
         if crop_x2 <= crop_x1 or crop_y2 <= crop_y1:
             return None
         plate_crop = vehicle_crop_bgr[crop_y1:crop_y2, crop_x1:crop_x2]
         if plate_crop is None or plate_crop.size == 0:
             return None
+        # Cưỡng ngưỡng kích thước tối thiểu để tránh OCR trên patch quá nhỏ gây nhiễu.
         if plate_crop.shape[0] < 8 or plate_crop.shape[1] < 20:
             return None
         return plate_crop.copy()
@@ -572,6 +606,8 @@ class CameraContext:
         detector = self._license_plate_detector
         ocr = self._license_plate_ocr
         if resolver is None or detector is None or ocr is None:
+            # Hạ cấp an toàn: vẫn ghi nhận "đã thử nhưng không đọc được"
+            # để resolver tiến trạng thái thay vì đứng im vô hạn.
             for job in jobs:
                 self._observe_license_plate_attempt(
                     vehicle_id=job.vehicle_id,
@@ -581,14 +617,17 @@ class CameraContext:
                 )
             return
 
+        # Bỏ job từ session cũ sau khi camera reload để tránh trộn state giữa hai vòng đời pipeline.
         valid_jobs = [job for job in jobs if job.track_session_id == self.track_session_id]
         if not valid_jobs:
             return
 
+        # Chạy detector biển số theo batch trước, sau đó OCR từng crop plate tốt nhất.
         detection_batches = detector.detect_batch([job.vehicle_crop_bgr for job in valid_jobs])
 
         for index, job in enumerate(valid_jobs):
             detections = detection_batches[index] if index < len(detection_batches) else []
+            # Detector đã sort theo confidence giảm dần, lấy bbox đầu tiên làm đại diện.
             best_detection = detections[0] if detections else None
             if best_detection is None:
                 self._observe_license_plate_attempt(
@@ -613,6 +652,7 @@ class CameraContext:
                 continue
 
             readout = ocr.read_best(plate_crop)
+            # readout có thể None nếu OCR fail; resolver sẽ tự xử lý theo luật temporal voting.
             self._observe_license_plate_attempt(
                 vehicle_id=job.vehicle_id,
                 ts_dt=job.ts_dt,
@@ -633,6 +673,7 @@ class CameraContext:
     def _maybe_update_preview(self, frame_bgr) -> None:
         """Mã hóa JPEG theo nhịp giới hạn để giao diện web xem được ảnh camera trực tiếp."""
         now = int(time.time() * 1000)
+        # Gate theo khoảng thời gian để giữ tốc độ encode ổn định.
         if now - self._last_preview_encode_ms < self._preview_min_interval_ms:
             return
         self._last_preview_encode_ms = now
@@ -645,6 +686,7 @@ class CameraContext:
             return
         data = buf.tobytes()
         with self._preview_lock:
+            # Luôn ghi đè ảnh preview cũ bằng ảnh mới nhất.
             self._latest_preview_jpeg = data
 
     async def run_forever(self, *, stop_event: asyncio.Event) -> None:
@@ -653,12 +695,15 @@ class CameraContext:
             while not stop_event.is_set():
                 frame = self.rtsp_reader.read(only_new=True)
                 if frame is None:
+                    # Không có frame mới: sleep ngắn để tránh vòng lặp busy-wait.
                     await asyncio.sleep(0.01)
                     continue
 
                 self._submit_preview_frame(frame.bgr)
 
+                # ts_dt là timestamp chuẩn UTC dùng đồng nhất cho DB, WebSocket và state prune.
                 ts_dt = datetime.fromtimestamp(frame.timestamp_utc_ms / 1000.0, tz=timezone.utc)
+                # Các bước nặng CPU/GPU chạy qua thread để không block event loop FastAPI.
                 tracks = await asyncio.to_thread(self.tracker.track, frame.bgr)
                 tracks = await asyncio.to_thread(self.stable_track_id_assigner.assign, raw_tracks=tracks, ts=ts_dt)
                 plate_snapshots = self._prepare_license_plate_snapshots_and_enqueue(
@@ -672,6 +717,7 @@ class CameraContext:
                 violation_candidates: list[tuple[int, str, dict, list[float]]] = []
 
                 for tr in tracks:
+                    # 1) Làm mượt vehicle_type theo thời gian để giảm nhảy nhãn detector.
                     vehicle_type = self.temporal_vehicle_type_assigner.resolve_type(
                         vehicle_id=tr.vehicle_id,
                         predicted_type=tr.vehicle_type,
@@ -681,9 +727,11 @@ class CameraContext:
                     current_stable_lane_id = self.temporal_lane_assigner.get_stable_lane(vehicle_id=tr.vehicle_id)
                     lane_observation = self.lane_logic.observe_lane_from_bbox_xyxy(
                         tr.bbox_xyxy,
+                        # Ưu tiên lane ổn định hiện tại để giảm lane drift khi vùng chồng lấn.
                         preferred_lane_id=current_stable_lane_id,
                     )
                     raw_lane_id = lane_observation.raw_lane_id
+                    # 2) Làm mượt lane_id bằng cơ chế majority + hysteresis.
                     lane_id = self.temporal_lane_assigner.resolve_lane(
                         vehicle_id=tr.vehicle_id,
                         ts=ts_dt,
@@ -717,9 +765,11 @@ class CameraContext:
                     vehicles[-1].direction_status = direction_status
                     vehicles[-1].direction_dot = direction_dot
                     for c in candidates:
+                        # Gom candidate trước, xử lý lưu evidence/DB theo batch phía sau.
                         violation_candidates.append((tr.vehicle_id, vehicle_type, c, list(tr.bbox_xyxy)))
 
                 if frame.timestamp_utc_ms - self._last_track_push_ts_ms >= self._track_push_interval_ms:
+                    # Chỉ push theo nhịp cấu hình để websocket không bị flood.
                     self._last_track_push_ts_ms = frame.timestamp_utc_ms
                     track_msg = TrackMessage(
                         camera_id=self.camera_id,
@@ -730,6 +780,7 @@ class CameraContext:
                     self.on_track(track_msg)
 
                 if violation_candidates:
+                    # Tách bước xử lý vi phạm ra sau vòng lặp track để giữ cấu trúc pipeline rõ ràng.
                     await self._handle_violations(
                         violation_candidates,
                         ts_dt,
@@ -741,6 +792,7 @@ class CameraContext:
                     self._last_prune_at_ms <= 0
                     or (frame.timestamp_utc_ms - self._last_prune_at_ms) >= self._prune_interval_ms
                 ):
+                    # Dọn state định kỳ để tránh phình bộ nhớ khi xe rời scene.
                     await asyncio.to_thread(
                         self.violation_logic.prune,
                         current_ts=ts_dt,
@@ -766,9 +818,11 @@ class CameraContext:
                             self._prune_license_plate_state,
                             ts_dt,
                         )
+                    # Lưu mốc prune gần nhất theo timestamp frame để tính chu kỳ lần sau.
                     self._last_prune_at_ms = int(frame.timestamp_utc_ms)
                 self._mark_processed_frame()
         finally:
+            # Khối finally đảm bảo worker/stream luôn được dừng dù có exception giữa vòng lặp.
             self._stop_background_workers()
             await asyncio.to_thread(self.rtsp_reader.close)
 
@@ -776,6 +830,7 @@ class CameraContext:
         if self._license_plate_resolver is None:
             return None
         with self._license_plate_resolver_lock:
+            # Đọc snapshot dưới lock để đồng bộ với worker OCR.
             return self._license_plate_resolver.snapshot_for(vehicle_id=vehicle_id)
 
     def _prepare_license_plate_snapshots_and_enqueue(
@@ -786,6 +841,8 @@ class CameraContext:
         ts_dt: datetime,
         frame_timestamp_utc_ms: int,
     ) -> dict[int, LicensePlateSnapshot]:
+        # Trả snapshot OCR hiện có ngay trong frame hiện tại, đồng thời enqueue job mới
+        # để snapshot các frame sau dần hội tụ về kết quả ổn định.
         resolver = self._license_plate_resolver
         if resolver is None:
             return {}
@@ -797,6 +854,7 @@ class CameraContext:
             vehicle_id = int(track.vehicle_id)
             active_vehicle_ids.add(vehicle_id)
             with self._license_plate_resolver_lock:
+                # touch để tránh track đang hoạt động bị prune khỏi resolver.
                 resolver.touch(vehicle_id=vehicle_id, ts=ts_dt)
 
             if self._license_plate_enabled and self._should_attempt_license_plate_read(
@@ -806,6 +864,7 @@ class CameraContext:
                 self._license_plate_last_read_ms[vehicle_id] = int(frame_timestamp_utc_ms)
                 vehicle_crop = self._crop_vehicle_for_license_plate(frame_bgr, track.bbox_xyxy)
                 if vehicle_crop is None:
+                    # Không crop được vẫn tính là một attempt thất bại để resolver cập nhật trạng thái.
                     self._observe_license_plate_attempt(
                         vehicle_id=vehicle_id,
                         ts_dt=ts_dt,
@@ -822,25 +881,30 @@ class CameraContext:
                     )
 
             with self._license_plate_resolver_lock:
+                # Snapshot trả ngay cho payload track của frame hiện tại.
                 snapshots[vehicle_id] = resolver.snapshot_for(vehicle_id=vehicle_id)
 
         stale_read_ids = [
             vehicle_id for vehicle_id in self._license_plate_last_read_ms.keys() if vehicle_id not in active_vehicle_ids
         ]
+        # Xe không còn active thì xóa lịch throttle để tránh rò rỉ state.
         for vehicle_id in stale_read_ids:
             del self._license_plate_last_read_ms[vehicle_id]
 
         return snapshots
 
     def _should_attempt_license_plate_read(self, *, vehicle_id: int, frame_timestamp_utc_ms: int) -> bool:
+        # Throttle theo từng vehicle_id để không OCR mọi frame.
         if self._license_plate_read_interval_ms <= 0:
             return True
         last_read_ms = self._license_plate_last_read_ms.get(vehicle_id)
         if last_read_ms is None:
             return True
+        # Chỉ đọc lại khi đã qua khoảng interval cấu hình.
         return int(frame_timestamp_utc_ms) - int(last_read_ms) >= self._license_plate_read_interval_ms
 
     def _prune_license_plate_read_schedule(self, *, current_ts: datetime) -> None:
+        # Chuyển max_age từ giây sang mốc epoch để so sánh trực tiếp với timestamp_ms.
         cutoff_s = current_ts.timestamp() - self._state_prune_max_age_s
         stale_vehicle_ids = [
             vehicle_id
@@ -854,6 +918,7 @@ class CameraContext:
         resolver = self._license_plate_resolver
         if resolver is not None:
             with self._license_plate_resolver_lock:
+                # Prune resolver bằng cùng max_age với các state runtime khác.
                 resolver.prune(
                     current_ts=ts_dt,
                     max_age_s=self._state_prune_max_age_s,
@@ -869,14 +934,17 @@ class CameraContext:
         expand_y_top_ratio: float,
         expand_y_bottom_ratio: float,
     ) -> Optional[tuple[int, int, int, int]]:
+        # Nới bbox theo tỉ lệ cấu hình để giữ thêm ngữ cảnh quanh xe/biển số.
         frame_height, frame_width = frame_bgr.shape[:2]
         if frame_height <= 0 or frame_width <= 0:
             return None
 
+        # Chuẩn hóa bbox đầu vào về float để tính nhất quán giữa detector/tracker khác nhau.
         x1, y1, x2, y2 = [float(value) for value in bbox_xyxy]
         box_width = max(x2 - x1, 1.0)
         box_height = max(y2 - y1, 1.0)
 
+        # Biên nới theo tỷ lệ bám theo kích thước đối tượng tại frame hiện tại.
         expand_x = box_width * float(expand_x_ratio)
         expand_y_top = box_height * float(expand_y_top_ratio)
         expand_y_bottom = box_height * float(expand_y_bottom_ratio)
@@ -901,6 +969,7 @@ class CameraContext:
         if bounds is None:
             return None
         crop_x1, crop_y1, crop_x2, crop_y2 = bounds
+        # Crop theo thứ tự [y, x] của numpy array.
         vehicle_crop = frame_bgr[crop_y1:crop_y2, crop_x1:crop_x2]
         if vehicle_crop is None or vehicle_crop.size == 0:
             return None
@@ -920,6 +989,7 @@ class CameraContext:
         if not detections:
             return None
 
+        # Lấy bbox plate confidence cao nhất trong vehicle crop.
         return self._extract_plate_crop_from_vehicle_crop(vehicle_crop, detections[0].bbox_xyxy)
 
     def _create_license_plate_evidence(
@@ -938,6 +1008,7 @@ class CameraContext:
             plate_crop = self._extract_license_plate_crop(frame_bgr, bbox_xyxy)
             if plate_crop is None:
                 return None
+            # Tên violation được suffix `_license_plate` để phân biệt với ảnh evidence tổng.
             return save_evidence_image(
                 self.repo_root,
                 camera_id=self.camera_id,
@@ -955,12 +1026,14 @@ class CameraContext:
         """Tính FPS xử lý bằng cửa sổ thời gian trượt thay vì dựa trên một frame đơn lẻ."""
         now_s = time.perf_counter()
         self._processed_frame_times_s.append(now_s)
+        # Cửa sổ trượt: loại timestamp nằm ngoài khoảng [now-window, now].
         cutoff_s = now_s - self._processing_fps_window_s
         while self._processed_frame_times_s and self._processed_frame_times_s[0] < cutoff_s:
             self._processed_frame_times_s.popleft()
 
         if len(self._processed_frame_times_s) >= 2:
             duration_s = self._processed_frame_times_s[-1] - self._processed_frame_times_s[0]
+            # FPS = số khoảng frame / tổng thời lượng cửa sổ.
             self._processing_fps = (
                 (len(self._processed_frame_times_s) - 1) / duration_s if duration_s > 0 else None
             )
@@ -976,6 +1049,7 @@ class CameraContext:
         frame_timestamp_utc_ms: int,
     ) -> None:
         camera_loc: CameraLocation = self.camera_config.location
+        # Tạo location một lần cho cả batch violation trong cùng frame.
         violation_loc = ViolationLocation(
             road_name=camera_loc.road_name,
             intersection=camera_loc.intersection_name,
@@ -985,6 +1059,7 @@ class CameraContext:
 
         # Mỗi phần tử gồm: vehicle_id, vehicle_type, thông tin lỗi và bbox tại lúc vi phạm.
         for vehicle_id, vehicle_type, cand, bbox_xyxy in violation_candidates:
+            # Tạo ảnh bằng chứng tổng quan trước khi ghi sự kiện.
             image_path = await asyncio.to_thread(
                 self._create_violation_evidence,
                 frame_bgr,
@@ -995,6 +1070,7 @@ class CameraContext:
                 violation=str(cand["violation"]),
             )
             plate_snapshot = self._license_plate_snapshot_for(vehicle_id=vehicle_id)
+            # Ảnh biển số là evidence phụ, độc lập với kết quả OCR text.
             license_plate_image_path = await asyncio.to_thread(
                 self._create_license_plate_evidence,
                 frame_bgr,

@@ -12,6 +12,7 @@ from app.logic.polygon import PreparedPolygon, bbox_bottom_center, bbox_bottom_c
 
 @dataclass(slots=True)
 class LaneScore:
+    # Điểm đánh giá lane tại một frame dựa trên hình học bbox đáy xe.
     overlap_length: float
     overlap_ratio: float
     center_inside: bool
@@ -22,6 +23,7 @@ class LaneScore:
 
 @dataclass(slots=True)
 class LaneObservation:
+    # Observation chi tiết để các tầng phía sau dùng cho smoothing và violation evidence.
     raw_lane_id: Optional[int]
     confidence: float
     overlap_ratio: float
@@ -41,10 +43,15 @@ class LaneObservation:
 
 @dataclass
 class LaneHistoryState:
+    # Làn ổn định đang dùng cho output realtime/violation.
     stable_lane_id: Optional[int] = None
+    # Candidate lane chờ xác nhận chuyển.
     pending_lane_id: Optional[int] = None
+    # Mốc thời gian bắt đầu pending để tính dwell-time khi switch.
     pending_started_ts: Optional[datetime] = None
+    # Cửa sổ quan sát gần nhất: (timestamp, observation).
     recent_observations: deque[tuple[datetime, LaneObservation]] = field(default_factory=deque)
+    # Lần cuối nhìn thấy xe để phục vụ prune state.
     last_seen_ts: Optional[datetime] = None
 
 
@@ -63,7 +70,9 @@ class LaneLogic:
     ):
         if not lane_polygons:
             raise ValueError("lane_polygons must be non-empty")
+        # Giữ nguyên thứ tự lane trong cấu hình để tie-break ổn định, tránh nhảy lane ngẫu nhiên.
         self._lane_order = [lp.lane_id for lp in lane_polygons]
+        # Chuẩn bị polygon trước để các phép contains/overlap chạy nhanh theo frame.
         self._lane_shapes = {lp.lane_id: PreparedPolygon.from_points(lp.polygon) for lp in lane_polygons}
         self._preferred_lane_overlap_ratio = float(preferred_lane_overlap_ratio)
         self._preferred_lane_overlap_margin_px = float(preferred_lane_overlap_margin_px)
@@ -96,16 +105,22 @@ class LaneLogic:
         px, py = bbox_bottom_center(bbox_xyxy)
         left_point, _, right_point = bbox_bottom_contact_points(bbox_xyxy)
 
+        # Độ dài cạnh đáy bbox làm mẫu số chuẩn hóa overlap về [0..1].
         bottom_segment_len = max(abs(float(right_point[0]) - float(left_point[0])), 1e-6)
         lane_scores: dict[int, LaneScore] = {}
         overlap_scores: list[tuple[float, int, bool]] = []
         for lane_id in self._lane_order:
             shape = self._lane_shapes[lane_id]
+            # overlap_length đo phần đoạn đáy xe nằm trong polygon lane theo đơn vị pixel.
             overlap_length = float(shape.segment_overlap_length(left_point, right_point))
+            # overlap_ratio dùng để so sánh tương đối giữa các lane, giảm phụ thuộc kích thước bbox.
             overlap_ratio = min(max(overlap_length / bottom_segment_len, 0.0), 1.0)
+            # Kiểm tra cả tâm đáy và hai điểm tiếp xúc để tăng độ bền khi bbox lệch.
             center_inside = bool(shape.contains_xy(px, py))
             left_inside = bool(shape.contains_xy(left_point[0], left_point[1]))
             right_inside = bool(shape.contains_xy(right_point[0], right_point[1]))
+            # Confidence là tổng trọng số heuristic:
+            # overlap là lõi chính, cộng thêm bonus khi các điểm đáy nằm trong lane.
             confidence = min(
                 1.0,
                 overlap_ratio
@@ -123,6 +138,7 @@ class LaneLogic:
             )
             overlap_scores.append((overlap_length, lane_id, center_inside))
 
+        # Chọn raw lane trước, sau đó phần temporal assigner quyết định lane ổn định.
         raw_lane_id = self._select_raw_lane_id(
             preferred_lane_id=preferred_lane_id,
             overlap_scores=overlap_scores,
@@ -150,6 +166,7 @@ class LaneLogic:
         center_x: float,
         center_y: float,
     ) -> Optional[int]:
+        # Tìm overlap lớn nhất để xử lý nhánh ưu tiên theo hình học trước.
         best_overlap = max((score for score, _, _ in overlap_scores), default=0.0)
         if best_overlap > 0.0:
             if preferred_lane_id is not None:
@@ -160,6 +177,8 @@ class LaneLogic:
                 if preferred_tuple is not None:
                     preferred_overlap, _, preferred_center_inside = preferred_tuple
                     if preferred_overlap > 0.0:
+                        # Hysteresis mềm: ưu tiên lane hiện tại nếu chênh lệch chưa đủ lớn.
+                        # Nhánh ratio giữ lane cũ khi lane mới chỉ nhỉnh nhẹ.
                         if preferred_overlap >= (best_overlap * self._preferred_lane_overlap_ratio):
                             return preferred_lane_id
                         if (
@@ -173,6 +192,7 @@ class LaneLogic:
                 for score, lane_id, _ in overlap_scores
                 if isclose(score, best_overlap, rel_tol=1e-9, abs_tol=1e-9)
             ]
+            # Nếu có đúng 1 lane đạt overlap max thì chọn trực tiếp, không cần tie-break thêm.
             if len(overlap_matches) == 1:
                 return overlap_matches[0]
             if preferred_lane_id in overlap_matches:
@@ -187,6 +207,7 @@ class LaneLogic:
                 return center_overlap_matches[0]
 
             # Trường hợp còn hòa điểm, ưu tiên confidence cao hơn.
+            # Confidence đã tính cả overlap + điểm tiếp xúc nên thường ổn định hơn.
             best_by_conf = max(overlap_matches, key=lambda lane_id: lane_scores[lane_id].confidence, default=None)
             if best_by_conf is not None:
                 return best_by_conf
@@ -197,6 +218,7 @@ class LaneLogic:
             if shape.contains_xy(center_x, center_y):
                 matches.append(lane_id)
 
+        # Fallback dùng vị trí tâm đáy khi overlap không tách bạch được lane.
         if len(matches) == 1:
             return matches[0]
         if len(matches) > 1:
@@ -226,8 +248,11 @@ class TemporalLaneAssigner:
         switch_source_max_confidence: float = 0.48,
         switch_min_consecutive_target_frames: int = 3,
     ):
+        # Cửa sổ quan sát tổng hợp nhiều frame để giảm jitter lane theo từng frame đơn lẻ.
         self._observation_window_ms = int(observation_window_ms)
+        # Số hit tối thiểu để đủ "quorum" trước khi chấp nhận lane.
         self._min_majority_hits = int(min_majority_hits)
+        # Thời gian tối thiểu lane mới phải giữ trạng thái pending trước khi commit switch.
         self._switch_min_duration_ms = int(switch_min_duration_ms)
         self._switch_majority_ratio_min = min(max(float(switch_majority_ratio_min), 0.0), 1.0)
         self._switch_score_margin_ratio = max(float(switch_score_margin_ratio), 0.0)
@@ -256,6 +281,7 @@ class TemporalLaneAssigner:
         st.recent_observations.append((ts, obs))
         self._prune_history(st, ts)
 
+        # Gom phiếu theo lane bằng tổng confidence thay vì đếm cứng từng frame.
         lane_weight: defaultdict[int, float] = defaultdict(float)
         lane_hits: Counter[int] = Counter()
         lane_conf_sum: defaultdict[int, float] = defaultdict(float)
@@ -273,16 +299,19 @@ class TemporalLaneAssigner:
         if not lane_weight:
             return st.stable_lane_id
 
+        # Majority ở đây dùng tổng confidence thay vì chỉ đếm frame.
         majority_lane_id, majority_weight = max(
             lane_weight.items(),
             key=lambda row: (row[1], lane_hits.get(row[0], 0)),
         )
         majority_hits = lane_hits.get(majority_lane_id, 0)
         total_weight = sum(lane_weight.values())
+        # majority_ratio phản ánh mức thống trị của lane dẫn đầu trong cửa sổ hiện tại.
         majority_ratio = (majority_weight / total_weight) if total_weight > 1e-6 else 0.0
         majority_avg_conf = (lane_conf_sum[majority_lane_id] / majority_hits) if majority_hits > 0 else 0.0
 
         if st.stable_lane_id is None:
+            # Chỉ khởi tạo stable lane khi đã có đủ hit để tránh chốt lane quá sớm.
             if majority_hits >= self._min_majority_hits:
                 st.stable_lane_id = majority_lane_id
             return st.stable_lane_id
@@ -296,6 +325,7 @@ class TemporalLaneAssigner:
         stable_weight = lane_weight.get(stable_lane_id, 0.0)
         stable_hits = lane_hits.get(stable_lane_id, 0)
         stable_avg_conf = (lane_conf_sum[stable_lane_id] / stable_hits) if stable_hits > 0 else 0.0
+        # Margin theo tổng weight giúp ngưỡng chuyển lane co giãn theo mức độ tín hiệu.
         required_margin = self._switch_score_margin_ratio * max(total_weight, 1e-6)
         target_consecutive_ok = self._has_consecutive_target_hits(
             observations=st.recent_observations,
@@ -303,13 +333,16 @@ class TemporalLaneAssigner:
             min_consecutive=self._switch_min_consecutive_target_frames,
             min_confidence=self._switch_target_min_confidence,
         )
+        # Lane mới phải thắng rõ ràng về trọng số, không chỉ nhỉnh nhẹ.
         target_wins_clearly = majority_weight >= (stable_weight + required_margin)
+        # lane cũ được coi là yếu khi confidence thấp hoặc bị áp đảo mạnh.
         source_is_weak = (
             stable_avg_conf <= self._switch_source_max_confidence
             or majority_ratio >= 0.82
             or (stable_weight <= 1e-6)
             or (majority_weight >= (stable_weight * 1.65))
         )
+        # Điều kiện majority_ready đảm bảo vừa đủ số lượng, vừa đủ chất lượng tín hiệu.
         majority_ready = (
             majority_hits >= self._min_majority_hits
             and majority_ratio >= self._switch_majority_ratio_min
@@ -322,6 +355,7 @@ class TemporalLaneAssigner:
             return st.stable_lane_id
 
         if st.pending_lane_id != majority_lane_id:
+            # Mỗi lane candidate mới phải bắt đầu lại đồng hồ pending.
             st.pending_lane_id = majority_lane_id
             st.pending_started_ts = ts
             return st.stable_lane_id
@@ -330,6 +364,7 @@ class TemporalLaneAssigner:
             st.pending_started_ts = ts
             return st.stable_lane_id
 
+        # Chỉ chuyển lane khi trạng thái pending kéo dài đủ lâu.
         duration_ms = int((ts - st.pending_started_ts).total_seconds() * 1000.0)
         if duration_ms >= self._switch_min_duration_ms:
             st.stable_lane_id = majority_lane_id
@@ -345,6 +380,7 @@ class TemporalLaneAssigner:
         return st.stable_lane_id
 
     def prune(self, *, current_ts: datetime, max_age_s: float) -> None:
+        # Cắt state xe không còn xuất hiện để giới hạn bộ nhớ runtime.
         cutoff_ts = current_ts.timestamp() - float(max_age_s)
         stale_ids = [
             vehicle_id
@@ -363,6 +399,7 @@ class TemporalLaneAssigner:
     @staticmethod
     def _synthetic_observation(raw_lane_id: Optional[int]) -> LaneObservation:
         if raw_lane_id is None:
+            # Observation rỗng: dùng khi upstream chưa cung cấp đầy đủ lane score.
             return LaneObservation(
                 raw_lane_id=None,
                 confidence=0.0,
@@ -374,6 +411,7 @@ class TemporalLaneAssigner:
             )
         return LaneObservation(
             raw_lane_id=raw_lane_id,
+            # Synthetic observation mặc định tin cậy tuyệt đối cho lane đã biết.
             confidence=1.0,
             overlap_ratio=1.0,
             center_inside=True,
@@ -401,6 +439,7 @@ class TemporalLaneAssigner:
     ) -> bool:
         streak = 0
         for _, obs in reversed(observations):
+            # Chỉ xét chuỗi liên tiếp mới nhất; gặp lane khác thì dừng ngay.
             if obs.raw_lane_id != target_lane_id:
                 break
             if obs.confidence_for_lane(target_lane_id) < min_confidence:

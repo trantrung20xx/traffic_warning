@@ -119,6 +119,7 @@ const VIETNAM_TIMESTAMP_FORMATTER = new Intl.DateTimeFormat("vi-VN", {
 });
 
 function clamp(value, min, max) {
+	// Kẹp giá trị trong khoảng [min, max] để tránh vượt miền hợp lệ.
 	return Math.min(Math.max(value, min), max);
 }
 
@@ -143,6 +144,7 @@ function formatDateTimePartsInVietnam(date) {
 }
 
 function parseVietnamLocalInput(value) {
+	// Parse chuỗi input local (không timezone) thành thời gian UTC tương ứng UTC+7.
 	if (!value) return null;
 	const match = String(value)
 		.trim()
@@ -150,6 +152,7 @@ function parseVietnamLocalInput(value) {
 	if (!match) return null;
 
 	const [, year, month, day, hour, minute, second = "00"] = match;
+	// Trừ 7 giờ để đổi từ local VN sang mốc UTC tuyệt đối.
 	const utcTime = Date.UTC(
 		Number(year),
 		Number(month) - 1,
@@ -163,6 +166,7 @@ function parseVietnamLocalInput(value) {
 }
 
 function toVietnamLocalDate(value) {
+	// Đưa timestamp bất kỳ về "local clock" Việt Nam nhưng lưu bằng Date UTC để tính toán ổn định.
 	const dt = value instanceof Date ? value : new Date(value);
 	if (Number.isNaN(dt.getTime())) return null;
 	const parts = formatDateTimePartsInVietnam(dt);
@@ -180,6 +184,7 @@ function toVietnamLocalDate(value) {
 }
 
 function fromVietnamLocalDate(localDate) {
+	// Xuất ISO có offset +07:00 để backend nhận đúng mốc thời gian nghiệp vụ.
 	return `${localDate.getUTCFullYear()}-${pad2(localDate.getUTCMonth() + 1)}-${pad2(localDate.getUTCDate())}T${pad2(localDate.getUTCHours())}:${pad2(localDate.getUTCMinutes())}:${pad2(localDate.getUTCSeconds())}+07:00`;
 }
 
@@ -244,22 +249,26 @@ function getTimeBucketRange(value, granularity) {
 	if (!localDate) return null;
 
 	if (granularity === "minute") {
+		// Bucket phút: giữ năm/tháng/ngày/giờ/phút, reset giây.
 		localDate.setUTCSeconds(0, 0);
 		return { start: localDate, end: addUtcMinutes(localDate, 1) };
 	}
 
 	if (granularity === "hour") {
+		// Bucket giờ: reset phút/giây.
 		localDate.setUTCMinutes(0, 0, 0);
 		return { start: localDate, end: addUtcHours(localDate, 1) };
 	}
 
 	if (granularity === "day") {
+		// Bucket ngày: reset về 00:00 local VN.
 		localDate.setUTCHours(0, 0, 0, 0);
 		return { start: localDate, end: addUtcDays(localDate, 1) };
 	}
 
 	if (granularity === "week") {
 		localDate.setUTCHours(0, 0, 0, 0);
+		// Chuẩn tuần ISO: Thứ 2 là ngày đầu tuần.
 		const weekday = localDate.getUTCDay() === 0 ? 7 : localDate.getUTCDay();
 		localDate.setUTCDate(localDate.getUTCDate() - weekday + 1);
 		return { start: localDate, end: addUtcDays(localDate, 7) };
@@ -271,6 +280,7 @@ function getTimeBucketRange(value, granularity) {
 }
 
 function mergeBreakdown(target, source) {
+	// Cộng dồn breakdown theo key động (camera/vehicle/violation).
 	Object.entries(source || {}).forEach(([key, value]) => {
 		target[key] = (target[key] || 0) + Number(value || 0);
 	});
@@ -297,6 +307,7 @@ export function normalizeAnalyticsChartConfig(config) {
 }
 
 export function normalizePoint([x, y], frameWidth, frameHeight) {
+	// Đổi pixel -> normalized [0,1] và clamp để chặn điểm vượt frame.
 	return [
 		clamp(Number(x) / Math.max(frameWidth, 1), 0, 1),
 		clamp(Number(y) / Math.max(frameHeight, 1), 0, 1),
@@ -320,6 +331,7 @@ function toNumericPointsSafe(points) {
 
 function toOptionalGeometry(points, minimumPoints) {
 	const normalized = toNumericPoints(points);
+	// Chỉ giữ geometry đủ số điểm tối thiểu cho từng loại.
 	return normalized.length >= minimumPoints ? normalized : null;
 }
 
@@ -334,6 +346,7 @@ function denormalizePoints(points, frameWidth, frameHeight) {
 }
 
 export function denormalizeLane(lane, frameWidth, frameHeight) {
+	// Cấu hình lane lưu normalized [0,1]; khi render mới đổi sang pixel.
 	const maneuvers = Object.fromEntries(
 		Object.entries(lane.maneuvers || {}).map(([maneuver, cfg]) => [
 			maneuver,
@@ -431,6 +444,7 @@ export function determineTimeSeriesGranularity({
 			durationMs <=
 			normalizedChartConfig.minute_granularity_max_range_hours * 60 * 60 * 1000
 		)
+			// Range ngắn -> dùng minute để giữ chi tiết.
 			return "minute";
 		if (durationMs <= normalizedChartConfig.hour_granularity_max_range_days * dayMs)
 			return "hour";
@@ -442,6 +456,7 @@ export function determineTimeSeriesGranularity({
 	}
 
 	if (pointCount <= normalizedChartConfig.minute_granularity_max_range_hours * 60)
+		// Fallback theo số điểm khi không có from/to hợp lệ.
 		return "minute";
 	if (pointCount <= normalizedChartConfig.hour_granularity_max_range_days * 24)
 		return "hour";
@@ -465,6 +480,7 @@ export function getTimeSeriesGranularityLabel(granularity) {
 export function aggregateTimeSeries(points, granularity) {
 	const source = Array.isArray(points) ? points : [];
 	if (granularity === "minute" || granularity === "hour") {
+		// Minute/hour giữ gần như nguyên dữ liệu, chỉ normalize bucket + sort.
 		return source
 			.map((point) => normalizeTimeSeriesPoint(point, granularity))
 			.filter(Boolean)
@@ -907,12 +923,14 @@ export function buildPayload(draft) {
 }
 
 function orientation(a, b, c) {
+	// Tích có hướng 2D để xác định chiều quay giữa 3 điểm.
 	const value = (b[1] - a[1]) * (c[0] - b[0]) - (b[0] - a[0]) * (c[1] - b[1]);
 	if (Math.abs(value) < 1e-9) return 0;
 	return value > 0 ? 1 : 2;
 }
 
 function onSegment(a, b, c) {
+	// Kiểm tra điểm b nằm trên đoạn ac (kể cả biên).
 	return (
 		Math.min(a[0], c[0]) <= b[0] &&
 		b[0] <= Math.max(a[0], c[0]) &&
@@ -922,6 +940,7 @@ function onSegment(a, b, c) {
 }
 
 function segmentsIntersect(a1, a2, b1, b2) {
+	// Thuật toán giao nhau chuẩn: xét orientation + các trường hợp thẳng hàng.
 	const o1 = orientation(a1, a2, b1);
 	const o2 = orientation(a1, a2, b2);
 	const o3 = orientation(b1, b2, a1);
@@ -959,6 +978,7 @@ export function polygonSelfIntersects(points) {
 }
 
 export function validatePolygonDraft(draft) {
+	// Validate phía client để chặn cấu hình sai hình học trước khi gửi lên backend.
 	const errors = [];
 	const warnings = [];
 

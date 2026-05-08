@@ -16,18 +16,21 @@ SUPPORTED_INFERENCE_BACKENDS = ("pytorch", "tensorrt", "openvino", "onnxruntime"
 
 
 def _validate_polygon_points(value: list[list[float]], *, field_name: str) -> list[list[float]]:
+    # Polygon hợp lệ cần >=3 điểm để tạo diện tích.
     if len(value) < 3:
         raise ValueError(f"{field_name} must contain at least 3 points")
     for point in value:
         if len(point) != 2:
             raise ValueError(f"{field_name} points must be [x, y]")
         x, y = point
+        # Tất cả geometry config lưu normalized [0,1] để độc lập độ phân giải.
         if not (0.0 <= x <= 1.0 and 0.0 <= y <= 1.0):
             raise ValueError(f"{field_name} points must be normalized to [0, 1]")
     return value
 
 
 def _validate_line_points(value: list[list[float]], *, field_name: str) -> list[list[float]]:
+    # Line bắt buộc đúng 2 điểm đầu-cuối.
     if len(value) != 2:
         raise ValueError(f"{field_name} must contain exactly 2 points")
     for point in value:
@@ -40,6 +43,7 @@ def _validate_line_points(value: list[list[float]], *, field_name: str) -> list[
 
 
 def _normalize_string_list(value: Any, *, field_name: str) -> list[str]:
+    # Chấp nhận cả scalar và iterable để tương thích input từ nhiều nguồn.
     raw_items = [value] if isinstance(value, str) else value
     try:
         iterator = iter(raw_items)
@@ -50,6 +54,7 @@ def _normalize_string_list(value: Any, *, field_name: str) -> list[str]:
     for item in iterator:
         text = str(item).strip()
         if text and text not in normalized:
+            # Vừa trim vừa loại trùng, vẫn giữ thứ tự khai báo ban đầu.
             normalized.append(text)
     if not normalized:
         raise ValueError(f"{field_name} must contain at least one value")
@@ -57,6 +62,7 @@ def _normalize_string_list(value: Any, *, field_name: str) -> list[str]:
 
 
 def _validate_polyline_points(value: list[list[float]], *, field_name: str) -> list[list[float]]:
+    # Polyline cần >=2 điểm để tạo được ít nhất 1 segment hướng.
     if len(value) < 2:
         raise ValueError(f"{field_name} must contain at least 2 points")
     for point in value:
@@ -71,6 +77,7 @@ def _validate_polyline_points(value: list[list[float]], *, field_name: str) -> l
 def _normalize_allowed_maneuvers(value: Optional[list[str]]) -> Optional[list[str]]:
     if value is None:
         return value
+    # Giữ thứ tự xuất hiện của maneuver để cấu hình ổn định khi lưu lại file.
     normalized = list(dict.fromkeys(str(item) for item in value))
     if not normalized:
         raise ValueError("allowed_maneuvers must contain at least one maneuver")
@@ -81,6 +88,7 @@ def _normalize_allowed_maneuvers(value: Optional[list[str]]) -> Optional[list[st
 
 
 def _normalize_inference_backend(value: str, *, field_name: str) -> str:
+    # Chặn cấu hình backend lạ ngay từ lớp validate để fail sớm lúc boot.
     normalized = str(value or "").strip().lower()
     if normalized not in SUPPORTED_INFERENCE_BACKENDS:
         supported = ", ".join(SUPPORTED_INFERENCE_BACKENDS)
@@ -335,6 +343,7 @@ class DirectionDetectionDefaultsConfig(BaseModel):
     @classmethod
     def validate_cos_threshold(cls, value: float) -> float:
         parsed = float(value)
+        # Cosine của góc luôn nằm trong [-1, 1].
         if parsed < -1.0 or parsed > 1.0:
             raise ValueError("direction cosine thresholds must be within [-1, 1]")
         return parsed
@@ -353,6 +362,7 @@ class DirectionDetectionDefaultsConfig(BaseModel):
     @classmethod
     def validate_positive_int(cls, value: int) -> int:
         parsed = int(value)
+        # Các giá trị đếm/cửa sổ bắt buộc >0 để tránh chia 0 và logic rỗng.
         if parsed <= 0:
             raise ValueError("direction detection integer values must be > 0")
         return parsed
@@ -373,6 +383,7 @@ class DirectionDetectionDefaultsConfig(BaseModel):
     @classmethod
     def validate_positive_displacement(cls, value: float) -> float:
         parsed = float(value)
+        # Ngưỡng dịch chuyển 0 hoặc âm làm mất ý nghĩa đánh giá hướng.
         if parsed <= 0.0:
             raise ValueError("direction detection displacement values must be > 0")
         return parsed
@@ -386,12 +397,14 @@ class DirectionDetectionDefaultsConfig(BaseModel):
     @classmethod
     def validate_unit_interval(cls, value: float) -> float:
         parsed = float(value)
+        # Ratio/weight đều phải nằm trong đoạn chuẩn [0,1].
         if parsed < 0.0 or parsed > 1.0:
             raise ValueError("direction detection ratio/weight values must be within [0, 1]")
         return parsed
 
     @model_validator(mode="after")
     def validate_threshold_order(self):
+        # opposite < same để còn vùng đệm unknown giữa hai ngưỡng.
         if self.opposite_direction_cos_threshold >= self.same_direction_cos_threshold:
             raise ValueError("opposite_direction_cos_threshold must be smaller than same_direction_cos_threshold")
         if self.opposite_consensus_min_segments > self.evaluation_window_samples:
@@ -680,10 +693,12 @@ def denormalize_point(point: list[float], frame_width: int, frame_height: int) -
 
 
 def normalize_polygon(points: list[list[float]], frame_width: int, frame_height: int) -> list[list[float]]:
+    # Map toàn bộ điểm polygon từ pixel sang normalized.
     return [normalize_point(point, frame_width, frame_height) for point in points]
 
 
 def denormalize_polygon(points: list[list[float]], frame_width: int, frame_height: int) -> list[list[float]]:
+    # Map ngược từ normalized về pixel để dùng cho tính toán runtime.
     return [denormalize_point(point, frame_width, frame_height) for point in points]
 
 
@@ -726,6 +741,7 @@ def _normalize_maneuver_config_payload(
 ) -> dict[str, Any]:
     del maneuver  # maneuver được giữ để tương thích chữ ký gọi hiện tại.
 
+    # Chuẩn hóa geometry maneuver về cùng hệ normalized [0,1].
     turn_zone = normalize_optional_polygon(raw_config.get("turn_zone"), frame_width, frame_height)
 
     exit_zone = normalize_optional_polygon(raw_config.get("exit_zone"), frame_width, frame_height)
@@ -733,6 +749,7 @@ def _normalize_maneuver_config_payload(
     exit_line = normalize_optional_polygon(raw_config.get("exit_line"), frame_width, frame_height)
 
     enabled = bool(raw_config.get("enabled", True))
+    # allowed chỉ có hiệu lực khi maneuver đang bật.
     allowed = enabled and bool(raw_config.get("allowed", False))
 
     return {
@@ -755,6 +772,7 @@ def _normalize_lane_maneuvers_payload(
         raw_maneuvers = {}
 
     normalized: dict[str, Any] = {}
+    # Ghép thứ tự chuẩn + key phát sinh để không làm mất dữ liệu từ config cũ.
     maneuver_order = list(dict.fromkeys([*MANEUVER_ORDER, *list(raw_maneuvers.keys())]))
     for maneuver in maneuver_order:
         raw_config = raw_maneuvers.get(maneuver)
@@ -782,9 +800,11 @@ def _normalize_direction_rule_payload(
         return None
 
     raw_direction_path = raw_rule.get("direction_path")
+    # direction_path không đủ 2 điểm thì coi như chưa cấu hình.
     if not isinstance(raw_direction_path, list) or len(raw_direction_path) < 2:
         raw_direction_path = None
     raw_check_zone = raw_rule.get("check_zone")
+    # check_zone không đủ 3 điểm thì bỏ để validator xử lý nhất quán.
     if not isinstance(raw_check_zone, list) or len(raw_check_zone) < 3:
         raw_check_zone = None
 
@@ -882,6 +902,7 @@ def _normalize_lane_config_payload(raw: dict[str, Any]) -> dict[str, Any]:
         normalized_lanes.append(
             {
                 **lane,
+                # Toàn bộ geometry lane được chuẩn hóa ngay khi load để backend/frontend dùng chung.
                 "polygon": normalize_polygon(lane.get("polygon", []), frame_width, frame_height),
                 "approach_zone": normalize_optional_polygon(lane.get("approach_zone"), frame_width, frame_height),
                 "commit_gate": normalize_optional_polygon(lane.get("commit_gate"), frame_width, frame_height),
@@ -905,6 +926,7 @@ def _normalize_lane_config_payload(raw: dict[str, Any]) -> dict[str, Any]:
 
 
 def _compact_lane_config_for_storage(lane_config: CameraLaneConfig) -> dict[str, Any]:
+    # Chỉ ghi các field cần thiết để file config gọn và dễ review diff.
     payload: dict[str, Any] = {
         "camera_id": lane_config.camera_id,
         "frame_width": int(lane_config.frame_width),
@@ -954,6 +976,7 @@ def _compact_lane_config_for_storage(lane_config: CameraLaneConfig) -> dict[str,
             if cfg.exit_zone:
                 compact["exit_zone"] = cfg.exit_zone
 
+            # Bỏ maneuver mặc định disallowed để file gọn hơn khi review diff.
             is_default_disallowed = compact == {"enabled": True, "allowed": False}
             if not is_default_disallowed:
                 maneuver_payloads[maneuver] = compact
@@ -967,6 +990,7 @@ def _compact_lane_config_for_storage(lane_config: CameraLaneConfig) -> dict[str,
 
 
 def _setting(settings: dict[str, Any], path: tuple[str, ...], default: Any) -> Any:
+    # Truy cập lồng nhau an toàn: thiếu key nào cũng fallback về default.
     current: Any = settings
     for key in path:
         if not isinstance(current, dict):
@@ -994,6 +1018,7 @@ def load_app_config(repo_root: Path) -> AppConfig:
     if not db_path.is_absolute():
         db_path = repo_root / db_path
 
+    # Map từng nhóm key trong settings.json vào schema typed của backend.
     return AppConfig(
         settings_path=settings_path,
         config_dir=config_dir,
@@ -1131,12 +1156,14 @@ def load_cameras(repo_root: Path) -> list[CameraConfig]:
     raw = _read_json(cfg.cameras_path)
     cameras: list[CameraConfig] = []
     for cam in raw.get("cameras", []):
+        # Validate từng camera bằng schema Pydantic để fail sớm nếu dữ liệu lỗi.
         cameras.append(CameraConfig.model_validate(cam))
     return cameras
 
 
 def save_cameras(repo_root: Path, cameras: list[CameraConfig]) -> None:
     cfg = load_app_config(repo_root)
+    # exclude_none giúp JSON config gọn và tránh ghi field null không cần thiết.
     payload = {"cameras": [cam.model_dump(mode="json", exclude_none=True) for cam in cameras]}
     _write_json(cfg.cameras_path, payload)
 
@@ -1145,6 +1172,7 @@ def load_lane_config_for_camera(repo_root: Path, camera_id: str) -> CameraLaneCo
     cfg = load_app_config(repo_root)
     path = cfg.lane_configs_dir / f"{camera_id}.json"
     raw = _read_json(path)
+    # Khi load luôn normalize về hệ [0,1] để frontend/backend dùng chung một chuẩn.
     return CameraLaneConfig.model_validate(_normalize_lane_config_payload(raw))
 
 
