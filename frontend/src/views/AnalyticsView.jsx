@@ -7,6 +7,7 @@ import ViolationDetailModal from "../components/ViolationDetailModal";
 import { connectViolations, exportViolationHistory, fetchDashboard, fetchViolationHistory } from "../api";
 import {
   determineTimeSeriesGranularity,
+  formatLicensePlateValue,
   formatTimestamp,
   getTimeSeriesGranularityLabel,
   getVehicleTypeLabel,
@@ -19,6 +20,7 @@ import {
 
 export default function AnalyticsView({ cameras, selectedCameraId, onSelectCamera }) {
   const [cameraFilter, setCameraFilter] = useState("");
+  const [licensePlateFilter, setLicensePlateFilter] = useState("");
   const [fromInput, setFromInput] = useState(startOfDayLocalInput());
   const [toInput, setToInput] = useState(nowLocalInput());
   const [autoFollowNow, setAutoFollowNow] = useState(true);
@@ -49,6 +51,7 @@ export default function AnalyticsView({ cameras, selectedCameraId, onSelectCamer
       }),
       fetchViolationHistory({
         cameraId: cameraFilter || null,
+        licensePlate: licensePlateFilter || null,
         fromTs,
         toTs: currentToTs,
       }),
@@ -72,16 +75,23 @@ export default function AnalyticsView({ cameras, selectedCameraId, onSelectCamer
     return () => {
       active = false;
     };
-  }, [cameraFilter, fromTs, toTs, autoFollowNow]);
+  }, [cameraFilter, licensePlateFilter, fromTs, toTs, autoFollowNow]);
 
   useEffect(() => {
     setExportMessage("");
-  }, [cameraFilter, fromTs, toTs, autoFollowNow]);
+  }, [cameraFilter, licensePlateFilter, fromTs, toTs, autoFollowNow]);
 
   useEffect(() => {
     const eventMatchesCurrentFilter = (event) => {
       if (cameraFilter && event.camera_id !== cameraFilter) {
         return false;
+      }
+      if (licensePlateFilter) {
+        const expected = String(licensePlateFilter).trim().toLowerCase();
+        const actual = String(event.license_plate || "").toLowerCase();
+        if (!actual.includes(expected)) {
+          return false;
+        }
       }
       const eventTime = new Date(event.timestamp).getTime();
       if (Number.isNaN(eventTime)) {
@@ -131,7 +141,7 @@ export default function AnalyticsView({ cameras, selectedCameraId, onSelectCamer
       }
       socket.close();
     };
-  }, [cameraFilter, fromTs, toTs, autoFollowNow]);
+  }, [cameraFilter, licensePlateFilter, fromTs, toTs, autoFollowNow]);
 
   const overview = dashboard?.overview || {};
   const chartSeries = dashboard?.time_series || dashboard?.hourly_series || [];
@@ -183,6 +193,7 @@ export default function AnalyticsView({ cameras, selectedCameraId, onSelectCamer
       await exportViolationHistory({
         format,
         cameraId: cameraFilter || null,
+        licensePlate: licensePlateFilter || null,
         fromTs,
         toTs: currentToTs,
       });
@@ -250,6 +261,18 @@ export default function AnalyticsView({ cameras, selectedCameraId, onSelectCamer
                     const nextTime = nextTs ? new Date(nextTs).getTime() : Number.NaN;
                     setAutoFollowNow(!Number.isNaN(nextTime) && Math.abs(nextTime - Date.now()) <= 60 * 1000);
                   }}
+                />
+              </label>
+              <label className="field">
+                <span className="field-label-with-icon">
+                  <AppIcon name="search" />
+                  Biển số
+                </span>
+                <input
+                  type="text"
+                  value={licensePlateFilter}
+                  onChange={(event) => setLicensePlateFilter(event.target.value.toUpperCase())}
+                  placeholder="Ví dụ: 51A12345"
                 />
               </label>
             </div>
@@ -332,6 +355,7 @@ export default function AnalyticsView({ cameras, selectedCameraId, onSelectCamer
                   <th>Địa điểm</th>
                   <th>Xe</th>
                   <th>ID xe</th>
+                  <th>Biển số</th>
                   <th>Làn</th>
                   <th>Vi phạm</th>
                 </tr>
@@ -339,7 +363,7 @@ export default function AnalyticsView({ cameras, selectedCameraId, onSelectCamer
               <tbody>
                 {history.length === 0 ? (
                   <tr>
-                    <td colSpan="8" className="empty-cell">
+                    <td colSpan="9" className="empty-cell">
                       Không có dữ liệu trong khoảng thời gian đã chọn.
                     </td>
                   </tr>
@@ -362,6 +386,7 @@ export default function AnalyticsView({ cameras, selectedCameraId, onSelectCamer
                     </td>
                     <td>{getVehicleTypeLabel(row.vehicle_type)}</td>
                     <td>#{row.vehicle_id}</td>
+                    <td>{formatLicensePlateValue(row.license_plate, row.license_plate_status)}</td>
                     <td>{row.lane_id}</td>
                     <td>{getViolationLabel(row.violation)}</td>
                   </tr>

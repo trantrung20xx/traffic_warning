@@ -21,6 +21,9 @@ htmlcov/
 backend/.venv/
 
 
+# DB
+config/*.sqlite
+
 # Frontend
 frontend/node_modules/
 frontend/dist/
@@ -32,6 +35,3 @@ pnpm-debug.log*
 # Local model weights
 backend/yolov8*.pt
 backend/license_plate_yolov8.pt
-
-# DB
-config/traffic_warning.sqlite

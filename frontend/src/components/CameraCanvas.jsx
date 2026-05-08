@@ -1,707 +1,992 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { drawBackgroundImage, useBackgroundImage } from "./canvas/BackgroundImageLayer";
-import { drawCorridorPreview, drawPolygon, drawPolyline } from "./canvas/PolygonLayer";
+import { drawPolygon, drawPolyline } from "./canvas/PolygonLayer";
 import {
-  denormalizeLane,
-  getEditTargetGeometryNoun,
-  getEditTargetLabel,
-  getManeuverLabel,
-  getTargetPoints,
-  getVehicleTypeLabel,
-  isLineEditTarget,
-  isPolygonEditTarget,
-  isPolylineEditTarget,
-  normalizePoint,
-  parseEditTarget,
+	denormalizeLane,
+	getEditTargetGeometryNoun,
+	getEditTargetLabel,
+	getManeuverLabel,
+	getTargetPoints,
+	getVehicleTypeLabel,
+	isLineEditTarget,
+	isPolygonEditTarget,
+	isPolylineEditTarget,
+	normalizePoint,
+	parseEditTarget,
 } from "../utils";
 
-const VERTEX_HIT_RADIUS = 12;
-const EDGE_HIT_DISTANCE = 10;
-const CORRIDOR_BASE_WIDTH_BY_MANEUVER = {
-  straight: 72,
-  left: 82,
-  right: 82,
-  u_turn: 104,
+const VERTEX_HIT_RADIUS = 20;
+const EDGE_HIT_DISTANCE = 16;
+const EDITABLE_LINE_WIDTH = 1.76;
+const EDITABLE_VERTEX_RADIUS = 3.03;
+const EDITABLE_ACTIVE_VERTEX_RADIUS = 4.51;
+const EDITABLE_VERTEX_STROKE_WIDTH = 0.88;
+const EDITABLE_ARROW_SIZE = 18;
+const EDGE_INSERT_MARKER_RADIUS = 6;
+const MONITOR_OVERLAY = {
+	boxStrokePx: 1.5,
+	labelFontPx: 11,
+	labelHeightPx: 18,
+	labelPaddingXPx: 6,
+	labelTextBaselinePx: 13,
+	labelGapPx: 5,
+	labelMarginPx: 8,
+	fpsFontPx: 15,
+	fpsMarginPx: 14,
+	fpsTextBaselinePx: 15,
 };
 
 function clamp(value, min, max) {
-  return Math.min(Math.max(value, min), max);
+	// Kẹp toạ độ/giá trị trong khoảng hợp lệ.
+	return Math.min(Math.max(value, min), max);
 }
 
 function clampPoint([x, y], frameWidth, frameHeight) {
-  return [clamp(Math.round(x), 0, frameWidth), clamp(Math.round(y), 0, frameHeight)];
+	// Giữ điểm trong biên frame và làm tròn để thao tác kéo mượt hơn.
+	return [clamp(Math.round(x), 0, frameWidth), clamp(Math.round(y), 0, frameHeight)];
+}
+
+function getCanvasDisplayScale(canvas, frameWidth, frameHeight) {
+	if (!canvas || frameWidth <= 0 || frameHeight <= 0) return 1;
+	const rect = canvas.getBoundingClientRect();
+	const scaleX = rect.width / frameWidth;
+	const scaleY = rect.height / frameHeight;
+	// Chọn scale nhỏ hơn để khớp cơ chế object-fit contain của canvas stage.
+	const scale = Math.min(scaleX, scaleY);
+	return Number.isFinite(scale) && scale > 0 ? scale : 1;
+}
+
+function createDisplayMetrics(canvas, frameWidth, frameHeight) {
+	// Quy đổi kích thước style (CSS pixel) sang hệ toạ độ frame thật của canvas.
+	const displayScale = getCanvasDisplayScale(canvas, frameWidth, frameHeight);
+	return {
+		displayScale,
+		px(value) {
+			return Number(value) / displayScale;
+		},
+		font(sizePx, weight = "") {
+			const prefix = weight ? `${weight} ` : "";
+			return `${prefix}${Number(sizePx) / displayScale}px sans-serif`;
+		},
+	};
 }
 
 function pointInPolygon(point, polygon) {
-  if (!polygon || polygon.length < 3) return false;
-  let inside = false;
-  const [x, y] = point;
-  for (let i = 0; i < polygon.length; i += 1) {
-    const [x1, y1] = polygon[i];
-    const [x2, y2] = polygon[(i + 1) % polygon.length];
-    const intersects = (y1 > y) !== (y2 > y);
-    if (!intersects) continue;
-    const xIntersect = ((x2 - x1) * (y - y1)) / (y2 - y1 || 1e-9) + x1;
-    if (xIntersect > x) inside = !inside;
-  }
-  return inside;
+	// Ray-casting để kiểm tra click nằm trong polygon khi kéo cả vùng.
+	if (!polygon || polygon.length < 3) return false;
+	let inside = false;
+	const [x, y] = point;
+	for (let i = 0; i < polygon.length; i += 1) {
+		const [x1, y1] = polygon[i];
+		const [x2, y2] = polygon[(i + 1) % polygon.length];
+		const intersects = y1 > y !== y2 > y;
+		if (!intersects) continue;
+		const xIntersect = ((x2 - x1) * (y - y1)) / (y2 - y1 || 1e-9) + x1;
+		if (xIntersect > x) inside = !inside;
+	}
+	return inside;
 }
 
 function distanceBetween(a, b) {
-  return Math.hypot(a[0] - b[0], a[1] - b[1]);
+	return Math.hypot(a[0] - b[0], a[1] - b[1]);
 }
 
 function projectPointToSegment(point, start, end) {
-  const [px, py] = point;
-  const [x1, y1] = start;
-  const [x2, y2] = end;
-  const dx = x2 - x1;
-  const dy = y2 - y1;
-  const lengthSquared = dx * dx + dy * dy;
+	const [px, py] = point;
+	const [x1, y1] = start;
+	const [x2, y2] = end;
+	const dx = x2 - x1;
+	const dy = y2 - y1;
+	const lengthSquared = dx * dx + dy * dy;
 
-  if (lengthSquared === 0) {
-    return { point: start, distance: distanceBetween(point, start) };
-  }
+	if (lengthSquared === 0) {
+		// Segment suy biến thành 1 điểm.
+		return { point: start, distance: distanceBetween(point, start) };
+	}
 
-  const t = clamp(((px - x1) * dx + (py - y1) * dy) / lengthSquared, 0, 1);
-  const projected = [x1 + dx * t, y1 + dy * t];
-  return { point: projected, distance: distanceBetween(point, projected) };
+	// Chiếu vuông góc point lên đoạn, t bị clamp trong [0,1].
+	const t = clamp(((px - x1) * dx + (py - y1) * dy) / lengthSquared, 0, 1);
+	const projected = [x1 + dx * t, y1 + dy * t];
+	return { point: projected, distance: distanceBetween(point, projected) };
 }
 
-function findClosestVertex(points, point) {
-  if (!points?.length) return null;
-  let best = null;
-  points.forEach((candidate, index) => {
-    const distance = distanceBetween(candidate, point);
-    if (distance <= VERTEX_HIT_RADIUS && (!best || distance < best.distance)) {
-      best = { index, distance };
-    }
-  });
-  return best;
+function findClosestVertex(points, point, hitRadius = VERTEX_HIT_RADIUS) {
+	if (!points?.length) return null;
+	let best = null;
+	points.forEach((candidate, index) => {
+		const distance = distanceBetween(candidate, point);
+		if (distance <= hitRadius && (!best || distance < best.distance)) {
+			best = { index, distance };
+		}
+	});
+	return best;
 }
 
 function findClosestEdge(points, point, options = {}) {
-  if (!points || points.length < 2) return null;
-  const closed = Boolean(options.closed && points.length >= 3);
-  const edgeCount = closed ? points.length : points.length - 1;
-  let best = null;
+	if (!points || points.length < 2) return null;
+	const closed = Boolean(options.closed && points.length >= 3);
+	const hitDistance =
+		Number(options.hitDistance) > 0 ? Number(options.hitDistance) : EDGE_HIT_DISTANCE;
+	const edgeCount = closed ? points.length : points.length - 1;
+	let best = null;
 
-  for (let index = 0; index < edgeCount; index += 1) {
-    const start = points[index];
-    const end = closed ? points[(index + 1) % points.length] : points[index + 1];
-    const projection = projectPointToSegment(point, start, end);
-    if (projection.distance <= EDGE_HIT_DISTANCE && (!best || projection.distance < best.distance)) {
-      best = { index, distance: projection.distance, point: projection.point };
-    }
-  }
+	for (let index = 0; index < edgeCount; index += 1) {
+		const start = points[index];
+		const end = closed ? points[(index + 1) % points.length] : points[index + 1];
+		const projection = projectPointToSegment(point, start, end);
+		if (
+			projection.distance <= hitDistance &&
+			(!best || projection.distance < best.distance)
+		) {
+			// Giữ cạnh gần nhất để hỗ trợ chèn vertex đúng vị trí người dùng.
+			best = { index, distance: projection.distance, point: projection.point };
+		}
+	}
 
-  return best;
+	return best;
 }
 
-function getPreviewCorridorWidthPx(maneuver, cfg) {
-  const configuredWidth = Number(cfg?.corridor_width_px);
-  if (Number.isFinite(configuredWidth) && configuredWidth > 0) {
-    return configuredWidth;
-  }
-  return CORRIDOR_BASE_WIDTH_BY_MANEUVER[maneuver] || 82;
-}
+function drawTrajectory(ctx, points, metrics = null) {
+	const pathPoints = (points || []).filter(
+		(point) =>
+			Array.isArray(point) &&
+			point.length >= 2 &&
+			Number.isFinite(Number(point[0])) &&
+			Number.isFinite(Number(point[1])),
+	);
+	if (pathPoints.length < 1) return;
 
-function drawTrajectory(ctx, points) {
-  const pathPoints = (points || []).filter(
-    (point) =>
-      Array.isArray(point) &&
-      point.length >= 2 &&
-      Number.isFinite(Number(point[0])) &&
-      Number.isFinite(Number(point[1])),
-  );
-  if (pathPoints.length < 1) return;
+	if (pathPoints.length === 1) {
+		const [x, y] = pathPoints[0];
+		ctx.save();
+		ctx.beginPath();
+		ctx.arc(Number(x), Number(y), metrics?.px(2.8) || 2.8, 0, Math.PI * 2);
+		ctx.fillStyle = "rgba(0, 255, 128, 0.9)";
+		ctx.fill();
+		ctx.restore();
+		return;
+	}
 
-  if (pathPoints.length === 1) {
-    const [x, y] = pathPoints[0];
-    ctx.save();
-    ctx.beginPath();
-    ctx.arc(Number(x), Number(y), 2.8, 0, Math.PI * 2);
-    ctx.fillStyle = "rgba(0, 255, 128, 0.9)";
-    ctx.fill();
-    ctx.restore();
-    return;
-  }
+	ctx.save();
+	ctx.beginPath();
+	ctx.moveTo(Number(pathPoints[0][0]), Number(pathPoints[0][1]));
 
-  ctx.save();
-  ctx.beginPath();
-  ctx.moveTo(Number(pathPoints[0][0]), Number(pathPoints[0][1]));
+	if (pathPoints.length === 2) {
+		ctx.lineTo(Number(pathPoints[1][0]), Number(pathPoints[1][1]));
+	} else {
+		// Làm mượt polyline bằng quadratic curve theo midpoint.
+		for (let idx = 1; idx < pathPoints.length - 1; idx += 1) {
+			const current = pathPoints[idx];
+			const next = pathPoints[idx + 1];
+			const midX = (Number(current[0]) + Number(next[0])) / 2;
+			const midY = (Number(current[1]) + Number(next[1])) / 2;
+			ctx.quadraticCurveTo(Number(current[0]), Number(current[1]), midX, midY);
+		}
+		const last = pathPoints[pathPoints.length - 1];
+		ctx.lineTo(Number(last[0]), Number(last[1]));
+	}
 
-  if (pathPoints.length === 2) {
-    ctx.lineTo(Number(pathPoints[1][0]), Number(pathPoints[1][1]));
-  } else {
-    for (let idx = 1; idx < pathPoints.length - 1; idx += 1) {
-      const current = pathPoints[idx];
-      const next = pathPoints[idx + 1];
-      const midX = (Number(current[0]) + Number(next[0])) / 2;
-      const midY = (Number(current[1]) + Number(next[1])) / 2;
-      ctx.quadraticCurveTo(Number(current[0]), Number(current[1]), midX, midY);
-    }
-    const last = pathPoints[pathPoints.length - 1];
-    ctx.lineTo(Number(last[0]), Number(last[1]));
-  }
-
-  ctx.strokeStyle = "rgba(0, 255, 128, 0.92)";
-  ctx.lineWidth = 3;
-  ctx.lineCap = "round";
-  ctx.lineJoin = "round";
-  ctx.setLineDash([]);
-  ctx.stroke();
-  ctx.restore();
+	ctx.strokeStyle = "rgba(0, 255, 128, 0.92)";
+	ctx.lineWidth = metrics?.px(1.65) || 1.65;
+	ctx.lineCap = "round";
+	ctx.lineJoin = "round";
+	ctx.setLineDash([]);
+	ctx.stroke();
+	ctx.restore();
 }
 
 export default function CameraCanvas({
-  frameWidth,
-  frameHeight,
-  lanes,
-  vehicles,
-  trajectoryOverlays = [],
-  processingFps = null,
-  overlay = false,
-  selectedLaneId = null,
-  selectedVertexIndex = null,
-  editable = false,
-  onCanvasClick = null,
-  onPolygonReplace = null,
-  onVertexSelect = null,
-  editTarget = "lane_polygon",
-  selectedManeuver = "straight",
-  backgroundImageUrl = null,
+	frameWidth,
+	frameHeight,
+	lanes,
+	vehicles,
+	trajectoryOverlays = [],
+	processingFps = null,
+	overlay = false,
+	selectedLaneId = null,
+	selectedVertexIndex = null,
+	editable = false,
+	onCanvasClick = null,
+	onPolygonReplace = null,
+	onVertexSelect = null,
+	editTarget = "lane_polygon",
+	selectedManeuver = "straight",
+	backgroundImageUrl = null,
 }) {
-  const canvasRef = useRef(null);
-  const dragStateRef = useRef(null);
-  const editablePointsRef = useRef([]);
-  const [hoverEdge, setHoverEdge] = useState(null);
-  const [hoverVertexIndex, setHoverVertexIndex] = useState(null);
-  const [isDragging, setIsDragging] = useState(false);
-  const backgroundImage = useBackgroundImage(backgroundImageUrl);
+	const canvasRef = useRef(null);
+	const dragStateRef = useRef(null);
+	const editablePointsRef = useRef([]);
+	const [hoverEdge, setHoverEdge] = useState(null);
+	const [hoverVertexIndex, setHoverVertexIndex] = useState(null);
+	const [isDragging, setIsDragging] = useState(false);
+	const [canvasDisplaySize, setCanvasDisplaySize] = useState({ width: 0, height: 0 });
+	const backgroundImage = useBackgroundImage(backgroundImageUrl);
 
-  const laneColors = useMemo(() => {
-    const palette = [
-      "rgba(0, 184, 148, 0.24)",
-      "rgba(241, 196, 15, 0.24)",
-      "rgba(52, 152, 219, 0.24)",
-      "rgba(231, 76, 60, 0.24)",
-    ];
-    const m = new Map();
-    lanes.forEach((l, idx) => m.set(l.lane_id, palette[idx % palette.length]));
-    return m;
-  }, [lanes]);
+	const laneColors = useMemo(() => {
+		const palette = [
+			"rgba(0, 184, 148, 0.24)",
+			"rgba(241, 196, 15, 0.24)",
+			"rgba(52, 152, 219, 0.24)",
+			"rgba(231, 76, 60, 0.24)",
+		];
+		const m = new Map();
+		lanes.forEach((l, idx) => m.set(l.lane_id, palette[idx % palette.length]));
+		return m;
+	}, [lanes]);
 
-  const renderedLanes = useMemo(
-    () => lanes.map((lane) => denormalizeLane(lane, frameWidth, frameHeight)),
-    [frameHeight, frameWidth, lanes],
-  );
+	const renderedLanes = useMemo(
+		() => lanes.map((lane) => denormalizeLane(lane, frameWidth, frameHeight)),
+		[frameHeight, frameWidth, lanes],
+	);
 
-  const selectedLane = useMemo(
-    () => lanes.find((lane) => lane.lane_id === selectedLaneId) || null,
-    [lanes, selectedLaneId],
-  );
+	const selectedLane = useMemo(
+		() => lanes.find((lane) => lane.lane_id === selectedLaneId) || null,
+		[lanes, selectedLaneId],
+	);
 
-  const renderedSelectedLane = useMemo(
-    () => renderedLanes.find((lane) => lane.lane_id === selectedLaneId) || null,
-    [renderedLanes, selectedLaneId],
-  );
+	const renderedSelectedLane = useMemo(
+		() => renderedLanes.find((lane) => lane.lane_id === selectedLaneId) || null,
+		[renderedLanes, selectedLaneId],
+	);
 
-  const editablePoints = useMemo(() => {
-    return getTargetPoints({
-      lane: renderedSelectedLane,
-      laneConfig: null,
-      editTarget,
-      selectedManeuver,
-    });
-  }, [editTarget, renderedSelectedLane, selectedManeuver]);
+	const editablePoints = useMemo(() => {
+		return getTargetPoints({
+			lane: renderedSelectedLane,
+			laneConfig: null,
+			editTarget,
+			selectedManeuver,
+		});
+	}, [editTarget, renderedSelectedLane, selectedManeuver]);
 
-  const parsedEditTarget = useMemo(() => parseEditTarget(editTarget), [editTarget]);
+	const parsedEditTarget = useMemo(() => parseEditTarget(editTarget), [editTarget]);
 
-  useEffect(() => {
-    editablePointsRef.current = editablePoints;
-  }, [editablePoints]);
+	useEffect(() => {
+		editablePointsRef.current = editablePoints;
+	}, [editablePoints]);
 
-  useEffect(() => {
-    dragStateRef.current = null;
-    setIsDragging(false);
-    setHoverEdge(null);
-    setHoverVertexIndex(null);
-  }, [editTarget, selectedLaneId, editable]);
+	useEffect(() => {
+		dragStateRef.current = null;
+		setIsDragging(false);
+		setHoverEdge(null);
+		setHoverVertexIndex(null);
+	}, [editTarget, selectedLaneId, editable]);
 
-  const replaceEditableGeometry = (points) => {
-    if (!onPolygonReplace) return;
-    onPolygonReplace(points.map((point) => normalizePoint(clampPoint(point, frameWidth, frameHeight), frameWidth, frameHeight)));
-  };
+	useEffect(() => {
+		const canvas = canvasRef.current;
+		if (!canvas) return undefined;
 
-  const getCanvasPointFromClient = (clientX, clientY) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return [0, 0];
-    const rect = canvas.getBoundingClientRect();
-    const scaleX = frameWidth / rect.width;
-    const scaleY = frameHeight / rect.height;
-    return [(clientX - rect.left) * scaleX, (clientY - rect.top) * scaleY];
-  };
+		const syncDisplaySize = () => {
+			const rect = canvas.getBoundingClientRect();
+			setCanvasDisplaySize((previous) => {
+				if (
+					Math.abs(previous.width - rect.width) < 0.5 &&
+					Math.abs(previous.height - rect.height) < 0.5
+				) {
+					return previous;
+				}
+				return { width: rect.width, height: rect.height };
+			});
+		};
 
-  const getCanvasPoint = (event) => {
-    return getCanvasPointFromClient(event.clientX, event.clientY);
-  };
+		syncDisplaySize();
+		if (typeof ResizeObserver === "undefined") {
+			window.addEventListener("resize", syncDisplaySize);
+			return () => window.removeEventListener("resize", syncDisplaySize);
+		}
 
-  const updateHoverState = (point) => {
-    if (!editable || !selectedLane) {
-      setHoverEdge(null);
-      setHoverVertexIndex(null);
-      return;
-    }
+		const observer = new ResizeObserver(syncDisplaySize);
+		observer.observe(canvas);
+		return () => observer.disconnect();
+	}, []);
 
-    const vertex = findClosestVertex(editablePointsRef.current, point);
-    if (vertex) {
-      setHoverVertexIndex(vertex.index);
-      setHoverEdge(null);
-      return;
-    }
+	const replaceEditableGeometry = (points) => {
+		if (!onPolygonReplace) return;
+		// Mọi thao tác kéo/chèn đều ghi lại dưới dạng normalized để đồng bộ state cấu hình.
+		onPolygonReplace(
+			points.map((point) =>
+				normalizePoint(
+					clampPoint(point, frameWidth, frameHeight),
+					frameWidth,
+					frameHeight,
+				),
+			),
+		);
+	};
 
-    setHoverVertexIndex(null);
-    if (!isPolygonEditTarget(editTarget) && !isPolylineEditTarget(editTarget)) {
-      setHoverEdge(null);
-      return;
-    }
-    setHoverEdge(findClosestEdge(editablePointsRef.current, point, { closed: isPolygonEditTarget(editTarget) }));
-  };
+	const getCanvasPointFromClient = (clientX, clientY) => {
+		const canvas = canvasRef.current;
+		if (!canvas) return [0, 0];
+		const rect = canvas.getBoundingClientRect();
+		const scaleX = frameWidth / rect.width;
+		const scaleY = frameHeight / rect.height;
+		// Quy đổi điểm chuột (CSS pixel) về hệ tọa độ frame thật.
+		return [(clientX - rect.left) * scaleX, (clientY - rect.top) * scaleY];
+	};
 
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    canvas.width = frameWidth;
-    canvas.height = frameHeight;
+	const getCanvasPoint = (event) => {
+		return getCanvasPointFromClient(event.clientX, event.clientY);
+	};
 
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+	const updateHoverState = (point) => {
+		if (!editable || !selectedLane) {
+			setHoverEdge(null);
+			setHoverVertexIndex(null);
+			return;
+		}
+		const interactionMetrics = createDisplayMetrics(
+			canvasRef.current,
+			frameWidth,
+			frameHeight,
+		);
+		const vertexHitRadius = interactionMetrics.px(VERTEX_HIT_RADIUS);
+		const edgeHitDistance = interactionMetrics.px(EDGE_HIT_DISTANCE);
 
-    ctx.clearRect(0, 0, frameWidth, frameHeight);
-    drawBackgroundImage(ctx, backgroundImage, frameWidth, frameHeight);
-    const isMonitoringOverlay = Boolean(overlay && !editable);
+		const vertex = findClosestVertex(
+			editablePointsRef.current,
+			point,
+			vertexHitRadius,
+		);
+		if (vertex) {
+			setHoverVertexIndex(vertex.index);
+			setHoverEdge(null);
+			return;
+		}
 
-    renderedLanes.forEach((lane) => {
-      const pts = lane.polygon;
-      if (!pts || pts.length < 2) return;
+		setHoverVertexIndex(null);
+		if (!isPolygonEditTarget(editTarget) && !isPolylineEditTarget(editTarget)) {
+			setHoverEdge(null);
+			return;
+		}
+		setHoverEdge(
+			findClosestEdge(editablePointsRef.current, point, {
+				closed: isPolygonEditTarget(editTarget),
+				hitDistance: edgeHitDistance,
+			}),
+		);
+	};
 
-      const isEditableLane = editable && lane.lane_id === selectedLaneId && editTarget === "lane_polygon";
-      drawPolygon(ctx, pts, {
-        fillStyle: pts.length >= 3 ? laneColors.get(lane.lane_id) || "rgba(200,200,200,0.15)" : null,
-        strokeStyle: lane.lane_id === selectedLaneId ? "rgba(255,255,255,1)" : "rgba(255,255,255,0.85)",
-        lineWidth: lane.lane_id === selectedLaneId ? 2.2 : 1.4,
-        showStroke: !isMonitoringOverlay,
-        showVertices: isEditableLane,
-        isEditableTarget: isEditableLane,
-        vertexRadius: 3.5,
-        activeVertexRadius: 5,
-        vertexStrokeWidth: 1.2,
-        hoverVertexIndex,
-        selectedVertexIndex,
-      });
+	useEffect(() => {
+		const canvas = canvasRef.current;
+		if (!canvas) return;
+		canvas.width = frameWidth;
+		canvas.height = frameHeight;
 
-      if (pts.length >= 3 && !isMonitoringOverlay) {
-        const cx = pts.reduce((s, p) => s + p[0], 0) / pts.length;
-        const cy = pts.reduce((s, p) => s + p[1], 0) / pts.length;
-        ctx.fillStyle = "rgba(255,255,255,0.98)";
-        ctx.font = "700 14px sans-serif";
-        ctx.fillText(`làn ${lane.lane_id}`, cx, cy);
-      }
+		const ctx = canvas.getContext("2d");
+		if (!ctx) return;
 
-      [
-        {
-          key: "approach_zone",
-          points: lane.approach_zone || [],
-          strokeStyle: "rgba(46, 204, 113, 0.95)",
-          fillStyle: "rgba(46, 204, 113, 0.15)",
-          label: "chuẩn bị rẽ",
-          dashed: true,
-        },
-        {
-          key: "commit_gate",
-          points: lane.commit_gate || [],
-          strokeStyle: "rgba(230, 126, 34, 0.95)",
-          fillStyle: "rgba(230, 126, 34, 0.15)",
-          label: "bắt đầu rẽ",
-          dashed: true,
-        },
-        {
-          key: "commit_line",
-          points: lane.commit_line || [],
-          strokeStyle: "rgba(230, 126, 34, 0.95)",
-          label: "vạch bắt đầu rẽ",
-          dashed: false,
-          geometryType: "line",
-        },
-      ].forEach((geometry) => {
-        if (geometry.points.length < 2) return;
-        const isEditableGeometry = editable && lane.lane_id === selectedLaneId && editTarget === geometry.key;
-        const isLineGeometry = geometry.geometryType === "line";
-        const drawGeometry = geometry.geometryType === "line" ? drawPolyline : drawPolygon;
-        drawGeometry(ctx, geometry.points, {
-          fillStyle: isMonitoringOverlay ? geometry.fillStyle : null,
-          dashed: geometry.dashed,
-          strokeStyle: isEditableGeometry ? "rgba(255, 209, 102, 1)" : geometry.strokeStyle,
-          lineWidth: isEditableGeometry ? 2 : 1.4,
-          showStroke: isLineGeometry || !isMonitoringOverlay,
-          showVertices: isEditableGeometry,
-          isEditableTarget: isEditableGeometry,
-          vertexRadius: 3.5,
-          activeVertexRadius: 5,
-          vertexStrokeWidth: 1.2,
-          hoverVertexIndex,
-          selectedVertexIndex,
-        });
-        const anchor = geometry.points[0];
-        if (anchor && !isMonitoringOverlay) {
-          ctx.fillStyle = "rgba(255,255,255,0.88)";
-          ctx.font = "12px sans-serif";
-          ctx.fillText(`${geometry.label} · làn ${lane.lane_id}`, anchor[0] + 6, anchor[1] - 6);
-        }
-      });
+		ctx.clearRect(0, 0, frameWidth, frameHeight);
+		drawBackgroundImage(ctx, backgroundImage, frameWidth, frameHeight);
+		// monitoring overlay chỉ hiển thị thông tin runtime, hạn chế nét chỉnh sửa.
+		const isMonitoringOverlay = Boolean(overlay && !editable);
+		const displayMetrics = createDisplayMetrics(canvas, frameWidth, frameHeight);
+		const editableLineWidth = displayMetrics.px(EDITABLE_LINE_WIDTH);
+		const editableVertexRadius = displayMetrics.px(EDITABLE_VERTEX_RADIUS);
+		const editableActiveVertexRadius = displayMetrics.px(
+			EDITABLE_ACTIVE_VERTEX_RADIUS,
+		);
+		const editableVertexStrokeWidth = displayMetrics.px(
+			EDITABLE_VERTEX_STROKE_WIDTH,
+		);
+		const editableArrowSize = displayMetrics.px(EDITABLE_ARROW_SIZE);
+		const edgeInsertMarkerRadius = displayMetrics.px(EDGE_INSERT_MARKER_RADIUS);
 
-      Object.entries(lane.maneuvers || {}).forEach(([maneuver, cfg]) => {
-        const maneuverLabel = getManeuverLabel(maneuver);
-        const movementPath = cfg.movement_path || [];
-        const exitZone = cfg.exit_zone || [];
-        const exitLine = cfg.exit_line || [];
+		renderedLanes.forEach((lane) => {
+			const pts = lane.polygon;
+			if (!pts || pts.length < 2) return;
 
-        const isSelectedManeuver = lane.lane_id === selectedLaneId && maneuver === selectedManeuver;
+			const isEditableLane =
+				editable &&
+				lane.lane_id === selectedLaneId &&
+				editTarget === "lane_polygon";
+			drawPolygon(ctx, pts, {
+				fillStyle:
+					pts.length >= 3
+						? laneColors.get(lane.lane_id) || "rgba(200,200,200,0.15)"
+						: null,
+				strokeStyle:
+					lane.lane_id === selectedLaneId
+						? "rgba(255,255,255,1)"
+						: "rgba(255,255,255,0.85)",
+				lineWidth: isEditableLane
+					? editableLineWidth
+					: lane.lane_id === selectedLaneId
+						? displayMetrics.px(2.2)
+						: displayMetrics.px(1.4),
+				showStroke: !isMonitoringOverlay,
+				showVertices: isEditableLane,
+				isEditableTarget: isEditableLane,
+				vertexRadius: editableVertexRadius,
+				activeVertexRadius: editableActiveVertexRadius,
+				vertexStrokeWidth: editableVertexStrokeWidth,
+				hoverVertexIndex,
+				selectedVertexIndex,
+			});
 
-        if (movementPath.length >= 2) {
-          const isEditablePath = editable && isSelectedManeuver && editTarget === "movement_path";
-          drawCorridorPreview(ctx, movementPath, getPreviewCorridorWidthPx(maneuver, cfg), {
-            strokeStyle: isEditablePath ? "rgba(255, 209, 102, 0.18)" : "rgba(52, 152, 219, 0.18)",
-          });
-          if (!isMonitoringOverlay) {
-            drawPolyline(ctx, movementPath, {
-              dashed: true,
-              strokeStyle: isEditablePath ? "rgba(255, 209, 102, 1)" : "rgba(52, 152, 219, 0.95)",
-              lineWidth: isEditablePath ? 2 : 1.4,
-              showVertices: isEditablePath,
-              isEditableTarget: isEditablePath,
-              vertexRadius: 3.5,
-              activeVertexRadius: 5,
-              vertexStrokeWidth: 1.2,
-              hoverVertexIndex,
-              selectedVertexIndex,
-              showDirection: true,
-              arrowSize: isEditablePath ? 14 : 11,
-            });
-          }
-          const anchor = movementPath[0];
-          if (anchor && !isMonitoringOverlay) {
-            ctx.fillStyle = "rgba(255,255,255,0.88)";
-            ctx.font = "12px sans-serif";
-            ctx.fillText(`${maneuverLabel} · lane ${lane.lane_id}`, anchor[0] + 6, anchor[1] - 6);
-          }
-        }
+			if (pts.length >= 3 && !isMonitoringOverlay) {
+				const cx = pts.reduce((s, p) => s + p[0], 0) / pts.length;
+				const cy = pts.reduce((s, p) => s + p[1], 0) / pts.length;
+				ctx.fillStyle = "rgba(255,255,255,0.98)";
+				ctx.font = "700 14px sans-serif";
+				ctx.fillText(`làn ${lane.lane_id}`, cx, cy);
+			}
 
-        if (exitZone.length >= 3) {
-          const isEditableExitZone = editable && isSelectedManeuver && editTarget === "exit_zone";
-          drawPolygon(ctx, exitZone, {
-            dashed: true,
-            strokeStyle: isEditableExitZone ? "rgba(255, 209, 102, 1)" : "rgba(155, 89, 182, 0.95)",
-            lineWidth: isEditableExitZone ? 2 : 1.4,
-            fillStyle: isMonitoringOverlay ? "rgba(155, 89, 182, 0.18)" : null,
-            showStroke: !isMonitoringOverlay,
-            showVertices: isEditableExitZone,
-            isEditableTarget: isEditableExitZone,
-            vertexRadius: 3.5,
-            activeVertexRadius: 5,
-            vertexStrokeWidth: 1.2,
-            hoverVertexIndex,
-            selectedVertexIndex,
-          });
-        }
+			[
+				{
+					key: "approach_zone",
+					points: lane.approach_zone || [],
+					strokeStyle: "rgba(46, 204, 113, 0.95)",
+					fillStyle: "rgba(46, 204, 113, 0.15)",
+					label: "chuẩn bị rẽ",
+					dashed: true,
+				},
+				{
+					key: "commit_gate",
+					points: lane.commit_gate || [],
+					strokeStyle: "rgba(230, 126, 34, 0.95)",
+					fillStyle: "rgba(230, 126, 34, 0.15)",
+					label: "bắt đầu rẽ",
+					dashed: true,
+				},
+				{
+					key: "commit_line",
+					points: lane.commit_line || [],
+					strokeStyle: "rgba(230, 126, 34, 0.95)",
+					label: "vạch bắt đầu rẽ",
+					dashed: false,
+					geometryType: "line",
+				},
+				{
+					key: "direction_check_zone",
+					points: lane.direction_rule?.check_zone || [],
+					strokeStyle: "rgba(26, 188, 156, 0.95)",
+					fillStyle: "rgba(26, 188, 156, 0.14)",
+					label: "vùng kiểm tra hướng",
+					dashed: true,
+				},
+			].forEach((geometry) => {
+				if (geometry.points.length < 2) return;
+				const isEditableGeometry =
+					editable &&
+					lane.lane_id === selectedLaneId &&
+					editTarget === geometry.key;
+				const isLineGeometry = geometry.geometryType === "line";
+				const drawGeometry =
+					geometry.geometryType === "line" ? drawPolyline : drawPolygon;
+				drawGeometry(ctx, geometry.points, {
+					fillStyle: isMonitoringOverlay ? geometry.fillStyle : null,
+					dashed: geometry.dashed,
+					strokeStyle: isEditableGeometry
+						? "rgba(255, 209, 102, 1)"
+						: geometry.strokeStyle,
+					lineWidth: isEditableGeometry
+						? editableLineWidth
+						: displayMetrics.px(1.4),
+					showStroke: isLineGeometry || !isMonitoringOverlay,
+					showVertices: isEditableGeometry,
+					isEditableTarget: isEditableGeometry,
+					vertexRadius: editableVertexRadius,
+					activeVertexRadius: editableActiveVertexRadius,
+					vertexStrokeWidth: editableVertexStrokeWidth,
+					hoverVertexIndex,
+					selectedVertexIndex,
+				});
+				const anchor = geometry.points[0];
+				if (anchor && !isMonitoringOverlay) {
+					ctx.fillStyle = "rgba(255,255,255,0.88)";
+					ctx.font = "12px sans-serif";
+					ctx.fillText(
+						`${geometry.label} · làn ${lane.lane_id}`,
+						anchor[0] + 6,
+						anchor[1] - 6,
+					);
+				}
+			});
 
-        if (exitLine.length >= 2) {
-          const isEditableExitLine = editable && isSelectedManeuver && editTarget === "exit_line";
-          drawPolyline(ctx, exitLine, {
-            dashed: false,
-            strokeStyle: isEditableExitLine ? "rgba(255, 209, 102, 1)" : "rgba(230, 126, 34, 0.95)",
-            lineWidth: isEditableExitLine ? 2 : 1.4,
-            showStroke: true,
-            showVertices: isEditableExitLine,
-            isEditableTarget: isEditableExitLine,
-            vertexRadius: 3.5,
-            activeVertexRadius: 5,
-            vertexStrokeWidth: 1.2,
-            hoverVertexIndex,
-            selectedVertexIndex,
-          });
-        }
-      });
-    });
+			const directionPath = lane.direction_rule?.direction_path || [];
+			if (directionPath.length >= 2) {
+				const isEditableDirectionPath =
+					editable &&
+					lane.lane_id === selectedLaneId &&
+					editTarget === "direction_path";
+				drawPolyline(ctx, directionPath, {
+					dashed: false,
+					strokeStyle: isEditableDirectionPath
+						? "rgba(255, 209, 102, 1)"
+						: "rgba(26, 188, 156, 0.98)",
+					lineWidth: isEditableDirectionPath
+						? editableLineWidth
+						: displayMetrics.px(1.8),
+					showDirection: true,
+					arrowSize: isEditableDirectionPath
+						? editableArrowSize
+						: displayMetrics.px(12),
+					showVertices: isEditableDirectionPath,
+					isEditableTarget: isEditableDirectionPath,
+					vertexRadius: editableVertexRadius,
+					activeVertexRadius: editableActiveVertexRadius,
+					vertexStrokeWidth: editableVertexStrokeWidth,
+					hoverVertexIndex,
+					selectedVertexIndex,
+				});
+				if (!isMonitoringOverlay) {
+					const anchor = directionPath[0];
+					ctx.fillStyle = "rgba(255,255,255,0.9)";
+					ctx.font = "12px sans-serif";
+					ctx.fillText(
+						`hướng đúng chiều · làn ${lane.lane_id}`,
+						anchor[0] + 6,
+						anchor[1] - 6,
+					);
+				}
+			}
 
-    if (editable && (isPolygonEditTarget(editTarget) || isPolylineEditTarget(editTarget)) && hoverEdge?.point) {
-      const [hx, hy] = hoverEdge.point;
-      ctx.beginPath();
-      ctx.arc(hx, hy, 4.2, 0, Math.PI * 2);
-      ctx.fillStyle = "rgba(255, 209, 102, 0.95)";
-      ctx.fill();
-      ctx.lineWidth = 1.2;
-      ctx.strokeStyle = "rgba(7, 19, 31, 0.9)";
-      ctx.stroke();
-    }
+			Object.entries(lane.maneuvers || {}).forEach(([maneuver, cfg]) => {
+				const maneuverLabel = getManeuverLabel(maneuver);
+				const turnZone = cfg.turn_zone || [];
+				const exitZone = cfg.exit_zone || [];
+				const exitLine = cfg.exit_line || [];
 
-    trajectoryOverlays.forEach((row) => {
-      drawTrajectory(ctx, row?.points || []);
-    });
+				const isSelectedManeuver =
+					lane.lane_id === selectedLaneId && maneuver === selectedManeuver;
 
-    vehicles.forEach((v) => {
-      const x1 = v.bbox.x1;
-      const y1 = v.bbox.y1;
-      const w = v.bbox.x2 - v.bbox.x1;
-      const h = v.bbox.y2 - v.bbox.y1;
-      const strokeColor = v.isViolating ? "rgba(255, 107, 87, 0.98)" : "rgba(0, 214, 143, 0.98)";
-      const labelBackground = v.isViolating ? "rgba(120, 28, 18, 0.82)" : "rgba(7, 76, 54, 0.82)";
+				if (turnZone.length >= 3) {
+					const isEditableTurnZone =
+						editable && isSelectedManeuver && editTarget === "turn_zone";
+					drawPolygon(ctx, turnZone, {
+						dashed: true,
+						strokeStyle: isEditableTurnZone
+							? "rgba(255, 209, 102, 1)"
+							: "rgba(52, 152, 219, 0.95)",
+						lineWidth: isEditableTurnZone
+							? editableLineWidth
+							: displayMetrics.px(1.4),
+						fillStyle: isMonitoringOverlay
+							? "rgba(52, 152, 219, 0.18)"
+							: null,
+						showStroke: !isMonitoringOverlay,
+						showVertices: isEditableTurnZone,
+						isEditableTarget: isEditableTurnZone,
+						vertexRadius: editableVertexRadius,
+						activeVertexRadius: editableActiveVertexRadius,
+						vertexStrokeWidth: editableVertexStrokeWidth,
+						hoverVertexIndex,
+						selectedVertexIndex,
+					});
+					const anchor = turnZone[0];
+					if (anchor && !isMonitoringOverlay) {
+						ctx.fillStyle = "rgba(255,255,255,0.88)";
+						ctx.font = "12px sans-serif";
+						ctx.fillText(
+							`${maneuverLabel} · lane ${lane.lane_id}`,
+							anchor[0] + 6,
+							anchor[1] - 6,
+						);
+					}
+				}
 
-      ctx.strokeStyle = strokeColor;
-      ctx.lineWidth = 3;
-      ctx.strokeRect(x1, y1, w, h);
+				if (exitZone.length >= 3) {
+					const isEditableExitZone =
+						editable && isSelectedManeuver && editTarget === "exit_zone";
+					drawPolygon(ctx, exitZone, {
+						dashed: true,
+						strokeStyle: isEditableExitZone
+							? "rgba(255, 209, 102, 1)"
+							: "rgba(155, 89, 182, 0.95)",
+						lineWidth: isEditableExitZone
+							? editableLineWidth
+							: displayMetrics.px(1.4),
+						fillStyle: isMonitoringOverlay
+							? "rgba(155, 89, 182, 0.18)"
+							: null,
+						showStroke: !isMonitoringOverlay,
+						showVertices: isEditableExitZone,
+						isEditableTarget: isEditableExitZone,
+						vertexRadius: editableVertexRadius,
+						activeVertexRadius: editableActiveVertexRadius,
+						vertexStrokeWidth: editableVertexStrokeWidth,
+						hoverVertexIndex,
+						selectedVertexIndex,
+					});
+				}
 
-      const label = `#${v.vehicle_id} ${getVehicleTypeLabel(v.vehicle_type)}${v.lane_id != null ? ` làn ${v.lane_id}` : ""}`;
-      ctx.font = "14px sans-serif";
-      ctx.fillStyle = labelBackground;
-      ctx.fillRect(x1, y1 - 22, ctx.measureText(label).width + 10, 22);
-      ctx.fillStyle = "rgba(255,255,255,0.95)";
-      ctx.fillText(label, x1 + 5, y1 - 7);
-    });
+				if (exitLine.length >= 2) {
+					const isEditableExitLine =
+						editable && isSelectedManeuver && editTarget === "exit_line";
+					drawPolyline(ctx, exitLine, {
+						dashed: false,
+						strokeStyle: isEditableExitLine
+							? "rgba(255, 209, 102, 1)"
+							: "rgba(230, 126, 34, 0.95)",
+						lineWidth: isEditableExitLine
+							? editableLineWidth
+							: displayMetrics.px(1.4),
+						showStroke: true,
+						showVertices: isEditableExitLine,
+						isEditableTarget: isEditableExitLine,
+						vertexRadius: editableVertexRadius,
+						activeVertexRadius: editableActiveVertexRadius,
+						vertexStrokeWidth: editableVertexStrokeWidth,
+						hoverVertexIndex,
+						selectedVertexIndex,
+					});
+				}
+			});
+		});
 
-    if (processingFps != null && Number.isFinite(processingFps)) {
-      const fpsLabel = `FPS: ${processingFps.toFixed(1)}`;
-      ctx.font = "700 14px sans-serif";
-      const textWidth = ctx.measureText(fpsLabel).width;
-      const boxWidth = textWidth + 18;
-      const boxHeight = 28;
-      const boxX = frameWidth - boxWidth - 14;
-      const boxY = 14;
-      const radius = 10;
+		if (
+			editable &&
+			(isPolygonEditTarget(editTarget) || isPolylineEditTarget(editTarget)) &&
+			hoverEdge?.point
+		) {
+			const [hx, hy] = hoverEdge.point;
+			ctx.beginPath();
+			ctx.arc(hx, hy, edgeInsertMarkerRadius, 0, Math.PI * 2);
+			ctx.fillStyle = "rgba(255, 209, 102, 0.95)";
+			ctx.fill();
+			ctx.lineWidth = editableVertexStrokeWidth;
+			ctx.strokeStyle = "rgba(7, 19, 31, 0.9)";
+			ctx.stroke();
+		}
 
-      ctx.beginPath();
-      ctx.moveTo(boxX + radius, boxY);
-      ctx.lineTo(boxX + boxWidth - radius, boxY);
-      ctx.quadraticCurveTo(boxX + boxWidth, boxY, boxX + boxWidth, boxY + radius);
-      ctx.lineTo(boxX + boxWidth, boxY + boxHeight - radius);
-      ctx.quadraticCurveTo(boxX + boxWidth, boxY + boxHeight, boxX + boxWidth - radius, boxY + boxHeight);
-      ctx.lineTo(boxX + radius, boxY + boxHeight);
-      ctx.quadraticCurveTo(boxX, boxY + boxHeight, boxX, boxY + boxHeight - radius);
-      ctx.lineTo(boxX, boxY + radius);
-      ctx.quadraticCurveTo(boxX, boxY, boxX + radius, boxY);
-      ctx.closePath();
-      ctx.fillStyle = "rgba(7, 19, 31, 0.78)";
-      ctx.fill();
-      ctx.lineWidth = 1;
-      ctx.strokeStyle = "rgba(255,255,255,0.16)";
-      ctx.stroke();
+		trajectoryOverlays.forEach((row) => {
+			// Quỹ đạo được backend/frontend làm mượt trước khi vẽ.
+			drawTrajectory(ctx, row?.points || [], displayMetrics);
+		});
 
-      ctx.fillStyle = "rgba(255,255,255,0.96)";
-      ctx.fillText(fpsLabel, boxX + 9, boxY + 18);
-    }
+		vehicles.forEach((v) => {
+			const x1 = v.bbox.x1;
+			const y1 = v.bbox.y1;
+			const w = v.bbox.x2 - v.bbox.x1;
+			const h = v.bbox.y2 - v.bbox.y1;
+			const strokeColor = v.isViolating
+				? "rgba(255, 107, 87, 0.98)"
+				: "rgba(0, 214, 143, 0.98)";
+			const labelBackground = v.isViolating
+				? "rgba(120, 28, 18, 0.82)"
+				: "rgba(7, 76, 54, 0.82)";
 
-    if (editable) {
-      // Camera cố định nên chỉ hỗ trợ kéo điểm/đoạn/vùng, không scale/rotate.
-      const editTargetLabel = getEditTargetLabel(
-        editTarget,
-        parsedEditTarget.scope === "lane" || parsedEditTarget.scope === "lane_maneuver" ? selectedLaneId : null,
-        selectedManeuver,
-      );
-      const geometryNoun = getEditTargetGeometryNoun(editTarget);
-      const editHint = isPolygonEditTarget(editTarget)
-        ? "kéo điểm để chỉnh, kéo trong vùng để di chuyển, click cạnh để chèn điểm."
-        : isPolylineEditTarget(editTarget)
-          ? "kéo điểm để chỉnh, click đoạn để chèn điểm."
-          : "kéo điểm hoặc kéo đường để di chuyển.";
-      ctx.fillStyle = "rgba(255,255,255,0.78)";
-      ctx.font = "12px sans-serif";
-      ctx.fillText(
-        `${editTargetLabel} (${geometryNoun}): ${editHint}`,
-        14,
-        22,
-      );
-    }
-  }, [
-    editTarget,
-    editable,
-    frameWidth,
-    frameHeight,
-    backgroundImage,
-    overlay,
-    hoverEdge,
-    hoverVertexIndex,
-    laneColors,
-    parsedEditTarget.scope,
-    selectedManeuver,
-    renderedLanes,
-    selectedVertexIndex,
-    selectedLaneId,
-    vehicles,
-    trajectoryOverlays,
-    processingFps,
-  ]);
+			ctx.strokeStyle = strokeColor;
+			ctx.lineWidth = isMonitoringOverlay
+				? displayMetrics.px(MONITOR_OVERLAY.boxStrokePx)
+				: 2.0;
+			ctx.strokeRect(x1, y1, w, h);
 
-  const handleMouseDown = (event) => {
-    if (!editable) return;
-    const point = getCanvasPoint(event);
-    const points = editablePointsRef.current;
-    const vertex = findClosestVertex(points, point);
-    const targetIsLine = isLineEditTarget(editTarget);
-    const targetIsPolygon = isPolygonEditTarget(editTarget);
-    const targetIsPolyline = isPolylineEditTarget(editTarget);
+			const hasRecognizedPlate = Boolean(v.license_plate);
+			const trackingLabel = hasRecognizedPlate
+				? `${v.license_plate} (#${v.vehicle_id})`
+				: `#${v.vehicle_id}`;
+			const label = `${trackingLabel} ${getVehicleTypeLabel(v.vehicle_type)}${v.lane_id != null ? ` làn ${v.lane_id}` : ""}`;
+			if (isMonitoringOverlay) {
+				// Label được clamp biên để không tràn khỏi khung hình.
+				const labelHeight = displayMetrics.px(MONITOR_OVERLAY.labelHeightPx);
+				const labelPaddingX = displayMetrics.px(MONITOR_OVERLAY.labelPaddingXPx);
+				const labelGap = displayMetrics.px(MONITOR_OVERLAY.labelGapPx);
+				const labelMargin = displayMetrics.px(MONITOR_OVERLAY.labelMarginPx);
+				ctx.font = displayMetrics.font(MONITOR_OVERLAY.labelFontPx, "300");
+				const labelWidth = Math.min(
+					ctx.measureText(label).width + labelPaddingX * 2,
+					Math.max(displayMetrics.px(96), frameWidth - labelMargin * 2),
+				);
+				const labelX = clamp(
+					x1,
+					labelMargin,
+					Math.max(labelMargin, frameWidth - labelWidth - labelMargin),
+				);
+				const labelY =
+					y1 - labelHeight - labelGap >= labelMargin
+						? y1 - labelHeight - labelGap
+						: clamp(
+								y1 + labelGap,
+								labelMargin,
+								Math.max(
+									labelMargin,
+									frameHeight - labelHeight - labelMargin,
+								),
+							);
 
-    if (vertex) {
-      onVertexSelect?.(vertex.index);
-      dragStateRef.current = { mode: "vertex", vertexIndex: vertex.index };
-      setIsDragging(true);
-      return;
-    }
+				ctx.fillStyle = labelBackground;
+				ctx.fillRect(labelX, labelY, labelWidth, labelHeight);
+				ctx.fillStyle = "rgba(255,255,255,0.97)";
+				ctx.fillText(
+					label,
+					labelX + labelPaddingX,
+					labelY + displayMetrics.px(MONITOR_OVERLAY.labelTextBaselinePx),
+					labelWidth - labelPaddingX * 2,
+				);
+			} else {
+				ctx.font = "14px sans-serif";
+				ctx.fillStyle = labelBackground;
+				ctx.fillRect(x1, y1 - 22, ctx.measureText(label).width + 10, 22);
+				ctx.fillStyle = "rgba(255,255,255,0.95)";
+				ctx.fillText(label, x1 + 5, y1 - 7);
+			}
+		});
 
-    const edge = findClosestEdge(points, point, { closed: targetIsPolygon });
-    if (edge && onPolygonReplace && (targetIsPolygon || targetIsPolyline)) {
-      const nextPoint = clampPoint(edge.point, frameWidth, frameHeight);
-      const nextPoints = [...points.slice(0, edge.index + 1), nextPoint, ...points.slice(edge.index + 1)];
-      replaceEditableGeometry(nextPoints);
-      onVertexSelect?.(edge.index + 1);
-      dragStateRef.current = { mode: "vertex", vertexIndex: edge.index + 1 };
-      setHoverVertexIndex(edge.index + 1);
-      setHoverEdge(null);
-      setIsDragging(true);
-      return;
-    }
+		if (processingFps != null && Number.isFinite(processingFps)) {
+			const fpsLabel = `FPS: ${processingFps.toFixed(1)}`;
+			const fpsFont = isMonitoringOverlay
+				? displayMetrics.font(MONITOR_OVERLAY.fpsFontPx, "700")
+				: "700 14px sans-serif";
+			const fpsMargin = isMonitoringOverlay
+				? displayMetrics.px(MONITOR_OVERLAY.fpsMarginPx)
+				: 14;
+			ctx.font = fpsFont;
+			const textWidth = ctx.measureText(fpsLabel).width;
+			const textX = frameWidth - textWidth - fpsMargin;
+			const textY =
+				fpsMargin +
+				(isMonitoringOverlay ? displayMetrics.px(MONITOR_OVERLAY.fpsTextBaselinePx) : 18);
 
-    if (targetIsLine && edge && onPolygonReplace) {
-      dragStateRef.current = {
-        mode: "geometry",
-        startPoint: point,
-        startPoints: points.map(([x, y]) => [x, y]),
-      };
-      setIsDragging(true);
-      return;
-    }
+			ctx.fillStyle = isMonitoringOverlay
+				? "rgba(0, 214, 143, 0.98)"
+				: "rgba(255,255,255,0.96)";
+			ctx.fillText(fpsLabel, textX, textY);
+		}
 
-    if (targetIsPolygon && points.length >= 3 && pointInPolygon(point, points) && onPolygonReplace) {
-      dragStateRef.current = {
-        mode: "geometry",
-        startPoint: point,
-        startPoints: points.map(([x, y]) => [x, y]),
-      };
-      setIsDragging(true);
-      return;
-    }
+		if (editable) {
+			// Camera cố định nên chỉ hỗ trợ kéo điểm/đoạn/vùng, không scale/rotate.
+			const editTargetLabel = getEditTargetLabel(
+				editTarget,
+				parsedEditTarget.scope === "lane" ||
+					parsedEditTarget.scope === "lane_maneuver"
+					? selectedLaneId
+					: null,
+				selectedManeuver,
+			);
+			const geometryNoun = getEditTargetGeometryNoun(editTarget);
+			const editHint = isPolygonEditTarget(editTarget)
+				? "kéo điểm để chỉnh, kéo trong vùng để di chuyển, click cạnh để chèn điểm."
+				: isPolylineEditTarget(editTarget)
+					? "kéo điểm để chỉnh, click đoạn để chèn điểm."
+					: "kéo điểm hoặc kéo đường để di chuyển.";
+			ctx.fillStyle = "rgba(255,255,255,0.78)";
+			ctx.font = "12px sans-serif";
+			ctx.fillText(`${editTargetLabel} (${geometryNoun}): ${editHint}`, 14, 22);
+		}
+	}, [
+		editTarget,
+		editable,
+		frameWidth,
+		frameHeight,
+		backgroundImage,
+		overlay,
+		hoverEdge,
+		hoverVertexIndex,
+		laneColors,
+		parsedEditTarget.scope,
+		selectedManeuver,
+		renderedLanes,
+		selectedVertexIndex,
+		selectedLaneId,
+		vehicles,
+		trajectoryOverlays,
+		processingFps,
+		canvasDisplaySize.width,
+		canvasDisplaySize.height,
+	]);
 
-    if (onCanvasClick) {
-      onVertexSelect?.(null);
-      onCanvasClick(normalizePoint(clampPoint(point, frameWidth, frameHeight), frameWidth, frameHeight));
-    }
-  };
+	const handleMouseDown = (event) => {
+		if (!editable) return;
+		const point = getCanvasPoint(event);
+		const points = editablePointsRef.current;
+		const interactionMetrics = createDisplayMetrics(
+			canvasRef.current,
+			frameWidth,
+			frameHeight,
+		);
+		const vertexHitRadius = interactionMetrics.px(VERTEX_HIT_RADIUS);
+		const edgeHitDistance = interactionMetrics.px(EDGE_HIT_DISTANCE);
+		const vertex = findClosestVertex(points, point, vertexHitRadius);
+		const targetIsLine = isLineEditTarget(editTarget);
+		const targetIsPolygon = isPolygonEditTarget(editTarget);
+		const targetIsPolyline = isPolylineEditTarget(editTarget);
 
-  const handleMouseMove = (event) => {
-    const point = getCanvasPoint(event);
-    const dragState = dragStateRef.current;
+		if (vertex) {
+			onVertexSelect?.(vertex.index);
+			dragStateRef.current = { mode: "vertex", vertexIndex: vertex.index };
+			setIsDragging(true);
+			return;
+		}
 
-    if (!dragState) {
-      updateHoverState(point);
-      return;
-    }
+		const edge = findClosestEdge(points, point, {
+			closed: targetIsPolygon,
+			hitDistance: edgeHitDistance,
+		});
+		if (edge && onPolygonReplace && (targetIsPolygon || targetIsPolyline)) {
+			// Click cạnh sẽ chèn thêm vertex mới ngay tại vị trí chiếu vuông góc.
+			const nextPoint = clampPoint(edge.point, frameWidth, frameHeight);
+			const nextPoints = [
+				...points.slice(0, edge.index + 1),
+				nextPoint,
+				...points.slice(edge.index + 1),
+			];
+			replaceEditableGeometry(nextPoints);
+			onVertexSelect?.(edge.index + 1);
+			dragStateRef.current = { mode: "vertex", vertexIndex: edge.index + 1 };
+			setHoverVertexIndex(edge.index + 1);
+			setHoverEdge(null);
+			setIsDragging(true);
+			return;
+		}
 
-    if (dragState.mode === "vertex") {
-      replaceEditableGeometry(
-        editablePointsRef.current.map((vertex, index) =>
-          index === dragState.vertexIndex ? clampPoint(point, frameWidth, frameHeight) : vertex,
-        ),
-      );
-      return;
-    }
+		if (targetIsLine && edge && onPolygonReplace) {
+			dragStateRef.current = {
+				mode: "geometry",
+				startPoint: point,
+				startPoints: points.map(([x, y]) => [x, y]),
+			};
+			setIsDragging(true);
+			return;
+		}
 
-    if (dragState.mode === "geometry") {
-      const dx = point[0] - dragState.startPoint[0];
-      const dy = point[1] - dragState.startPoint[1];
-      replaceEditableGeometry(
-        dragState.startPoints.map(([x, y]) => clampPoint([x + dx, y + dy], frameWidth, frameHeight)),
-      );
-    }
-  };
+		if (
+			targetIsPolygon &&
+			points.length >= 3 &&
+			pointInPolygon(point, points) &&
+			onPolygonReplace
+		) {
+			// Kéo trong vùng polygon để di chuyển toàn bộ hình học.
+			dragStateRef.current = {
+				mode: "geometry",
+				startPoint: point,
+				startPoints: points.map(([x, y]) => [x, y]),
+			};
+			setIsDragging(true);
+			return;
+		}
 
-  const stopDragging = () => {
-    dragStateRef.current = null;
-    setIsDragging(false);
-  };
+		if (onCanvasClick) {
+			onVertexSelect?.(null);
+			onCanvasClick(
+				normalizePoint(
+					clampPoint(point, frameWidth, frameHeight),
+					frameWidth,
+					frameHeight,
+				),
+			);
+		}
+	};
 
-  useEffect(() => {
-    if (!isDragging) return undefined;
+	const handleMouseMove = (event) => {
+		const point = getCanvasPoint(event);
+		const dragState = dragStateRef.current;
 
-    const handleWindowMouseMove = (event) => {
-      const point = getCanvasPointFromClient(event.clientX, event.clientY);
-      const dragState = dragStateRef.current;
-      if (!dragState) return;
+		if (!dragState) {
+			updateHoverState(point);
+			return;
+		}
 
-      if (dragState.mode === "vertex") {
-        replaceEditableGeometry(
-          editablePointsRef.current.map((vertex, index) =>
-            index === dragState.vertexIndex ? clampPoint(point, frameWidth, frameHeight) : vertex,
-          ),
-        );
-        return;
-      }
+		if (dragState.mode === "vertex") {
+			replaceEditableGeometry(
+				editablePointsRef.current.map((vertex, index) =>
+					index === dragState.vertexIndex
+						? clampPoint(point, frameWidth, frameHeight)
+						: vertex,
+				),
+			);
+			return;
+		}
 
-      if (dragState.mode === "geometry") {
-        const dx = point[0] - dragState.startPoint[0];
-        const dy = point[1] - dragState.startPoint[1];
-        replaceEditableGeometry(
-          dragState.startPoints.map(([x, y]) => clampPoint([x + dx, y + dy], frameWidth, frameHeight)),
-        );
-      }
-    };
+		if (dragState.mode === "geometry") {
+			const dx = point[0] - dragState.startPoint[0];
+			const dy = point[1] - dragState.startPoint[1];
+			replaceEditableGeometry(
+				dragState.startPoints.map(([x, y]) =>
+					clampPoint([x + dx, y + dy], frameWidth, frameHeight),
+				),
+			);
+		}
+	};
 
-    const handleWindowMouseUp = () => {
-      stopDragging();
-    };
+	const stopDragging = () => {
+		dragStateRef.current = null;
+		setIsDragging(false);
+	};
 
-    window.addEventListener("mousemove", handleWindowMouseMove);
-    window.addEventListener("mouseup", handleWindowMouseUp);
-    return () => {
-      window.removeEventListener("mousemove", handleWindowMouseMove);
-      window.removeEventListener("mouseup", handleWindowMouseUp);
-    };
-  }, [frameHeight, frameWidth, isDragging]);
+	useEffect(() => {
+		if (!isDragging) return undefined;
 
-  return (
-    <canvas
-      ref={canvasRef}
-      onMouseDown={handleMouseDown}
-      onMouseMove={handleMouseMove}
-      onMouseUp={stopDragging}
-      onMouseLeave={() => {
-        if (!isDragging) {
-          setHoverEdge(null);
-          setHoverVertexIndex(null);
-        }
-      }}
-      style={
-        overlay
-          ? {
-              position: "absolute",
-              left: 0,
-              top: 0,
-              width: "100%",
-              height: "100%",
-              background: "transparent",
-              borderRadius: 10,
-              pointerEvents: editable ? "auto" : "none",
-              cursor: editable ? (isDragging ? "grabbing" : "crosshair") : "default",
-            }
-          : {
-              width: "100%",
-              height: "auto",
-              background: "#12202f",
-              borderRadius: 10,
-              display: "block",
-              cursor: editable ? (isDragging ? "grabbing" : "crosshair") : "default",
-            }
-      }
-    />
-  );
+		const handleWindowMouseMove = (event) => {
+			const point = getCanvasPointFromClient(event.clientX, event.clientY);
+			const dragState = dragStateRef.current;
+			if (!dragState) return;
+
+			if (dragState.mode === "vertex") {
+				replaceEditableGeometry(
+					editablePointsRef.current.map((vertex, index) =>
+						index === dragState.vertexIndex
+							? clampPoint(point, frameWidth, frameHeight)
+							: vertex,
+					),
+				);
+				return;
+			}
+
+			if (dragState.mode === "geometry") {
+				const dx = point[0] - dragState.startPoint[0];
+				const dy = point[1] - dragState.startPoint[1];
+				replaceEditableGeometry(
+					dragState.startPoints.map(([x, y]) =>
+						clampPoint([x + dx, y + dy], frameWidth, frameHeight),
+					),
+				);
+			}
+		};
+
+		const handleWindowMouseUp = () => {
+			stopDragging();
+		};
+
+		window.addEventListener("mousemove", handleWindowMouseMove);
+		window.addEventListener("mouseup", handleWindowMouseUp);
+		return () => {
+			window.removeEventListener("mousemove", handleWindowMouseMove);
+			window.removeEventListener("mouseup", handleWindowMouseUp);
+		};
+	}, [frameHeight, frameWidth, isDragging]);
+
+	return (
+		<canvas
+			ref={canvasRef}
+			onMouseDown={handleMouseDown}
+			onMouseMove={handleMouseMove}
+			onMouseUp={stopDragging}
+			onMouseLeave={() => {
+				if (!isDragging) {
+					setHoverEdge(null);
+					setHoverVertexIndex(null);
+				}
+			}}
+			style={
+				overlay
+					? {
+							position: "absolute",
+							left: 0,
+							top: 0,
+							width: "100%",
+							height: "100%",
+							background: "transparent",
+							borderRadius: 10,
+							pointerEvents: editable ? "auto" : "none",
+							cursor: editable
+								? isDragging
+									? "grabbing"
+									: "crosshair"
+								: "default",
+						}
+					: {
+							width: "100%",
+							height: "auto",
+							background: "#12202f",
+							borderRadius: 10,
+							display: "block",
+							cursor: editable
+								? isDragging
+									? "grabbing"
+									: "crosshair"
+								: "default",
+						}
+			}
+		/>
+	);
 }
-

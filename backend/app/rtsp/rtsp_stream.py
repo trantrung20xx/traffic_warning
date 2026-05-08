@@ -15,7 +15,9 @@ NETWORK_SOURCE_PREFIXES = ("rtsp://", "rtsps://", "http://", "https://")
 
 @dataclass(frozen=True)
 class VideoSourceDescriptor:
+    # Chuỗi source đã normalize để dùng trực tiếp cho OpenCV.
     normalized_source: str
+    # Cờ phân biệt file cục bộ và stream mạng.
     is_local_file: bool
 
 
@@ -25,15 +27,18 @@ def _describe_video_source(source: str) -> VideoSourceDescriptor:
         return VideoSourceDescriptor(normalized_source="", is_local_file=False)
 
     if s.lower().startswith(NETWORK_SOURCE_PREFIXES):
+        # URL mạng giữ nguyên, không resolve sang path local.
         return VideoSourceDescriptor(normalized_source=s, is_local_file=False)
 
     try:
         local_path = Path(s)
         if local_path.exists() and local_path.is_file():
+            # File local được resolve tuyệt đối để tránh phụ thuộc cwd runtime.
             return VideoSourceDescriptor(normalized_source=str(local_path.resolve()), is_local_file=True)
     except OSError:
         pass
 
+    # Fallback: coi như source không-local để lớp trên tự xử lý lỗi mở stream.
     return VideoSourceDescriptor(normalized_source=s, is_local_file=False)
 
 
@@ -46,7 +51,9 @@ def is_local_video_file(source: str) -> bool:
 
 @dataclass
 class Frame:
+    # Frame BGR raw lấy từ OpenCV.
     bgr: np.ndarray
+    # Timestamp epoch ms tại lúc thread reader nhận frame.
     timestamp_utc_ms: int
 
 
@@ -65,17 +72,21 @@ class RtspFrameReader:
         frame_height: Optional[int] = None,
     ):
         source_descriptor = _describe_video_source(rtsp_url)
+        # URL/path đã normalize cho VideoCapture.
         self.rtsp_url = source_descriptor.normalized_source
         self._source_is_local_file = source_descriptor.is_local_file
         self.reconnect_delay_s = float(reconnect_delay_s)
         self.frame_width = frame_width
         self.frame_height = frame_height
+        # Lock cho resource capture và buffer frame dùng chung giữa thread.
         self._cap_lock = threading.Lock()
         self._latest_lock = threading.Lock()
         self._cap: Optional[cv2.VideoCapture] = None
         self._latest_frame: Optional[Frame] = None
+        # Seq tăng mỗi frame để read(only_new=True) biết frame đã đổi chưa.
         self._latest_frame_seq: int = 0
         self._last_delivered_seq: int = 0
+        # Nhịp pacing chỉ áp dụng cho source là file video local.
         self._file_frame_interval_s: Optional[float] = None
         self._file_next_deadline_s: Optional[float] = None
         self._stop_event = threading.Event()
@@ -92,24 +103,29 @@ class RtspFrameReader:
                 self._cap.release()
             except Exception:
                 pass
+        # Mở lại VideoCapture mỗi lần reconnect.
         self._cap = cv2.VideoCapture(self.rtsp_url)
         cap = self._cap
         if cap is not None:
             try:
+                # Buffer nhỏ để giảm độ trễ realtime.
                 cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
             except Exception:
                 pass
             if hasattr(cv2, "CAP_PROP_OPEN_TIMEOUT_MSEC"):
                 try:
+                    # Timeout mở stream để không treo quá lâu.
                     cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 1000)
                 except Exception:
                     pass
             if hasattr(cv2, "CAP_PROP_READ_TIMEOUT_MSEC"):
                 try:
+                    # Timeout đọc frame để vòng reconnect phản ứng nhanh.
                     cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 1000)
                 except Exception:
                     pass
             if self._source_is_local_file:
+                # File local cần pacing để phát theo FPS gốc.
                 self._configure_file_playback_pacing(cap)
             else:
                 self._file_frame_interval_s = None
@@ -122,8 +138,10 @@ class RtspFrameReader:
         except Exception:
             fps = 0.0
         if not (1.0 <= fps <= 240.0):
+            # FPS bất thường thì fallback giá trị an toàn.
             fps = 25.0
         self._file_frame_interval_s = 1.0 / fps
+        # Deadline khởi tạo theo thời điểm hiện tại.
         self._file_next_deadline_s = time.perf_counter()
 
     def _pace_file_playback_if_needed(self) -> bool:
@@ -136,11 +154,13 @@ class RtspFrameReader:
         if deadline is None:
             deadline = now
 
+        # Cập nhật deadline frame kế tiếp theo nhịp cố định.
         deadline += interval
         self._file_next_deadline_s = deadline
 
         sleep_s = deadline - now
         if sleep_s > 0:
+            # Sleep có thể bị ngắt bởi stop_event để shutdown nhanh.
             if self._stop_event.wait(sleep_s):
                 return False
         elif sleep_s < -1.0:
@@ -156,6 +176,7 @@ class RtspFrameReader:
                 cap = self._cap
 
             if cap is None:
+                # Chưa mở được capture: chờ rồi thử lại.
                 if self._stop_event.wait(self.reconnect_delay_s):
                     break
                 continue
@@ -165,6 +186,7 @@ class RtspFrameReader:
             except Exception:
                 ok, frame = False, None
             if not ok or frame is None:
+                # Mất frame -> chờ ngắn rồi reopen capture.
                 if self._stop_event.wait(self.reconnect_delay_s):
                     break
                 with self._cap_lock:
@@ -172,10 +194,12 @@ class RtspFrameReader:
                 continue
 
             if self.frame_width and self.frame_height:
+                # Resize về kích thước chuẩn để đồng bộ với lane polygon runtime.
                 frame = cv2.resize(frame, (self.frame_width, self.frame_height))
 
             snapshot = Frame(bgr=frame, timestamp_utc_ms=int(time.time() * 1000))
             with self._latest_lock:
+                # Luôn ghi đè frame mới nhất, không tích backlog.
                 self._latest_frame = snapshot
                 self._latest_frame_seq += 1
             if not self._pace_file_playback_if_needed():
@@ -194,10 +218,12 @@ class RtspFrameReader:
         return Frame(bgr=latest.bgr.copy(), timestamp_utc_ms=latest.timestamp_utc_ms)
 
     def close(self) -> None:
+        # Signal dừng cho reader loop và các wait() đang chờ.
         self._stop_event.set()
         cap_to_release: Optional[cv2.VideoCapture] = None
         if self._cap_lock.acquire(timeout=0.1):
             try:
+                # Tách cap ra biến cục bộ để release ngoài lock.
                 cap_to_release = self._cap
                 self._cap = None
             finally:
@@ -210,6 +236,7 @@ class RtspFrameReader:
                 except Exception:
                     pass
 
+            # Release trong thread riêng để tránh close() bị treo dài bất thường.
             release_thread = threading.Thread(
                 target=_release_capture,
                 args=(cap_to_release,),
@@ -220,5 +247,6 @@ class RtspFrameReader:
             release_thread.join(timeout=0.2)
 
         if self._reader_thread.is_alive():
+            # Join ngắn để shutdown mềm, không chặn server quá lâu.
             self._reader_thread.join(timeout=0.5)
 

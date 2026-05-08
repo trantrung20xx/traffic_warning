@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import WebSocket
 from app.core.background_images import (
@@ -25,6 +25,7 @@ from app.core.config import (
 from app.db.repository import query_dashboard_analytics, query_violation_history
 from app.db.database import create_engine_and_session
 from app.managers.camera_context import CameraContext
+from app.logic.direction_logic import DirectionDetectionSettings
 from app.logic.geometry_validator import validate_lane_geometry
 from app.schemas.camera import CameraConfig
 from app.schemas.events import TrackMessage, ViolationEvent
@@ -34,16 +35,23 @@ class CameraManager:
     """Quản lý danh sách camera, context runtime và các kênh realtime toàn hệ thống."""
 
     def __init__(self, repo_root: Path):
+        # Root thư mục dự án để resolve toàn bộ path config/evidence.
         self.repo_root = repo_root
+        # Load settings typed ngay khi khởi tạo manager.
         self.cfg = load_app_config(repo_root)
 
+        # Validate tính toàn vẹn giữa cameras.json và lane_configs/* trước khi chạy.
         validate_no_shared_lanes_across_cameras(repo_root)
         self.cameras: list[CameraConfig] = load_cameras(repo_root)
 
+        # Engine/session dùng chung cho query lịch sử và analytics.
         self._engine, self._SessionLocal = create_engine_and_session(self.cfg.db_path)
 
+        # Runtime map camera_id -> context xử lý realtime.
         self._contexts: dict[str, CameraContext] = {}
+        # Cờ stop dùng chung cho toàn bộ camera task.
         self._stop_event = asyncio.Event()
+        # Map camera_id -> asyncio task đang chạy run_forever.
         self._tasks: dict[str, asyncio.Task] = {}
         self._running = False
 
@@ -55,9 +63,11 @@ class CameraManager:
 
     @property
     def session_factory(self):
+        # Expose session factory cho API layer cần query DB.
         return self._SessionLocal
 
     def list_cameras(self) -> list[dict]:
+        # Trả danh sách camera ở dạng dict JSON-friendly cho API.
         rows = []
         for cam in self.cameras:
             rows.append(
@@ -80,10 +90,12 @@ class CameraManager:
         return rows
 
     def get_camera_detail(self, camera_id: str) -> dict:
+        # Tìm camera theo id; không thấy thì ném KeyError để route map thành 404.
         cam = next((item for item in self.cameras if item.camera_id == camera_id), None)
         if cam is None:
             raise KeyError(camera_id)
         lane_cfg = load_lane_config_for_camera(self.repo_root, camera_id)
+        # Validate geometry để UI biết cảnh báo cấu hình hiện tại.
         validation = validate_lane_geometry(lane_cfg)
         return {
             "camera": {
@@ -109,6 +121,7 @@ class CameraManager:
         }
 
     def upsert_camera(self, camera_config: CameraConfig, lane_config: CameraLaneConfig) -> dict:
+        # Guard nghiệp vụ: danh sách monitored_lanes phải khớp tuyệt đối với lane_config.
         if camera_config.camera_id != lane_config.camera_id:
             raise ValueError("camera_id mismatch between camera_config and lane_config")
         lane_ids = [lane.lane_id for lane in lane_config.lanes]
@@ -118,25 +131,32 @@ class CameraManager:
             raise ValueError("monitored_lanes must match lane_config lane_id values")
 
         next_cameras = [cam for cam in self.cameras if cam.camera_id != camera_config.camera_id]
+        # Upsert: thay camera cũ cùng id bằng camera mới.
         next_cameras.append(camera_config)
+        # Giữ thứ tự cố định theo camera_id để file config dễ review diff.
         next_cameras.sort(key=lambda cam: cam.camera_id)
 
+        # Ghi file camera và lane config xuống disk.
         save_cameras(self.repo_root, next_cameras)
         save_lane_config_for_camera(self.repo_root, lane_config)
+        # Re-validate sau ghi để chặn trạng thái shared lane ngoài ý muốn.
         validate_no_shared_lanes_across_cameras(self.repo_root)
 
         self.cameras = next_cameras
+        # Reload context runtime để áp dụng cấu hình mới ngay.
         self._reload_context(camera_config.camera_id)
         return self.get_camera_detail(camera_config.camera_id)
 
     def delete_camera(self, camera_id: str) -> None:
         if not any(cam.camera_id == camera_id for cam in self.cameras):
             raise KeyError(camera_id)
+        # Dừng context trước khi xóa metadata/config để tránh đọc dữ liệu mồ côi.
         self._stop_context(camera_id)
         self.cameras = [cam for cam in self.cameras if cam.camera_id != camera_id]
         save_cameras(self.repo_root, self.cameras)
         delete_lane_config_for_camera(self.repo_root, camera_id)
         delete_background_image(self.repo_root, camera_id)
+        # Dọn evidence ảnh vi phạm để không còn dữ liệu mồ côi theo camera đã xóa.
         delete_evidence_images_for_camera(self.repo_root, camera_id)
 
     def query_history(
@@ -145,18 +165,22 @@ class CameraManager:
         from_ts: Optional[str],
         to_ts: Optional[str],
         camera_id: Optional[str],
+        license_plate: Optional[str],
         limit: Optional[int],
     ):
+        # Query lịch sử qua repository, session scope theo từng request.
         with self._SessionLocal() as session:
             return query_violation_history(
                 session,
                 from_ts=from_ts,
                 to_ts=to_ts,
                 camera_id=camera_id,
+                license_plate=license_plate,
                 limit=limit,
             )
 
     def query_dashboard(self, *, from_ts: Optional[str], to_ts: Optional[str], camera_id: Optional[str]):
+        # Dashboard aggregate được tính theo filter và chart_config hiện tại.
         with self._SessionLocal() as session:
             return query_dashboard_analytics(
                 session,
@@ -168,38 +192,25 @@ class CameraManager:
 
     def _on_track(self, msg: TrackMessage) -> None:
         # Hàm này chạy trong event loop của CameraContext nên chỉ dùng thao tác không chặn.
-        dead: list[asyncio.Queue] = []
-        for q in list(self._track_listeners):
-            try:
-                q.put_nowait(msg)
-            except asyncio.QueueFull:
-                dead.append(q)
-        for q in dead:
-            self._track_listeners.discard(q)
+        self._broadcast_to_listeners(listeners=self._track_listeners, message=msg)
 
     def _on_violation(self, ev: ViolationEvent) -> None:
-        dead: list[asyncio.Queue] = []
-        for q in list(self._violation_listeners):
-            try:
-                q.put_nowait(ev)
-            except asyncio.QueueFull:
-                dead.append(q)
-        for q in dead:
-            self._violation_listeners.discard(q)
+        # Broadcast sự kiện vi phạm tới toàn bộ listener queue đã đăng ký.
+        self._broadcast_to_listeners(listeners=self._violation_listeners, message=ev)
 
     def create_track_listener(self, *, maxsize: Optional[int] = None) -> asyncio.Queue[TrackMessage | None]:
-        queue_size = int(maxsize) if maxsize is not None else int(self.cfg.websocket_listener_queue_maxsize)
-        q: asyncio.Queue[TrackMessage | None] = asyncio.Queue(maxsize=max(queue_size, 1))
+        # Mỗi client/consumer được cấp một queue riêng để tránh tranh chấp dữ liệu.
+        q: asyncio.Queue[TrackMessage | None] = self._create_listener_queue(maxsize=maxsize)
         self._track_listeners.add(q)
         return q
 
     def create_violation_listener(self, *, maxsize: Optional[int] = None) -> asyncio.Queue[ViolationEvent | None]:
-        queue_size = int(maxsize) if maxsize is not None else int(self.cfg.websocket_listener_queue_maxsize)
-        q: asyncio.Queue[ViolationEvent | None] = asyncio.Queue(maxsize=max(queue_size, 1))
+        q: asyncio.Queue[ViolationEvent | None] = self._create_listener_queue(maxsize=maxsize)
         self._violation_listeners.add(q)
         return q
 
     def remove_track_listener(self, q: asyncio.Queue[TrackMessage | None]) -> None:
+        # discard an toàn ngay cả khi q không còn trong set.
         self._track_listeners.discard(q)
 
     def remove_violation_listener(self, q: asyncio.Queue[ViolationEvent | None]) -> None:
@@ -220,6 +231,7 @@ class CameraManager:
     def get_lane_polygons(self, camera_id: str) -> dict:
         ctx = self._contexts.get(camera_id)
         if ctx is None:
+            # Khi context chưa chạy, trả dữ liệu từ file config đã denormalize.
             lane_cfg = load_lane_config_for_camera(self.repo_root, camera_id)
             lane_cfg_pixels = denormalize_lane_config(lane_cfg)
             validation = validate_lane_geometry(lane_cfg)
@@ -246,8 +258,10 @@ class CameraManager:
         payload = ctx.get_lane_polygons_for_ui()
         try:
             lane_cfg = load_lane_config_for_camera(self.repo_root, camera_id)
+            # Luôn trả validation mới nhất từ file để UI cảnh báo chính xác.
             payload["config_validation"] = validate_lane_geometry(lane_cfg)
         except Exception:
+            # Lỗi load/validate config không làm hỏng API runtime lane payload.
             payload["config_validation"] = []
         return payload
 
@@ -277,6 +291,7 @@ class CameraManager:
 
     def has_background_image(self, camera_id: str) -> bool:
         self._require_camera_exists(camera_id)
+        # Chỉ cần kiểm tra path tồn tại hay không.
         return get_background_image_path(self.repo_root, camera_id) is not None
 
     def get_background_image_path(self, camera_id: str) -> Optional[Path]:
@@ -292,6 +307,7 @@ class CameraManager:
         path = get_background_image_path(self.repo_root, camera_id)
         if path is None:
             return False
+        # Có path thì thực hiện xóa và trả True.
         delete_background_image(self.repo_root, camera_id)
         return True
 
@@ -306,6 +322,7 @@ class CameraManager:
 
     async def start(self) -> None:
         if self._running:
+            # Idempotent: start lại khi đang chạy sẽ bỏ qua.
             return
         self._stop_event.clear()
         for cam in self.cameras:
@@ -314,6 +331,7 @@ class CameraManager:
 
     async def stop(self) -> None:
         self._stop_event.set()
+        # Đẩy sentinel trước để consumer thoát vòng lặp đọc queue nhanh.
         self._notify_listener_shutdown()
         await self._close_active_websockets()
         for context in list(self._contexts.values()):
@@ -321,11 +339,13 @@ class CameraManager:
         tasks = list(self._tasks.values())
         if tasks:
             try:
+                # Chờ các context thoát mềm trong timeout đầu tiên.
                 await asyncio.wait_for(
                     asyncio.gather(*tasks, return_exceptions=True),
                     timeout=6.0,
                 )
             except asyncio.TimeoutError:
+                # Quá timeout thì cancel cứng phần task còn treo.
                 for task in tasks:
                     task.cancel()
                 try:
@@ -342,15 +362,18 @@ class CameraManager:
         self._track_websockets.clear()
         self._violation_websockets.clear()
         try:
+            # Đóng engine SQLAlchemy khi manager dừng hẳn.
             self._engine.dispose()
         except Exception:
             pass
         self._running = False
 
     def _build_context(self, camera_id: str) -> CameraContext:
+        # Context lấy camera config + lane config hiện hành để dựng pipeline runtime.
         cam = next(item for item in self.cameras if item.camera_id == camera_id)
         lane_cfg = load_lane_config_for_camera(self.repo_root, cam.camera_id)
         lane_cfg_pixels = denormalize_lane_config(lane_cfg)
+        # Context nhận full runtime config đã map từ settings + lane config đã denormalize.
         return CameraContext(
             repo_root=self.repo_root,
             camera_config=cam,
@@ -358,11 +381,12 @@ class CameraManager:
             db_session_factory=self._SessionLocal,
             on_track=self._on_track,
             on_violation=self._on_violation,
-            on_log=lambda msg: print(msg, flush=True),
             detector_weights_path=str((self.repo_root / self.cfg.detector_weights_path).resolve()),
+            detector_backend=self.cfg.detector_backend,
             detector_device=self.cfg.detector_device,
             detector_conf_threshold=self.cfg.detector_conf_threshold,
             detector_iou_threshold=self.cfg.detector_iou_threshold,
+            detector_allowed_classes=self.cfg.detector_allowed_classes,
             tracker_config=self.cfg.tracker_config,
             vehicle_type_history_window_ms=self.cfg.vehicle_type_history_window_ms,
             vehicle_type_history_size=self.cfg.vehicle_type_history_size,
@@ -404,7 +428,7 @@ class CameraManager:
             motion_window_samples=self.cfg.motion_window_samples,
             turn_evidence_decay_per_frame=self.cfg.evidence_fusion_turn_scoring.decay_per_frame,
             turn_evidence_score_cap=self.cfg.evidence_fusion_turn_scoring.score_cap,
-            turn_evidence_corridor_hit_weight=self.cfg.evidence_fusion_turn_scoring.corridor_hit_weight,
+            turn_evidence_turn_zone_hit_weight=self.cfg.evidence_fusion_turn_scoring.turn_zone_hit_weight,
             turn_evidence_exit_zone_hit_weight=self.cfg.evidence_fusion_turn_scoring.exit_zone_hit_weight,
             turn_evidence_exit_line_hit_weight=self.cfg.evidence_fusion_turn_scoring.exit_line_hit_weight,
             turn_evidence_heading_support_weight=self.cfg.evidence_fusion_turn_scoring.heading_support_weight,
@@ -414,7 +438,7 @@ class CameraManager:
             turn_evidence_no_signal_penalty=self.cfg.evidence_fusion_turn_scoring.no_signal_penalty,
             turn_evidence_temporal_hits_min=self.cfg.evidence_fusion_turn_scoring.temporal_hits_min,
             turn_evidence_strong_exit_min_temporal_hits=self.cfg.evidence_fusion_turn_scoring.strong_exit_min_temporal_hits,
-            turn_evidence_strong_exit_min_corridor_hits=self.cfg.evidence_fusion_turn_scoring.strong_exit_min_corridor_hits,
+            turn_evidence_strong_exit_min_turn_zone_hits=self.cfg.evidence_fusion_turn_scoring.strong_exit_min_turn_zone_hits,
             turn_score_threshold=self.cfg.evidence_fusion_turn_scoring.threshold_turn,
             turn_score_threshold_with_exit=self.cfg.evidence_fusion_turn_scoring.threshold_turn_with_exit,
             u_turn_score_threshold=self.cfg.evidence_fusion_turn_scoring.threshold_u_turn,
@@ -422,31 +446,82 @@ class CameraManager:
             straight_score_threshold=self.cfg.evidence_fusion_turn_scoring.threshold_straight,
             trajectory_sample_inside_polygon_min_hits=self.cfg.turn_detection_trajectory.sample_inside_polygon_min_hits,
             trajectory_entry_heading_lookback_points=self.cfg.turn_detection_trajectory.entry_heading_lookback_points,
+            trajectory_entry_heading_min_displacement_px=(
+                self.cfg.turn_detection_trajectory.entry_heading_min_displacement_px
+            ),
             trajectory_heading_local_window_points=self.cfg.turn_detection_trajectory.heading_local_window_points,
+            lane_fallback_reference_sample_window=(
+                self.cfg.turn_detection_trajectory.fallback_reference.sample_window
+            ),
+            lane_fallback_reference_min_samples=self.cfg.turn_detection_trajectory.fallback_reference.min_samples,
+            lane_fallback_reference_consensus_min=self.cfg.turn_detection_trajectory.fallback_reference.consensus_min,
+            lane_fallback_reference_inlier_dot_min=self.cfg.turn_detection_trajectory.fallback_reference.inlier_dot_min,
+            lane_fallback_reference_inlier_ratio_min=(
+                self.cfg.turn_detection_trajectory.fallback_reference.inlier_ratio_min
+            ),
+            lane_fallback_reference_max_age_ms=self.cfg.turn_detection_trajectory.fallback_reference.max_age_ms,
+            lane_fallback_reference_trajectory_blend_max_weight=(
+                self.cfg.turn_detection_trajectory.fallback_reference.trajectory_blend_max_weight
+            ),
+            lane_fallback_reference_trajectory_blend_min_alignment_dot=(
+                self.cfg.turn_detection_trajectory.fallback_reference.trajectory_blend_min_alignment_dot
+            ),
+            direction_detection_settings=DirectionDetectionSettings.from_values(
+                **self.cfg.direction_detection_defaults.model_dump()
+            ),
             state_prune_max_age_s=self.cfg.state_prune_max_age_s,
             rtsp_reconnect_delay_s=self.cfg.rtsp_reconnect_delay_s,
             preview_max_fps=self.cfg.preview_max_fps,
             preview_jpeg_quality=self.cfg.preview_jpeg_quality,
             processing_fps_window_s=self.cfg.processing_fps_window_s,
+            processing_prune_interval_ms=self.cfg.processing_prune_interval_ms,
+            license_plate_worker_max_pending_jobs=self.cfg.license_plate_worker_max_pending_jobs,
+            license_plate_worker_batch_size=self.cfg.license_plate_worker_batch_size,
             evidence_crop_expand_x_ratio=self.cfg.evidence_crop_expand_x_ratio,
             evidence_crop_expand_y_top_ratio=self.cfg.evidence_crop_expand_y_top_ratio,
             evidence_crop_expand_y_bottom_ratio=self.cfg.evidence_crop_expand_y_bottom_ratio,
             evidence_crop_min_size_px=self.cfg.evidence_crop_min_size_px,
             evidence_jpeg_quality=self.cfg.evidence_jpeg_quality,
+            license_plate_enabled=self.cfg.license_plate.enabled,
+            license_plate_detector_weights_path=str(
+                (self.repo_root / self.cfg.license_plate.detector_weights_path).resolve()
+            ),
+            license_plate_detector_conf_threshold=self.cfg.license_plate.detector_confidence_threshold,
+            license_plate_detector_allowed_classes=self.cfg.license_plate.detector_allowed_classes,
+            license_plate_detector_backend=self.cfg.license_plate.detector_backend,
+            license_plate_ocr_backend=self.cfg.license_plate.ocr_backend,
+            license_plate_easyocr_lang=self.cfg.license_plate.easyocr_lang,
+            license_plate_easyocr_use_gpu=self.cfg.license_plate.easyocr_use_gpu,
+            license_plate_paddle_ocr_version=self.cfg.license_plate.paddle_ocr_version,
+            license_plate_paddle_text_detection_model_name=self.cfg.license_plate.paddle_text_detection_model_name,
+            license_plate_paddle_text_recognition_model_name=self.cfg.license_plate.paddle_text_recognition_model_name,
+            license_plate_paddle_lang=self.cfg.license_plate.paddle_lang,
+            license_plate_paddle_use_gpu=self.cfg.license_plate.paddle_use_gpu,
+            license_plate_read_interval_ms=self.cfg.license_plate.read_interval_ms,
+            license_plate_min_ocr_confidence=self.cfg.license_plate.min_ocr_confidence,
+            license_plate_consensus_min_hits=self.cfg.license_plate.consensus_min_hits,
+            license_plate_candidate_window_ms=self.cfg.license_plate.candidate_window_ms,
+            license_plate_max_attempts_before_unreadable=self.cfg.license_plate.max_attempts_before_unreadable,
+            license_plate_crop_expand_x_ratio=self.cfg.license_plate.crop_expand_x_ratio,
+            license_plate_crop_expand_y_ratio=self.cfg.license_plate.crop_expand_y_ratio,
+            license_plate_image_jpeg_quality=self.cfg.license_plate.image_jpeg_quality,
         )
 
     def _ui_payload(self) -> dict:
+        # Payload UI typed trả thẳng từ settings hiện hành.
         return self.cfg.ui.model_dump(mode="json")
 
     def _start_context(self, camera_id: str) -> None:
         ctx = self._build_context(camera_id)
         self._contexts[camera_id] = ctx
         if self._running or not self._stop_event.is_set():
+            # Mỗi camera chạy một task riêng, cô lập lỗi/độ trễ giữa các camera.
             self._tasks[camera_id] = asyncio.create_task(ctx.run_forever(stop_event=self._stop_event))
 
     def _stop_context(self, camera_id: str) -> None:
         task = self._tasks.pop(camera_id, None)
         if task is not None:
+            # Cancel task event-loop trước rồi mới request shutdown resource nền.
             task.cancel()
         ctx = self._contexts.pop(camera_id, None)
         if ctx is not None:
@@ -461,10 +536,12 @@ class CameraManager:
             self._start_context(camera_id)
 
     def _require_camera_exists(self, camera_id: str) -> None:
+        # Guard thống nhất cho các API thao tác theo camera_id.
         if not any(cam.camera_id == camera_id for cam in self.cameras):
             raise KeyError(camera_id)
 
     def _notify_listener_shutdown(self) -> None:
+        # Gửi sentinel None để consumer thoát vòng lặp đọc queue.
         for q in list(self._track_listeners):
             try:
                 q.put_nowait(None)
@@ -483,7 +560,27 @@ class CameraManager:
             except Exception:
                 pass
 
+        # Đóng toàn bộ socket track + violation còn mở.
         sockets = list(self._track_websockets) + list(self._violation_websockets)
         if sockets:
             await asyncio.gather(*(close_one(ws) for ws in sockets), return_exceptions=True)
+
+    def _create_listener_queue(self, *, maxsize: Optional[int] = None) -> asyncio.Queue[Any]:
+        # maxsize request-level có thể override cấu hình mặc định.
+        queue_size = int(maxsize) if maxsize is not None else int(self.cfg.websocket_listener_queue_maxsize)
+        return asyncio.Queue(maxsize=max(queue_size, 1))
+
+    @staticmethod
+    def _broadcast_to_listeners(*, listeners: set[asyncio.Queue[Any]], message: Any) -> None:
+        # Queue full thì loại listener để tránh lan truyền backpressure toàn hệ thống.
+        dead: list[asyncio.Queue[Any]] = []
+        for queue in list(listeners):
+            try:
+                queue.put_nowait(message)
+            except asyncio.QueueFull:
+                dead.append(queue)
+        for queue in dead:
+            listeners.discard(queue)
+
+
 

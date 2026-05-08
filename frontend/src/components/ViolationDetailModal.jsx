@@ -5,12 +5,14 @@ import { getViolationEvidenceUrl } from "../api";
 import { buildViolationSections, getViolationLocationText, hasViolationCoreDetails } from "../violationDetails";
 import { getVehicleTypeLabel, getViolationLabel } from "../utils";
 
-function ViolationEvidence({ imageSrc }) {
+function ViolationEvidence({ imageSrc, licensePlateImageSrc }) {
   const [hasImageError, setHasImageError] = useState(false);
+  const [hasPlateImageError, setHasPlateImageError] = useState(false);
 
   useEffect(() => {
     setHasImageError(false);
-  }, [imageSrc]);
+    setHasPlateImageError(false);
+  }, [imageSrc, licensePlateImageSrc]);
 
   return (
     <section className="violation-detail-card violation-media-card">
@@ -34,6 +36,24 @@ function ViolationEvidence({ imageSrc }) {
           </div>
         )}
       </div>
+      {licensePlateImageSrc ? (
+        <div className="violation-media-frame violation-media-frame-plate">
+          {hasPlateImageError ? (
+            <div className="violation-media-empty">
+              <AppIcon name="image-off" size={28} />
+              <strong>Không tải được ảnh biển số</strong>
+              <span>Ảnh crop biển số đã lưu nhưng hiện không tải được.</span>
+            </div>
+          ) : (
+            <img
+              className="violation-media-image violation-media-image-plate"
+              alt="Ảnh crop biển số"
+              src={licensePlateImageSrc}
+              onError={() => setHasPlateImageError(true)}
+            />
+          )}
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -138,6 +158,9 @@ export default function ViolationDetailModal({ open, violation, imageSrc = null,
   const vehicleLabel = resolvedDetail?.vehicle_type ? getVehicleTypeLabel(resolvedDetail.vehicle_type) : "-";
   const violationLabel = resolvedDetail?.violation ? getViolationLabel(resolvedDetail.violation) : "Chi tiết vi phạm";
   const resolvedImageSrc = getViolationEvidenceUrl(imageSrc || resolvedDetail?.image_url || resolvedDetail?.image_path || resolvedDetail?.imageSrc || null);
+  const resolvedLicensePlateImageSrc = getViolationEvidenceUrl(
+    resolvedDetail?.license_plate_image_url || resolvedDetail?.license_plate_image_path || null,
+  );
 
   return createPortal(
     <div
@@ -181,7 +204,7 @@ export default function ViolationDetailModal({ open, violation, imageSrc = null,
 
         {!loading && !error && resolvedDetail ? (
           <div className="violation-modal-grid">
-            <ViolationEvidence imageSrc={resolvedImageSrc} />
+            <ViolationEvidence imageSrc={resolvedImageSrc} licensePlateImageSrc={resolvedLicensePlateImageSrc} />
             <ViolationMetadata sections={sections} />
           </div>
         ) : null}

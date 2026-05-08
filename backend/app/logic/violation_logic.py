@@ -4,9 +4,15 @@ from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
 from math import atan2, hypot
-from typing import Optional
+from typing import Callable, Optional, TypeVar
 
 from app.core.config import LanePolygon
+from app.logic.direction_logic import (
+    DIRECTION_STATUS_NOT_CONFIGURED,
+    DirectionDetectionSettings,
+    DirectionLogic,
+)
+from app.logic.lane_logic import LaneObservation
 from app.logic.polygon import (
     PreparedLine,
     PreparedPolygon,
@@ -14,22 +20,33 @@ from app.logic.polygon import (
     signed_distance_to_line,
 )
 
+TGeometry = TypeVar("TGeometry")
+
 
 @dataclass
 class IllegalLaneCandidate:
+    # Candidate sai làn tích lũy theo thời gian trước khi đủ điều kiện emit.
     source_lane_id: int
     target_lane_id: int
     started_ts: datetime
     source_lane_duration_ms: int = 0
+    observed_frames: int = 0
+    target_majority_hits: int = 0
+    target_confidence_sum: float = 0.0
+    source_confidence_sum: float = 0.0
+    started_center: Optional[tuple[float, float]] = None
+    latest_center: Optional[tuple[float, float]] = None
+    used_confidence_observation: bool = False
 
 
 @dataclass
 class TurnEvidence:
+    # Bằng chứng tích điểm cho từng maneuver trong turn state machine.
     maneuver: str
     score: float = 0.0
     first_seen_ts: Optional[datetime] = None
     last_seen_ts: Optional[datetime] = None
-    corridor_hits: int = 0
+    turn_zone_hits: int = 0
     exit_zone_hits: int = 0
     exit_line_hits: int = 0
     heading_support_hits: int = 0
@@ -41,6 +58,7 @@ class TurnEvidence:
 
 @dataclass
 class ViolationLifecycle:
+    # Lifecycle chống phát trùng trong cùng một "event window".
     phase: str = "candidate"  # candidate -> confirmed -> emitted -> active -> expired
     event_window_id: int = 1
     first_ts: Optional[datetime] = None
@@ -85,6 +103,7 @@ class MotionFeatures:
 
 @dataclass
 class TurnState:
+    # State machine turn theo từng xe.
     phase: str = "idle"
     source_lane_id: Optional[int] = None
     confirmed_maneuver: Optional[str] = None
@@ -110,6 +129,8 @@ class VehicleState:
     trajectory: deque[TrajectorySample] = field(default_factory=deque)
     line_crossings: dict[str, LineCrossingState] = field(default_factory=dict)
     violation_lifecycles: dict[str, ViolationLifecycle] = field(default_factory=dict)
+    direction_status: str = DIRECTION_STATUS_NOT_CONFIGURED
+    direction_dot: Optional[float] = None
     last_seen_ts: Optional[datetime] = None
 
 
@@ -130,6 +151,12 @@ class ViolationLogic:
         vehicle_type_min_duration_ms: int = 900,
         wrong_lane_min_duration_ms: int = 1200,
         wrong_lane_min_source_stable_ms: int = 0,
+        wrong_lane_target_confidence_min: float = 0.70,
+        wrong_lane_source_confidence_max: float = 0.35,
+        wrong_lane_target_majority_ratio_min: float = 0.70,
+        wrong_lane_min_lateral_displacement_px: float = 12.0,
+        wrong_lane_min_lateral_displacement_lane_ratio: float = 0.12,
+        wrong_lane_min_observed_frames: int = 3,
         turn_region_min_hits: int = 3,
         turn_state_timeout_ms: int = 3000,
         trajectory_history_window_ms: int = 2000,
@@ -157,7 +184,7 @@ class ViolationLogic:
         opposite_direction_cos_threshold: float = -0.3,
         evidence_decay_per_frame: float = 0.18,
         evidence_score_cap: float = 30.0,
-        evidence_weight_corridor: float = 2.1,
+        evidence_weight_turn_zone: float = 2.1,
         evidence_weight_exit_zone: float = 4.1,
         evidence_weight_exit_line: float = 5.2,
         evidence_weight_heading_support: float = 1.3,
@@ -167,7 +194,7 @@ class ViolationLogic:
         evidence_penalty_no_signal: float = 0.35,
         evidence_temporal_hits_min: int = 2,
         evidence_strong_exit_min_temporal_hits: int = 2,
-        evidence_strong_exit_min_corridor_hits: int = 2,
+        evidence_strong_exit_min_turn_zone_hits: int = 2,
         threshold_turn_score: float = 4.2,
         threshold_turn_score_with_exit: float = 4.2,
         threshold_u_turn_score: float = 7.2,
@@ -175,10 +202,21 @@ class ViolationLogic:
         threshold_straight_score: float = 4.5,
         trajectory_sample_inside_min_hits: int = 2,
         trajectory_entry_heading_lookback_points: int = 4,
+        trajectory_entry_heading_min_displacement_px: float = 8.0,
         trajectory_heading_local_window_points: int = 3,
+        lane_fallback_reference_sample_window: int = 32,
+        lane_fallback_reference_min_samples: int = 3,
+        lane_fallback_reference_consensus_min: float = 0.78,
+        lane_fallback_reference_inlier_dot_min: float = 0.60,
+        lane_fallback_reference_inlier_ratio_min: float = 0.78,
+        lane_fallback_reference_max_age_ms: int = 180000,
+        lane_fallback_reference_trajectory_blend_max_weight: float = 0.35,
+        lane_fallback_reference_trajectory_blend_min_alignment_dot: float = 0.35,
+        direction_detection_settings: Optional[DirectionDetectionSettings] = None,
     ):
         if not lane_polygons:
             raise ValueError("lane_polygons must be non-empty")
+        # Tạo cache hình học để mọi frame chỉ truy vấn nhanh, tránh parse lại config.
         self._lane_by_id = {lp.lane_id: lp for lp in lane_polygons}
         self._lane_order = [lp.lane_id for lp in lane_polygons]
         self._approach_shapes = {
@@ -193,9 +231,9 @@ class ViolationLogic:
             lp.lane_id: PreparedLine.from_points(lp.commit_line) if lp.commit_line else None
             for lp in lane_polygons
         }
-        self._lane_turn_corridors = self._build_lane_zone_collection(
+        self._lane_turn_zones = self._build_lane_zone_collection(
             lane_polygons=lane_polygons,
-            geometry_field="turn_corridor",
+            geometry_field="turn_zone",
         )
         self._lane_exit_zones = self._build_lane_zone_collection(
             lane_polygons=lane_polygons,
@@ -209,6 +247,19 @@ class ViolationLogic:
         self._vehicle_type_min_duration_ms = int(vehicle_type_min_duration_ms)
         self._wrong_lane_min_duration_ms = int(wrong_lane_min_duration_ms)
         self._wrong_lane_min_source_stable_ms = int(wrong_lane_min_source_stable_ms)
+        # Các ngưỡng confidence/ratio được clamp về miền hợp lệ [0,1].
+        self._wrong_lane_target_confidence_min = min(max(float(wrong_lane_target_confidence_min), 0.0), 1.0)
+        self._wrong_lane_source_confidence_max = min(max(float(wrong_lane_source_confidence_max), 0.0), 1.0)
+        self._wrong_lane_target_majority_ratio_min = min(
+            max(float(wrong_lane_target_majority_ratio_min), 0.0),
+            1.0,
+        )
+        self._wrong_lane_min_lateral_displacement_px = max(float(wrong_lane_min_lateral_displacement_px), 0.0)
+        self._wrong_lane_min_lateral_displacement_lane_ratio = min(
+            max(float(wrong_lane_min_lateral_displacement_lane_ratio), 0.0),
+            1.0,
+        )
+        self._wrong_lane_min_observed_frames = max(int(wrong_lane_min_observed_frames), 1)
         self._turn_region_min_hits = int(turn_region_min_hits)
         self._turn_state_timeout_ms = int(turn_state_timeout_ms)
         self._trajectory_history_window_ms = int(trajectory_history_window_ms)
@@ -221,10 +272,16 @@ class ViolationLogic:
         self._line_crossing_cooldown_ms = int(line_crossing_cooldown_ms)
         self._violation_rearm_window_ms = int(violation_rearm_window_ms)
         self._evidence_expire_ms = int(evidence_expire_ms)
+        # motion_window tối thiểu 3 điểm để còn tính được vector/curvature.
         self._motion_window_samples = max(int(motion_window_samples), 3)
         self._trajectory_sample_inside_min_hits = max(int(trajectory_sample_inside_min_hits), 1)
         self._trajectory_entry_heading_lookback_points = max(int(trajectory_entry_heading_lookback_points), 2)
+        self._trajectory_entry_heading_min_displacement_px = max(
+            float(trajectory_entry_heading_min_displacement_px),
+            0.1,
+        )
         self._trajectory_heading_local_window_points = max(int(trajectory_heading_local_window_points), 2)
+        self._lane_fallback_reference_sample_window = max(int(lane_fallback_reference_sample_window), 4)
 
         self._straight_heading_max_deg = float(heading_straight_max_deg)
         self._turn_heading_min_deg = float(heading_turn_min_deg)
@@ -239,8 +296,9 @@ class ViolationLogic:
         self._fallback_curvature_min = float(curvature_fallback_min)
         self._opposite_direction_cos_threshold = float(opposite_direction_cos_threshold)
         self._evidence_decay_per_frame = float(evidence_decay_per_frame)
+        # score_cap giới hạn trần điểm evidence để tránh runaway score khi track dài.
         self._evidence_score_cap = max(float(evidence_score_cap), 0.0)
-        self._evidence_weight_corridor = float(evidence_weight_corridor)
+        self._evidence_weight_turn_zone = float(evidence_weight_turn_zone)
         self._evidence_weight_exit_zone = float(evidence_weight_exit_zone)
         self._evidence_weight_exit_line = float(evidence_weight_exit_line)
         self._evidence_weight_heading_support = float(evidence_weight_heading_support)
@@ -250,7 +308,7 @@ class ViolationLogic:
         self._evidence_penalty_no_signal = float(evidence_penalty_no_signal)
         self._evidence_temporal_hits_min = max(int(evidence_temporal_hits_min), 1)
         self._evidence_strong_exit_min_temporal_hits = max(int(evidence_strong_exit_min_temporal_hits), 1)
-        self._evidence_strong_exit_min_corridor_hits = max(int(evidence_strong_exit_min_corridor_hits), 1)
+        self._evidence_strong_exit_min_turn_zone_hits = max(int(evidence_strong_exit_min_turn_zone_hits), 1)
         self._turn_score_threshold = float(threshold_turn_score)
         self._turn_score_threshold_with_exit = float(threshold_turn_score_with_exit)
         self._u_turn_score_threshold = float(threshold_u_turn_score)
@@ -261,13 +319,45 @@ class ViolationLogic:
             lp.lane_id: self._lane_commit_point(lp)
             for lp in lane_polygons
         }
-        self._lane_direction_vectors = {
-            lp.lane_id: self._lane_direction_vector(lp)
+        # Ước lượng bề rộng lane để scale các ngưỡng displacement theo kích thước hình học thật.
+        self._lane_nominal_width_px = {
+            lp.lane_id: self._estimate_lane_width_px(lp.polygon)
             for lp in lane_polygons
         }
+        self._lane_direction_vectors: dict[int, Optional[tuple[float, float]]] = {}
+        for lane in lane_polygons:
+            commit_point = self._lane_commit_points.get(lane.lane_id)
+            self._lane_direction_vectors[lane.lane_id] = self._direction_path_vector(
+                lane,
+                reference_point=commit_point,
+            )
+        self._lane_fallback_reference_samples: dict[int, deque[tuple[datetime, tuple[float, float]]]] = {
+            lane.lane_id: deque(maxlen=self._lane_fallback_reference_sample_window) for lane in lane_polygons
+        }
+        self._lane_fallback_reference_min_samples = max(int(lane_fallback_reference_min_samples), 2)
+        self._lane_fallback_reference_consensus_min = min(max(float(lane_fallback_reference_consensus_min), 0.0), 1.0)
+        self._lane_fallback_reference_inlier_dot_min = min(max(float(lane_fallback_reference_inlier_dot_min), -1.0), 1.0)
+        self._lane_fallback_reference_inlier_ratio_min = min(
+            max(float(lane_fallback_reference_inlier_ratio_min), 0.0),
+            1.0,
+        )
+        self._lane_fallback_reference_max_age_ms = max(int(lane_fallback_reference_max_age_ms), 1000)
+        self._lane_fallback_reference_trajectory_blend_max_weight = min(
+            max(float(lane_fallback_reference_trajectory_blend_max_weight), 0.0),
+            1.0,
+        )
+        self._lane_fallback_reference_trajectory_blend_min_alignment_dot = min(
+            max(float(lane_fallback_reference_trajectory_blend_min_alignment_dot), -1.0),
+            0.999,
+        )
         self._lane_known_maneuvers = self._build_lane_known_maneuvers(lane_polygons)
         self._lane_maneuver_anchor_points = self._build_lane_maneuver_anchor_points(lane_polygons)
+        self._direction_logic = DirectionLogic(
+            lane_polygons,
+            settings=direction_detection_settings,
+        )
 
+        # State runtime tách theo vehicle_id.
         self._vehicle_states: dict[int, VehicleState] = {}
 
     def update_and_maybe_generate_violation(
@@ -276,23 +366,36 @@ class ViolationLogic:
         vehicle_id: int,
         vehicle_type: str,
         lane_id: Optional[int],
+        lane_observation: Optional[LaneObservation] = None,
         bbox_xyxy: list[float] | tuple[float, ...],
         ts: datetime,
     ) -> list[dict]:
+        # Điểm vào duy nhất của pipeline violation cho mỗi track ở mỗi frame.
         st = self._vehicle_states.get(vehicle_id)
         if st is None:
+            # Khởi tạo state lần đầu cho vehicle_id mới xuất hiện.
             st = VehicleState(vehicle_id=vehicle_id, vehicle_type=vehicle_type)
             self._vehicle_states[vehicle_id] = st
+        # Mốc last_seen phục vụ cơ chế prune state cuối pipeline.
         st.last_seen_ts = ts
+        # vehicle_type có thể đổi theo temporal assigner nên luôn cập nhật bản mới nhất.
         st.vehicle_type = vehicle_type
 
         sample = self._build_sample(bbox_xyxy=bbox_xyxy, ts=ts)
         self._append_trajectory_sample(st=st, sample=sample)
+        # Sự kiện cắt line được trích riêng để bổ sung evidence cho turn.
         line_events = self._update_line_crossing_events(st=st, sample=sample, ts=ts)
 
         violations: list[dict] = []
 
-        self._update_lane_state(st=st, lane_id=lane_id, ts=ts, violations=violations)
+        self._update_lane_state(
+            st=st,
+            lane_id=lane_id,
+            lane_observation=lane_observation,
+            sample=sample,
+            ts=ts,
+            violations=violations,
+        )
 
         current_lane_id = st.current_stable_lane_id
         if current_lane_id is not None:
@@ -300,6 +403,7 @@ class ViolationLogic:
             if lp is not None:
                 allowed_vehicle_types = lp.allowed_vehicle_types
                 if allowed_vehicle_types and vehicle_type not in allowed_vehicle_types:
+                    # Rule tĩnh theo lane: vehicle_type không thuộc whitelist của lane hiện tại.
                     lifecycle_key = f"vehicle_type_not_allowed:lane_{current_lane_id}:veh_{vehicle_type}"
                     self._emit_violation_if_needed(
                         st=st,
@@ -317,6 +421,35 @@ class ViolationLogic:
                         violations=violations,
                     )
 
+        # Đánh giá hướng chạy lấy trực tiếp từ trajectory hiện có trong state.
+        direction_eval = self._direction_logic.evaluate(
+            vehicle_id=vehicle_id,
+            lane_id=current_lane_id,
+            lane_started_ts=st.current_lane_started_ts,
+            trajectory_centers=[(sample.ts, sample.center) for sample in st.trajectory],
+            ts=ts,
+        )
+        # Lưu snapshot trạng thái hướng để API trajectory/debug có thể đọc lại.
+        st.direction_status = direction_eval.status
+        st.direction_dot = direction_eval.dot
+        if direction_eval.should_emit_violation and current_lane_id is not None:
+            # Rule động theo trajectory: xác nhận đi ngược chiều trong lane có direction rule.
+            lifecycle_key = f"wrong_direction:lane_{current_lane_id}"
+            self._emit_violation_if_needed(
+                st=st,
+                lifecycle_key=lifecycle_key,
+                lane_id=current_lane_id,
+                violation="wrong_direction",
+                ts=ts,
+                evidence_summary={
+                    "rule": "direction_rule",
+                    "lane_id": current_lane_id,
+                    "dot": direction_eval.dot,
+                    "direction_status": direction_eval.status,
+                },
+                violations=violations,
+            )
+
         self._update_turn_state(
             st=st,
             current_lane_id=current_lane_id,
@@ -333,13 +466,17 @@ class ViolationLogic:
         bbox_xyxy: list[float] | tuple[float, ...],
         ts: datetime,
     ) -> TrajectorySample:
+        # Từ bbox hiện tại trích 3 điểm tiếp xúc đáy xe để suy luận chuyển động ổn định hơn.
         left, center, right = bbox_bottom_contact_points(bbox_xyxy)
         return TrajectorySample(ts=ts, left=left, center=center, right=right)
 
     def _append_trajectory_sample(self, *, st: VehicleState, sample: TrajectorySample) -> None:
+        # Thêm sample mới nhất vào đuôi trajectory theo thứ tự thời gian.
         st.trajectory.append(sample)
+        # Giữ lịch sử trong cửa sổ thời gian cố định thay vì lưu vô hạn.
         cutoff_ts = sample.ts.timestamp() - (self._trajectory_history_window_ms / 1000.0)
         while st.trajectory and st.trajectory[0].ts.timestamp() < cutoff_ts:
+            # Loại sample quá cũ ở đầu deque.
             st.trajectory.popleft()
 
     def _update_lane_state(
@@ -347,24 +484,42 @@ class ViolationLogic:
         *,
         st: VehicleState,
         lane_id: Optional[int],
+        lane_observation: Optional[LaneObservation],
+        sample: TrajectorySample,
         ts: datetime,
         violations: list[dict],
     ) -> None:
         if lane_id is None:
-            self._update_wrong_lane_candidate(st=st, ts=ts, violations=violations)
+            # Không có lane ổn định ở frame này: vẫn cho phép cập nhật candidate sai làn đang mở.
+            self._update_wrong_lane_candidate(
+                st=st,
+                lane_observation=lane_observation,
+                sample=sample,
+                ts=ts,
+                violations=violations,
+            )
             return
 
         previous_lane_id = st.current_stable_lane_id
         if previous_lane_id is None:
+            # Lần đầu thấy lane của xe trong phiên theo dõi.
             st.current_stable_lane_id = lane_id
             st.current_lane_started_ts = ts
             self._append_lane_history(st=st, lane_id=lane_id, ts=ts)
-            self._update_wrong_lane_candidate(st=st, ts=ts, violations=violations)
+            self._update_wrong_lane_candidate(
+                st=st,
+                lane_observation=lane_observation,
+                sample=sample,
+                ts=ts,
+                violations=violations,
+            )
             return
 
         if lane_id != previous_lane_id:
             source_lane_started_ts = st.current_lane_started_ts or ts
+            # Thời gian xe đã bám lane nguồn trước khi chuyển lane.
             source_lane_duration_ms = int((ts - source_lane_started_ts).total_seconds() * 1000.0)
+            # Kiểm tra "chuyển sửa sai": lane nguồn cấm loại xe nhưng lane đích cho phép.
             source_allows_vehicle_type = self._lane_allows_vehicle_type(
                 lane_id=previous_lane_id,
                 vehicle_type=st.vehicle_type,
@@ -377,25 +532,38 @@ class ViolationLogic:
 
             st.current_stable_lane_id = lane_id
             st.current_lane_started_ts = ts
+            # Ghi lại lane history ngay khi đổi lane.
             self._append_lane_history(st=st, lane_id=lane_id, ts=ts)
 
             allowed_lane_changes = self._allowed_lane_changes_for(previous_lane_id)
+            # Nếu chuyển lane hợp lệ hoặc là chuyển "sửa sai" vehicle type thì không mở candidate vi phạm.
             if lane_id in allowed_lane_changes or corrective_transition:
                 st.illegal_lane_candidate = None
             else:
+                # Ghi candidate sai làn từ thời điểm vừa đổi lane.
                 st.illegal_lane_candidate = IllegalLaneCandidate(
                     source_lane_id=previous_lane_id,
                     target_lane_id=lane_id,
                     started_ts=ts,
                     source_lane_duration_ms=source_lane_duration_ms,
+                    started_center=sample.center,
+                    latest_center=sample.center,
                 )
 
-        self._update_wrong_lane_candidate(st=st, ts=ts, violations=violations)
+        self._update_wrong_lane_candidate(
+            st=st,
+            lane_observation=lane_observation,
+            sample=sample,
+            ts=ts,
+            violations=violations,
+        )
 
     def _update_wrong_lane_candidate(
         self,
         *,
         st: VehicleState,
+        lane_observation: Optional[LaneObservation],
+        sample: TrajectorySample,
         ts: datetime,
         violations: list[dict],
     ) -> None:
@@ -404,10 +572,19 @@ class ViolationLogic:
             return
 
         if st.current_stable_lane_id != candidate.target_lane_id:
+            # Xe đã không còn ở lane đích candidate -> hủy candidate hiện tại.
             st.illegal_lane_candidate = None
             return
 
+        # Cập nhật điểm center mới nhất để tính dịch chuyển ngang so với lane nguồn.
+        candidate.latest_center = sample.center
+        self._accumulate_wrong_lane_candidate_evidence(
+            candidate=candidate,
+            lane_observation=lane_observation,
+        )
+
         if candidate.source_lane_duration_ms < self._wrong_lane_min_source_stable_ms:
+            # Lane nguồn chưa đủ ổn định thì chưa coi là hành vi đổi lane có chủ đích.
             st.illegal_lane_candidate = None
             return
 
@@ -423,6 +600,9 @@ class ViolationLogic:
         if duration_ms < self._wrong_lane_min_duration_ms:
             return
 
+        if not self._has_wrong_lane_transition_evidence(candidate=candidate):
+            return
+
         lifecycle_key = f"wrong_lane:{candidate.source_lane_id}->{candidate.target_lane_id}"
         self._emit_violation_if_needed(
             st=st,
@@ -436,9 +616,96 @@ class ViolationLogic:
                 "target_lane_id": candidate.target_lane_id,
                 "source_lane_duration_ms": candidate.source_lane_duration_ms,
                 "target_lane_duration_ms": duration_ms,
+                "target_majority_ratio": self._wrong_lane_target_majority_ratio(candidate),
+                "avg_target_confidence": self._wrong_lane_avg_target_confidence(candidate),
+                "avg_source_confidence": self._wrong_lane_avg_source_confidence(candidate),
             },
             violations=violations,
         )
+
+    def _accumulate_wrong_lane_candidate_evidence(
+        self,
+        *,
+        candidate: IllegalLaneCandidate,
+        lane_observation: Optional[LaneObservation],
+    ) -> None:
+        if lane_observation is None:
+            # Không có observation chi tiết: fallback tăng hit/frame cơ bản.
+            candidate.observed_frames += 1
+            candidate.target_majority_hits += 1
+            return
+
+        # Dùng confidence theo từng lane để tăng chất lượng bằng chứng chuyển làn.
+        candidate.observed_frames += 1
+        source_conf = lane_observation.confidence_for_lane(candidate.source_lane_id)
+        target_conf = lane_observation.confidence_for_lane(candidate.target_lane_id)
+        candidate.source_confidence_sum += source_conf
+        candidate.target_confidence_sum += target_conf
+        candidate.used_confidence_observation = True
+        if lane_observation.raw_lane_id == candidate.target_lane_id:
+            candidate.target_majority_hits += 1
+
+    def _has_wrong_lane_transition_evidence(self, *, candidate: IllegalLaneCandidate) -> bool:
+        if not candidate.used_confidence_observation:
+            # Nếu upstream không có confidence thì fallback cho phép pass điều kiện mềm.
+            return True
+
+        if candidate.observed_frames < self._wrong_lane_min_observed_frames:
+            return False
+
+        if self._wrong_lane_target_majority_ratio(candidate) < self._wrong_lane_target_majority_ratio_min:
+            return False
+        if self._wrong_lane_avg_target_confidence(candidate) < self._wrong_lane_target_confidence_min:
+            return False
+        if self._wrong_lane_avg_source_confidence(candidate) > self._wrong_lane_source_confidence_max:
+            return False
+
+        if candidate.started_center is None or candidate.latest_center is None:
+            return False
+
+        lane_width_px = self._lane_nominal_width_px.get(candidate.source_lane_id, 0.0)
+        # Ngưỡng dời ngang lấy max giữa ngưỡng tuyệt đối và ngưỡng theo bề rộng lane.
+        min_lateral_px = max(
+            self._wrong_lane_min_lateral_displacement_px,
+            lane_width_px * self._wrong_lane_min_lateral_displacement_lane_ratio,
+        )
+        lateral_displacement_px = self._lateral_displacement_from_source_lane(candidate=candidate)
+        return lateral_displacement_px >= min_lateral_px
+
+    def _wrong_lane_target_majority_ratio(self, candidate: IllegalLaneCandidate) -> float:
+        if candidate.observed_frames <= 0:
+            return 0.0
+        return float(candidate.target_majority_hits) / float(candidate.observed_frames)
+
+    def _wrong_lane_avg_target_confidence(self, candidate: IllegalLaneCandidate) -> float:
+        if candidate.observed_frames <= 0:
+            return 0.0
+        # Confidence trung bình của lane đích trong giai đoạn candidate.
+        return float(candidate.target_confidence_sum) / float(candidate.observed_frames)
+
+    def _wrong_lane_avg_source_confidence(self, candidate: IllegalLaneCandidate) -> float:
+        if candidate.observed_frames <= 0:
+            return 0.0
+        # Confidence trung bình của lane nguồn trong giai đoạn candidate.
+        return float(candidate.source_confidence_sum) / float(candidate.observed_frames)
+
+    def _lateral_displacement_from_source_lane(self, *, candidate: IllegalLaneCandidate) -> float:
+        start = candidate.started_center
+        end = candidate.latest_center
+        if start is None or end is None:
+            return 0.0
+        move_x = float(end[0]) - float(start[0])
+        move_y = float(end[1]) - float(start[1])
+
+        lane_vec = self._lane_direction_vectors.get(candidate.source_lane_id)
+        if lane_vec is None:
+            # Không có vector lane thì fallback về độ dời Euclid tổng.
+            return hypot(move_x, move_y)
+
+        # Lấy thành phần chiếu lên pháp tuyến lane để đo "đổi ngang làn" thay vì tiến dọc lane.
+        normal_x = -lane_vec[1]
+        normal_y = lane_vec[0]
+        return abs((move_x * normal_x) + (move_y * normal_y))
 
     def _update_turn_state(
         self,
@@ -453,6 +720,7 @@ class ViolationLogic:
         turn_state = st.turn_state
         self._expire_turn_state(turn_state=turn_state, ts=ts)
         if turn_state.phase == "confirmed":
+            # Đã confirmed ở lượt này thì không re-score thêm để tránh emit trùng trong cùng frame.
             return
 
         approach_lane_id = self._match_approach_lane(
@@ -460,6 +728,7 @@ class ViolationLogic:
             sample=sample,
         )
         if turn_state.phase in {"idle", "approach"} and approach_lane_id is not None:
+            # Xe vừa đi vào vùng approach của một lane nguồn.
             self._enter_approach(turn_state=turn_state, source_lane_id=approach_lane_id, ts=ts)
 
         commit_lane_id = self._match_commit_lane(
@@ -471,10 +740,11 @@ class ViolationLogic:
         if commit_lane_id is not None and turn_state.phase != "committed":
             if turn_state.phase != "approach" or turn_state.source_lane_id != commit_lane_id:
                 self._enter_approach(turn_state=turn_state, source_lane_id=commit_lane_id, ts=ts)
+            # Commit signal xác nhận bắt đầu maneuver.
             self._enter_committed(st=st, turn_state=turn_state, ts=ts)
 
         # Fallback: cho phép vào pha committed nếu lane chưa cấu hình commit gate/line,
-        # nhưng đã có bằng chứng turn theo corridor/exit ngay trong lane hiện tại.
+        # nhưng đã có bằng chứng turn theo turn-zone/exit ngay trong lane hiện tại.
         if (
             turn_state.phase != "committed"
             and current_lane_id is not None
@@ -488,6 +758,9 @@ class ViolationLogic:
             if turn_state.phase != "approach" or turn_state.source_lane_id != current_lane_id:
                 self._enter_approach(turn_state=turn_state, source_lane_id=current_lane_id, ts=ts)
             self._enter_committed(st=st, turn_state=turn_state, ts=ts)
+
+        if turn_state.phase == "committed":
+            self._refresh_turn_reference_vector_if_needed(st=st, turn_state=turn_state, ts=ts)
 
         if turn_state.phase != "committed" or turn_state.source_lane_id is None:
             return
@@ -503,6 +776,7 @@ class ViolationLogic:
         if confirmed_maneuver is None:
             return
 
+        # Chốt maneuver cho state machine turn tại frame hiện tại.
         turn_state.phase = "confirmed"
         turn_state.confirmed_maneuver = confirmed_maneuver
         turn_state.last_activity_ts = ts
@@ -546,7 +820,12 @@ class ViolationLogic:
         turn_state.confirmed_maneuver = None
         turn_state.last_activity_ts = ts
         turn_state.entry_heading_vector = None
-        turn_state.lane_direction_vector = self._lane_direction_vectors.get(source_lane_id)
+        # Lấy vector tham chiếu sớm ngay từ approach để scoring frame sau ổn định hơn.
+        turn_state.lane_direction_vector = self._resolve_turn_reference_vector(
+            source_lane_id=source_lane_id,
+            ts=ts,
+            trajectory_entry_vector=None,
+        )
         turn_state.last_scored_maneuver = None
         turn_state.evidences.clear()
         turn_state.last_reject_reasons.clear()
@@ -560,9 +839,57 @@ class ViolationLogic:
 
         turn_state.phase = "committed"
         turn_state.last_activity_ts = ts
-        turn_state.entry_heading_vector = self._estimate_entry_heading_vector(st=st, turn_state=turn_state)
-        if turn_state.lane_direction_vector is None:
-            turn_state.lane_direction_vector = self._lane_direction_vectors.get(turn_state.source_lane_id)
+        trajectory_entry_vector = self._estimate_entry_heading_vector(
+            st=st,
+            turn_state=turn_state,
+        )
+        if trajectory_entry_vector is not None:
+            # Cập nhật mô hình hướng lane fallback bằng trajectory lúc vào commit.
+            self._update_lane_fallback_reference_vector(
+                source_lane_id=turn_state.source_lane_id,
+                ts=ts,
+                vector=trajectory_entry_vector,
+            )
+        reference_vector = self._resolve_turn_reference_vector(
+            source_lane_id=turn_state.source_lane_id,
+            ts=ts,
+            trajectory_entry_vector=trajectory_entry_vector,
+        )
+        # entry_heading_vector ưu tiên vector từ trajectory, fallback về vector tham chiếu lane.
+        turn_state.entry_heading_vector = trajectory_entry_vector or reference_vector
+        turn_state.lane_direction_vector = reference_vector
+
+    def _refresh_turn_reference_vector_if_needed(
+        self,
+        *,
+        st: VehicleState,
+        turn_state: TurnState,
+        ts: datetime,
+    ) -> None:
+        if turn_state.source_lane_id is None or turn_state.lane_direction_vector is not None:
+            return
+
+        trajectory_entry_vector = self._estimate_entry_heading_vector(
+            st=st,
+            turn_state=turn_state,
+        )
+        if trajectory_entry_vector is not None:
+            self._update_lane_fallback_reference_vector(
+                source_lane_id=turn_state.source_lane_id,
+                ts=ts,
+                vector=trajectory_entry_vector,
+            )
+
+        reference_vector = self._resolve_turn_reference_vector(
+            source_lane_id=turn_state.source_lane_id,
+            ts=ts,
+            trajectory_entry_vector=trajectory_entry_vector,
+        )
+        if reference_vector is None:
+            return
+        turn_state.lane_direction_vector = reference_vector
+        if turn_state.entry_heading_vector is None and trajectory_entry_vector is not None:
+            turn_state.entry_heading_vector = trajectory_entry_vector
 
     def _update_turn_confirmation(
         self,
@@ -574,6 +901,7 @@ class ViolationLogic:
         ts: datetime,
         line_events: set[str],
     ) -> Optional[str]:
+        # Event line được map về danh sách maneuver theo lane nguồn hiện tại.
         exit_line_matches = self._extract_exit_line_matches(
             line_events=line_events,
             source_lane_id=source_lane_id,
@@ -587,29 +915,32 @@ class ViolationLogic:
             )
         )
 
-        corridor_matches = set(
+        turn_zone_matches = set(
             self._match_lane_zone_collection(
-                self._lane_turn_corridors,
+                self._lane_turn_zones,
                 lane_id=source_lane_id,
                 sample=sample,
             )
         )
-        if not (exit_line_matches or exit_zone_matches or corridor_matches or turn_state.evidences):
+        if not (exit_line_matches or exit_zone_matches or turn_zone_matches or turn_state.evidences):
+            # Không có tín hiệu mới và cũng không có evidence cũ để decay/score tiếp.
             return None
 
+        # Decay điểm cũ trước khi cộng frame_score mới ở frame hiện tại.
         self._decay_turn_evidence(turn_state=turn_state, ts=ts)
         motion = self._compute_motion_features(st=st, turn_state=turn_state)
         maneuvers_to_score = (
             set(turn_state.evidences)
             | exit_line_matches
             | exit_zone_matches
-            | corridor_matches
+            | turn_zone_matches
             | self._maneuver_set_for_lane(source_lane_id=source_lane_id)
         )
         maneuvers_to_score = {m for m in maneuvers_to_score if m}
         if not maneuvers_to_score:
             return None
 
+        # Theo dõi maneuver mạnh nhất ở frame hiện tại để cộng temporal bonus frame sau.
         best_frame_maneuver: Optional[str] = None
         best_frame_score = 0.0
 
@@ -626,7 +957,7 @@ class ViolationLogic:
                 motion=motion,
                 turn_state=turn_state,
                 ts=ts,
-                corridor_matches=corridor_matches,
+                turn_zone_matches=turn_zone_matches,
                 exit_zone_matches=exit_zone_matches,
                 exit_line_matches=exit_line_matches,
             )
@@ -635,9 +966,11 @@ class ViolationLogic:
                 best_frame_maneuver = maneuver
 
         if best_frame_maneuver is not None:
+            # last_scored_maneuver là tín hiệu continuity cho evidence.temporal_hits.
             turn_state.last_scored_maneuver = best_frame_maneuver
             turn_state.last_activity_ts = ts
 
+        # Rank evidence theo score rồi tie-break bằng exit hits + temporal hits.
         ranked = sorted(
             turn_state.evidences.values(),
             key=lambda ev: (
@@ -654,6 +987,7 @@ class ViolationLogic:
                 evidence=evidence,
                 source_lane_id=source_lane_id,
                 motion=motion,
+                lane_direction_vector=turn_state.lane_direction_vector,
             ):
                 turn_state.last_reject_reasons.clear()
                 return evidence.maneuver
@@ -667,8 +1001,10 @@ class ViolationLogic:
             if evidence.last_seen_ts is not None:
                 elapsed_ms = int((ts - evidence.last_seen_ts).total_seconds() * 1000.0)
                 if elapsed_ms > self._evidence_expire_ms:
+                    # Evidence quá cũ thì loại hẳn khỏi state.
                     stale.append(maneuver)
                     continue
+            # Mỗi frame giảm điểm nhẹ để bằng chứng cũ tự mờ dần.
             evidence.score = max(evidence.score - self._evidence_decay_per_frame, 0.0)
         for maneuver in stale:
             del turn_state.evidences[maneuver]
@@ -684,17 +1020,17 @@ class ViolationLogic:
         motion: MotionFeatures,
         turn_state: TurnState,
         ts: datetime,
-        corridor_matches: set[str],
+        turn_zone_matches: set[str],
         exit_zone_matches: set[str],
         exit_line_matches: set[str],
     ) -> float:
         frame_score = 0.0
         signal_hit = False
 
-        if maneuver in corridor_matches:
-            evidence.corridor_hits += 1
+        if maneuver in turn_zone_matches:
+            evidence.turn_zone_hits += 1
             signal_hit = True
-            frame_score += self._evidence_weight_corridor
+            frame_score += self._evidence_weight_turn_zone
         if maneuver in exit_zone_matches:
             evidence.exit_zone_hits += 1
             signal_hit = True
@@ -708,6 +1044,7 @@ class ViolationLogic:
             maneuver=maneuver,
             source_lane_id=source_lane_id,
             motion=motion,
+            lane_direction_vector=turn_state.lane_direction_vector,
         )
         if heading_support:
             evidence.heading_support_hits += 1
@@ -726,15 +1063,19 @@ class ViolationLogic:
         if signal_hit or heading_support:
             if evidence.first_seen_ts is None:
                 evidence.first_seen_ts = ts
+            # last_seen_ts chỉ cập nhật khi frame có tín hiệu hỗ trợ thực sự.
             evidence.last_seen_ts = ts
             if turn_state.last_scored_maneuver == maneuver:
+                # Cùng maneuver liên tiếp thì cộng temporal bonus để ổn định quyết định.
                 evidence.temporal_hits += 1
                 frame_score += self._evidence_weight_temporal_bonus
             else:
                 evidence.temporal_hits = max(evidence.temporal_hits, 1)
         else:
+            # Không có tín hiệu frame này thì trừ điểm nhẹ.
             frame_score -= self._evidence_penalty_no_signal
 
+        # Tổng điểm bị chặn trong [0, score_cap] để tránh tăng vô hạn.
         evidence.score = min(max(evidence.score + frame_score, 0.0), self._evidence_score_cap)
         return frame_score
 
@@ -745,10 +1086,11 @@ class ViolationLogic:
         evidence: TurnEvidence,
         source_lane_id: int,
         motion: MotionFeatures,
+        lane_direction_vector: Optional[tuple[float, float]] = None,
     ) -> bool:
         evidence.last_reject_reason = None
         has_path_evidence = (
-            evidence.corridor_hits > 0
+            evidence.turn_zone_hits > 0
             or evidence.exit_zone_hits > 0
             or evidence.exit_line_hits > 0
         )
@@ -777,10 +1119,10 @@ class ViolationLogic:
                     evidence=evidence,
                     reason="u_turn_curvature_too_low",
                 )
-            if not strong_exit and evidence.corridor_hits < self._turn_region_min_hits:
+            if not strong_exit and evidence.turn_zone_hits < self._turn_region_min_hits:
                 return self._reject_evidence(
                     evidence=evidence,
-                    reason="u_turn_corridor_support_too_low",
+                    reason="u_turn_turn_zone_support_too_low",
                 )
             score_threshold = (
                 self._u_turn_score_threshold_with_exit
@@ -798,15 +1140,16 @@ class ViolationLogic:
                 maneuver=maneuver,
                 source_lane_id=source_lane_id,
                 motion=motion,
+                lane_direction_vector=lane_direction_vector,
             ):
                 return self._reject_evidence(
                     evidence=evidence,
                     reason="straight_heading_not_supported",
                 )
-            if not strong_exit and evidence.corridor_hits < self._turn_region_min_hits:
+            if not strong_exit and evidence.turn_zone_hits < self._turn_region_min_hits:
                 return self._reject_evidence(
                     evidence=evidence,
-                    reason="straight_corridor_support_too_low",
+                    reason="straight_turn_zone_support_too_low",
                 )
             return self._confirm_with_threshold(
                 evidence=evidence,
@@ -818,7 +1161,7 @@ class ViolationLogic:
             if (
                 evidence.heading_support_hits <= 0
                 and not strong_exit
-                and evidence.corridor_hits < self._turn_region_min_hits
+                and evidence.turn_zone_hits < self._turn_region_min_hits
             ):
                 return self._reject_evidence(
                     evidence=evidence,
@@ -832,16 +1175,16 @@ class ViolationLogic:
             if (
                 strong_exit
                 and evidence.temporal_hits < self._evidence_strong_exit_min_temporal_hits
-                and evidence.corridor_hits < self._evidence_strong_exit_min_corridor_hits
+                and evidence.turn_zone_hits < self._evidence_strong_exit_min_turn_zone_hits
             ):
                 return self._reject_evidence(
                     evidence=evidence,
                     reason=f"{maneuver}_weak_exit_without_temporal_support",
                 )
-            if not strong_exit and evidence.corridor_hits < self._turn_region_min_hits:
+            if not strong_exit and evidence.turn_zone_hits < self._turn_region_min_hits:
                 return self._reject_evidence(
                     evidence=evidence,
-                    reason=f"{maneuver}_corridor_support_too_low",
+                    reason=f"{maneuver}_turn_zone_support_too_low",
                 )
             score_threshold = (
                 self._turn_score_threshold_with_exit
@@ -905,7 +1248,7 @@ class ViolationLogic:
             "source_lane_id": source_lane_id,
             "maneuver": maneuver,
             "score": round(float(evidence.score), 3),
-            "corridor_hits": int(evidence.corridor_hits),
+            "turn_zone_hits": int(evidence.turn_zone_hits),
             "exit_zone_hits": int(evidence.exit_zone_hits),
             "exit_line_hits": int(evidence.exit_line_hits),
             "heading_support_hits": int(evidence.heading_support_hits),
@@ -926,21 +1269,97 @@ class ViolationLogic:
         st: VehicleState,
         turn_state: TurnState,
     ) -> Optional[tuple[float, float]]:
+        # Dùng trajectory gần commit để ước lượng hướng vào maneuver.
         points = [sample.center for sample in st.trajectory]
         if len(points) >= 2:
             start_idx = max(len(points) - self._trajectory_entry_heading_lookback_points, 0)
-            start = points[start_idx]
-            end = points[-1]
-            vec = self._normalize_vector((end[0] - start[0], end[1] - start[1]))
-            if vec is not None:
-                return vec
-        if turn_state.source_lane_id is not None:
-            return self._lane_direction_vectors.get(turn_state.source_lane_id)
+            window_points = points[start_idx:]
+            start = window_points[0]
+            end = window_points[-1]
+            # Gross displacement là độ dời đầu-cuối trong cửa sổ lookback.
+            gross_displacement = hypot(end[0] - start[0], end[1] - start[1])
+            if gross_displacement < self._trajectory_entry_heading_min_displacement_px:
+                return None
+            gross_vec = self._normalize_vector((end[0] - start[0], end[1] - start[1]))
+            if gross_vec is None:
+                return None
+
+            segment_min_displacement = max(self._trajectory_entry_heading_min_displacement_px * 0.1, 1.0)
+            segment_vectors: list[tuple[tuple[float, float], float]] = []
+            path_length = 0.0
+            for idx in range(1, len(window_points)):
+                prev = window_points[idx - 1]
+                curr = window_points[idx]
+                seg_dx = curr[0] - prev[0]
+                seg_dy = curr[1] - prev[1]
+                seg_len = hypot(seg_dx, seg_dy)
+                if seg_len < segment_min_displacement:
+                    # Bỏ segment quá ngắn vì dễ chỉ là rung bbox.
+                    continue
+                seg_vec = self._normalize_vector((seg_dx, seg_dy))
+                if seg_vec is None:
+                    continue
+                segment_vectors.append((seg_vec, seg_len))
+                # path_length dùng để tính path_efficiency và trọng số inlier.
+                path_length += seg_len
+
+            # Need at least two effective segments (>= 3 points) to avoid locking to a noisy 2-point guess.
+            if len(segment_vectors) < 2:
+                return None
+            if path_length <= 1e-6:
+                return gross_vec
+
+            # Path-efficiency acts as an ambiguity gate: heavy zig-zag should not force a heading.
+            path_efficiency = gross_displacement / path_length
+            if path_efficiency < 0.45:
+                return None
+
+            # Consensus vector theo tổng có trọng số độ dài segment.
+            weighted_sum_x = sum(vec[0] * weight for vec, weight in segment_vectors)
+            weighted_sum_y = sum(vec[1] * weight for vec, weight in segment_vectors)
+            consensus_vec = self._normalize_vector((weighted_sum_x, weighted_sum_y))
+            if consensus_vec is None:
+                return None
+
+            consensus_inlier_weight = sum(
+                weight
+                for vec, weight in segment_vectors
+                if ((vec[0] * consensus_vec[0]) + (vec[1] * consensus_vec[1])) >= 0.65
+            )
+            if (consensus_inlier_weight / path_length) < 0.70:
+                return None
+
+            # Consensus phải cùng hướng tương đối với gross vector.
+            if ((consensus_vec[0] * gross_vec[0]) + (consensus_vec[1] * gross_vec[1])) < 0.35:
+                return None
+
+            local_start_idx = max(len(window_points) - self._trajectory_heading_local_window_points, 0)
+            local_start = window_points[local_start_idx]
+            local_vec = self._normalize_vector((end[0] - local_start[0], end[1] - local_start[1]))
+            if local_vec is None:
+                return consensus_vec
+
+            # So trục hướng cục bộ cuối đoạn với consensus để tránh bị bẻ lái bất thường.
+            local_alignment = (local_vec[0] * consensus_vec[0]) + (local_vec[1] * consensus_vec[1])
+            if local_alignment < 0.2:
+                return None
+
+            if local_alignment >= 0.9:
+                return local_vec
+            # Blend consensus + local + gross để lấy hướng vào ổn định hơn.
+            blended = self._normalize_vector(
+                (
+                    (consensus_vec[0] * 2.0) + local_vec[0] + gross_vec[0],
+                    (consensus_vec[1] * 2.0) + local_vec[1] + gross_vec[1],
+                )
+            )
+            return blended or consensus_vec
         return None
 
     def _compute_motion_features(self, *, st: VehicleState, turn_state: TurnState) -> MotionFeatures:
         samples = list(st.trajectory)
         if len(samples) < 2:
+            # Thiếu trajectory thì chỉ trả entry_vector fallback cho nhánh scoring.
             return MotionFeatures(
                 entry_vector=turn_state.entry_heading_vector or turn_state.lane_direction_vector
             )
@@ -948,6 +1367,7 @@ class ViolationLogic:
         recent = samples[-self._motion_window_samples:]
         path_length = 0.0
         for idx in range(1, len(recent)):
+            # Tổng độ dài polyline quỹ đạo gần nhất.
             path_length += hypot(
                 recent[idx].center[0] - recent[idx - 1].center[0],
                 recent[idx].center[1] - recent[idx - 1].center[1],
@@ -961,6 +1381,7 @@ class ViolationLogic:
         local_start = recent[max(len(recent) - self._trajectory_heading_local_window_points, 0)].center
         heading_vector = self._normalize_vector((end[0] - local_start[0], end[1] - local_start[1]))
         if heading_vector is None:
+            # Fallback dùng vector tổng thể nếu vector local suy biến.
             heading_vector = self._normalize_vector((dx, dy))
         entry_vector = turn_state.entry_heading_vector or turn_state.lane_direction_vector
 
@@ -970,12 +1391,14 @@ class ViolationLogic:
         if heading_vector is not None and entry_vector is not None:
             cross = (entry_vector[0] * heading_vector[1]) - (entry_vector[1] * heading_vector[0])
             dot = (entry_vector[0] * heading_vector[0]) + (entry_vector[1] * heading_vector[1])
+            # Heading change dùng atan2(cross, dot) để lấy cả độ lớn và chiều quay.
             heading_change_deg = abs(atan2(cross, dot)) * (180.0 / 3.141592653589793)
             signed_heading_change_deg = atan2(cross, dot) * (180.0 / 3.141592653589793)
             opposite_direction = dot <= self._opposite_direction_cos_threshold
 
         curvature = 0.0
         if displacement > 1e-6:
+            # Curvature xấp xỉ theo tỉ lệ đường đi thực / đường chim bay.
             curvature = max((path_length / displacement) - 1.0, 0.0)
 
         return MotionFeatures(
@@ -993,6 +1416,7 @@ class ViolationLogic:
         maneuver: str,
         source_lane_id: int,
         motion: MotionFeatures,
+        lane_direction_vector: Optional[tuple[float, float]] = None,
     ) -> bool:
         if motion.entry_vector is None or motion.heading_vector is None:
             return False
@@ -1017,7 +1441,11 @@ class ViolationLogic:
             motion.signed_heading_change_deg,
             tolerance=self._heading_value_sign_tolerance,
         )
-        expected_sign = self._expected_turn_side_sign(source_lane_id=source_lane_id, maneuver=maneuver)
+        expected_sign = self._expected_turn_side_sign(
+            source_lane_id=source_lane_id,
+            maneuver=maneuver,
+            lane_direction_vector=lane_direction_vector,
+        )
         if expected_sign is None or expected_sign == 0:
             return observed_sign != 0
         return observed_sign == expected_sign
@@ -1031,8 +1459,14 @@ class ViolationLogic:
             return motion.curvature >= self._turn_curvature_min
         return motion.curvature >= self._fallback_curvature_min
 
-    def _expected_turn_side_sign(self, *, source_lane_id: int, maneuver: str) -> Optional[int]:
-        lane_dir = self._lane_direction_vectors.get(source_lane_id)
+    def _expected_turn_side_sign(
+        self,
+        *,
+        source_lane_id: int,
+        maneuver: str,
+        lane_direction_vector: Optional[tuple[float, float]] = None,
+    ) -> Optional[int]:
+        lane_dir = lane_direction_vector or self._lane_direction_vectors.get(source_lane_id)
         commit_point = self._lane_commit_points.get(source_lane_id)
         anchor_point = (self._lane_maneuver_anchor_points.get(source_lane_id) or {}).get(maneuver)
         if lane_dir is None or commit_point is None or anchor_point is None:
@@ -1112,7 +1546,7 @@ class ViolationLogic:
             return True
         if self._match_lane_zone_collection(self._lane_exit_zones, lane_id=lane_id, sample=sample):
             return True
-        if self._match_lane_zone_collection(self._lane_turn_corridors, lane_id=lane_id, sample=sample):
+        if self._match_lane_zone_collection(self._lane_turn_zones, lane_id=lane_id, sample=sample):
             return True
         return False
 
@@ -1138,6 +1572,7 @@ class ViolationLogic:
         ts: datetime,
     ) -> set[str]:
         events: set[str] = set()
+        # Mỗi frame chỉ cần so với sample ngay trước đó để phát hiện cắt line.
         previous_sample = st.trajectory[-2] if len(st.trajectory) >= 2 else None
 
         for lane_id, line in self._commit_line_shapes.items():
@@ -1180,11 +1615,13 @@ class ViolationLogic:
         if state.last_seen_ts is not None:
             gap_ms = int((ts - state.last_seen_ts).total_seconds() * 1000.0)
             if gap_ms > self._line_crossing_max_gap_ms:
+                # Mất theo dõi quá lâu thì reset state crossing để tránh nối chuỗi sai.
                 self._reset_line_crossing_state(state=state)
         state.last_seen_ts = ts
 
         current_side = self._classify_sample_side(sample=sample, line=line)
         line_crossed = self._sample_crosses_line(previous_sample=previous_sample, sample=sample, line=line)
+        # Yêu cầu hậu kiểm: phải đi đủ xa về phía sau line mới tính là crossing hợp lệ.
         required_post_distance_px = max(
             self._line_crossing_min_displacement_px,
             line.length * self._line_crossing_min_displacement_ratio,
@@ -1193,12 +1630,14 @@ class ViolationLogic:
         if state.last_confirmed_ts is not None:
             cooldown_ms = int((ts - state.last_confirmed_ts).total_seconds() * 1000.0)
             if cooldown_ms <= self._line_crossing_cooldown_ms:
+                # Cooldown giúp một lần cắt line không bị bắn nhiều event liên tiếp.
                 self._rearm_line_crossing_state(state=state, current_side=current_side)
                 return False
 
         if state.crossing_active and state.crossing_started_ts is not None:
             crossing_elapsed_ms = int((ts - state.crossing_started_ts).total_seconds() * 1000.0)
             if crossing_elapsed_ms > self._line_crossing_max_gap_ms:
+                # Crossing kéo quá lâu coi như hỏng tín hiệu, reset về trạng thái chờ.
                 self._reset_line_crossing_state(state=state)
 
         if state.crossing_active:
@@ -1219,6 +1658,7 @@ class ViolationLogic:
                 return False
 
             if current_side == 0:
+                # Chạm line trong lúc crossing-active: tiếp tục chờ post-side rõ ràng.
                 return False
 
             self._reset_line_crossing_state(state=state)
@@ -1226,11 +1666,13 @@ class ViolationLogic:
             return False
 
         if state.armed_side is None:
+            # Chưa có phía neo ban đầu, rearm từ phía hiện tại rồi chờ thêm pre-frames.
             self._rearm_line_crossing_state(state=state, current_side=current_side)
             return False
 
         if current_side == 0:
             if line_crossed and state.pre_count >= self._line_crossing_min_pre_frames:
+                # Bắt đầu crossing-active khi đã có đủ pre-frames ở phía armed_side.
                 state.crossing_active = True
                 state.crossing_started_ts = ts
                 state.expected_post_side = -state.armed_side
@@ -1239,6 +1681,7 @@ class ViolationLogic:
             return False
 
         if current_side == state.armed_side:
+            # Vẫn đứng cùng phía armed_side: tích lũy pre_count trước khi crossing.
             state.pre_count += 1
             return False
 
@@ -1247,6 +1690,7 @@ class ViolationLogic:
             and state.pre_count >= self._line_crossing_min_pre_frames
             and current_side == -state.armed_side
         ):
+            # Trường hợp vượt line trong một bước: khởi tạo post_count = 1 ngay lập tức.
             state.crossing_active = True
             state.crossing_started_ts = ts
             state.expected_post_side = current_side
@@ -1269,6 +1713,7 @@ class ViolationLogic:
         return False
 
     def _reset_line_crossing_state(self, *, state: LineCrossingState) -> None:
+        # Reset toàn bộ trạng thái crossing hiện tại.
         state.armed_side = None
         state.pre_count = 0
         state.crossing_active = False
@@ -1278,6 +1723,7 @@ class ViolationLogic:
         state.crossing_started_ts = None
 
     def _rearm_line_crossing_state(self, *, state: LineCrossingState, current_side: int) -> None:
+        # Trở về trạng thái "đang canh" cho lượt crossing tiếp theo.
         state.crossing_active = False
         state.expected_post_side = None
         state.post_count = 0
@@ -1286,13 +1732,16 @@ class ViolationLogic:
         if current_side == 0:
             return
         if state.armed_side == current_side:
+            # Cùng phía với armed_side cũ thì tiếp tục tăng pre_count.
             state.pre_count += 1
             return
+        # Đổi phía neo: reset pre_count về 1 tại phía mới.
         state.armed_side = current_side
         state.pre_count = 1
 
     def _classify_sample_side(self, *, sample: TrajectorySample, line: PreparedLine) -> int:
         line_start, line_end = line.coords
+        # Đánh giá side trên cả 3 contact points để giảm nhiễu bbox rung.
         distances = [
             signed_distance_to_line(point, line_start, line_end)
             for point in sample.contacts
@@ -1305,6 +1754,7 @@ class ViolationLogic:
             return non_zero_signs[0]
         center_sign = signs[1]
         if center_sign != 0:
+            # Nếu 3 điểm bất đồng, ưu tiên dấu của tâm đáy bbox.
             return center_sign
         return 0
 
@@ -1323,6 +1773,7 @@ class ViolationLogic:
         if previous_sample is None:
             return False
         for start_point, end_point in zip(previous_sample.contacts, sample.contacts):
+            # Chỉ cần một trong ba contact segment cắt line là đủ coi như crossing.
             if line.intersects_segment(start_point, end_point):
                 return True
         return False
@@ -1356,22 +1807,11 @@ class ViolationLogic:
         lane_polygons: list[LanePolygon],
         geometry_field: str,
     ) -> dict[int, dict[str, PreparedPolygon]]:
-        by_lane: dict[int, dict[str, PreparedPolygon]] = {}
-        for lane in lane_polygons:
-            maneuvers = getattr(lane, "maneuvers", None) or {}
-            if not isinstance(maneuvers, dict):
-                continue
-            lane_map: dict[str, PreparedPolygon] = {}
-            for maneuver, maneuver_cfg in maneuvers.items():
-                if not self._maneuver_is_enabled(maneuver_cfg):
-                    continue
-                points = self._extract_maneuver_points(maneuver_cfg=maneuver_cfg, field=geometry_field)
-                if not points:
-                    continue
-                lane_map[maneuver] = PreparedPolygon.from_points(points)
-            if lane_map:
-                by_lane[lane.lane_id] = lane_map
-        return by_lane
+        return self._build_lane_geometry_collection(
+            lane_polygons=lane_polygons,
+            geometry_field=geometry_field,
+            geometry_builder=PreparedPolygon.from_points,
+        )
 
     def _build_lane_line_collection(
         self,
@@ -1379,19 +1819,32 @@ class ViolationLogic:
         lane_polygons: list[LanePolygon],
         geometry_field: str,
     ) -> dict[int, dict[str, PreparedLine]]:
-        by_lane: dict[int, dict[str, PreparedLine]] = {}
+        return self._build_lane_geometry_collection(
+            lane_polygons=lane_polygons,
+            geometry_field=geometry_field,
+            geometry_builder=PreparedLine.from_points,
+        )
+
+    def _build_lane_geometry_collection(
+        self,
+        *,
+        lane_polygons: list[LanePolygon],
+        geometry_field: str,
+        geometry_builder: Callable[[list[list[float]]], TGeometry],
+    ) -> dict[int, dict[str, TGeometry]]:
+        by_lane: dict[int, dict[str, TGeometry]] = {}
         for lane in lane_polygons:
             maneuvers = getattr(lane, "maneuvers", None) or {}
             if not isinstance(maneuvers, dict):
                 continue
-            lane_map: dict[str, PreparedLine] = {}
+            lane_map: dict[str, TGeometry] = {}
             for maneuver, maneuver_cfg in maneuvers.items():
                 if not self._maneuver_is_enabled(maneuver_cfg):
                     continue
                 points = self._extract_maneuver_points(maneuver_cfg=maneuver_cfg, field=geometry_field)
                 if not points:
                     continue
-                lane_map[maneuver] = PreparedLine.from_points(points)
+                lane_map[maneuver] = geometry_builder(points)
             if lane_map:
                 by_lane[lane.lane_id] = lane_map
         return by_lane
@@ -1492,11 +1945,13 @@ class ViolationLogic:
         evidence_summary: Optional[dict] = None,
         violations: list[dict],
     ) -> None:
+        # Mọi loại vi phạm đều đi qua lifecycle thống nhất để chống duplicate emit.
         lifecycle = self._touch_violation_lifecycle(st=st, key=lifecycle_key, ts=ts)
         lifecycle.phase = "confirmed"
 
         if lifecycle.first_ts is None:
             lifecycle.first_ts = ts
+        # Điều kiện active-time tối thiểu để chống false positive tức thời.
         active_ms = int((ts - lifecycle.first_ts).total_seconds() * 1000.0)
         if active_ms < int(min_active_ms):
             lifecycle.phase = "candidate"
@@ -1504,22 +1959,26 @@ class ViolationLogic:
             return
 
         if lifecycle.emitted_ts is not None:
+            # Đã emit trong event window hiện tại thì chỉ giữ pha active.
             lifecycle.phase = "active"
             lifecycle.last_seen_ts = ts
             return
 
+        # Lần đầu đủ điều kiện trong event window hiện tại -> emit payload.
         lifecycle.phase = "emitted"
         lifecycle.emitted_ts = ts
         lifecycle.phase = "active"
         lifecycle.last_seen_ts = ts
         payload = {"lane_id": lane_id, "violation": violation}
         if evidence_summary:
+            # Evidence summary đi kèm để UI/debug hiển thị lý do xác nhận vi phạm.
             payload["evidence_summary"] = evidence_summary
         violations.append(payload)
 
     def _touch_violation_lifecycle(self, *, st: VehicleState, key: str, ts: datetime) -> ViolationLifecycle:
         lifecycle = st.violation_lifecycles.get(key)
         if lifecycle is None:
+            # Tạo lifecycle mới khi loại vi phạm này xuất hiện lần đầu.
             lifecycle = ViolationLifecycle(first_ts=ts, last_seen_ts=ts)
             st.violation_lifecycles[key] = lifecycle
             return lifecycle
@@ -1527,56 +1986,231 @@ class ViolationLogic:
         if lifecycle.last_seen_ts is not None:
             elapsed_ms = int((ts - lifecycle.last_seen_ts).total_seconds() * 1000.0)
             if elapsed_ms > self._violation_rearm_window_ms:
+                # Quá lâu không thấy lại thì mở event window mới cho cùng loại vi phạm.
                 lifecycle.phase = "expired"
                 lifecycle.event_window_id += 1
                 lifecycle.first_ts = ts
                 lifecycle.emitted_ts = None
 
         if lifecycle.phase == "expired":
+            # Event window mới bắt đầu lại từ pha candidate.
             lifecycle.phase = "candidate"
         lifecycle.last_seen_ts = ts
         return lifecycle
 
-    def _lane_commit_point(self, lane: LanePolygon) -> tuple[float, float]:
+    def _lane_commit_point(self, lane: LanePolygon) -> Optional[tuple[float, float]]:
         if lane.commit_gate:
             return self._centroid_of_points(lane.commit_gate)
         if lane.commit_line:
             return self._line_midpoint(lane.commit_line)
-        if lane.approach_zone:
-            return self._centroid_of_points(lane.approach_zone)
-        return self._centroid_of_points(lane.polygon)
+        return None
 
-    def _lane_direction_vector(self, lane: LanePolygon) -> tuple[float, float]:
-        commit_point = self._lane_commit_points.get(lane.lane_id)
-        if commit_point is None:
-            commit_point = self._lane_commit_point(lane)
+    @staticmethod
+    def _point_tuple_or_none(point) -> Optional[tuple[float, float]]:
+        if not isinstance(point, (list, tuple)) or len(point) < 2:
+            return None
+        try:
+            return (float(point[0]), float(point[1]))
+        except (TypeError, ValueError):
+            return None
 
-        if lane.approach_zone:
-            approach_center = self._centroid_of_points(lane.approach_zone)
-            vec = self._normalize_vector(
-                (
-                    commit_point[0] - approach_center[0],
-                    commit_point[1] - approach_center[1],
+    def _direction_path_vector(
+        self,
+        lane: LanePolygon,
+        *,
+        reference_point: Optional[tuple[float, float]] = None,
+    ) -> Optional[tuple[float, float]]:
+        # Ưu tiên vector hướng khai báo tường minh trong direction_rule.
+        direction_rule = getattr(lane, "direction_rule", None)
+        if direction_rule is None:
+            return None
+
+        if isinstance(direction_rule, dict):
+            enabled = bool(direction_rule.get("enabled", False))
+            raw_direction_path = direction_rule.get("direction_path")
+        else:
+            enabled = bool(getattr(direction_rule, "enabled", False))
+            raw_direction_path = getattr(direction_rule, "direction_path", None)
+
+        if not enabled or not isinstance(raw_direction_path, list) or len(raw_direction_path) < 2:
+            return None
+
+        points = [point for point in (self._point_tuple_or_none(raw) for raw in raw_direction_path) if point is not None]
+        if len(points) < 2:
+            return None
+
+        if reference_point is not None:
+            # Chọn segment gần reference_point nhất để vector hướng phù hợp vị trí lane hiện tại.
+            best_vector: Optional[tuple[float, float]] = None
+            best_distance: Optional[float] = None
+            for index in range(len(points) - 1):
+                start = points[index]
+                end = points[index + 1]
+                vec = self._normalize_vector((end[0] - start[0], end[1] - start[1]))
+                if vec is None:
+                    continue
+                distance = self._distance_point_to_segment(
+                    point=reference_point,
+                    start=start,
+                    end=end,
                 )
-            )
+                if best_distance is None or distance < best_distance:
+                    best_distance = distance
+                    best_vector = vec
+            if best_vector is not None:
+                return best_vector
+
+        # Fallback: dùng vector từ điểm đầu tới điểm xa nhất còn hợp lệ.
+        start = points[0]
+        for index in range(len(points) - 1, 0, -1):
+            end = points[index]
+            vec = self._normalize_vector((end[0] - start[0], end[1] - start[1]))
             if vec is not None:
                 return vec
+        return None
 
-        lane_center = self._centroid_of_points(lane.polygon)
-        vec = self._normalize_vector(
+    def _update_lane_fallback_reference_vector(
+        self,
+        *,
+        source_lane_id: int,
+        ts: datetime,
+        vector: tuple[float, float],
+    ) -> None:
+        samples = self._lane_fallback_reference_samples.get(source_lane_id)
+        if samples is None:
+            samples = deque(maxlen=self._lane_fallback_reference_sample_window)
+            self._lane_fallback_reference_samples[source_lane_id] = samples
+        # Mỗi mẫu là vector heading đã normalize tại thời điểm ts.
+        samples.append((ts, vector))
+        self._prune_lane_fallback_reference_samples(samples=samples, ts=ts)
+
+    def _prune_lane_fallback_reference_samples(
+        self,
+        *,
+        samples: deque[tuple[datetime, tuple[float, float]]],
+        ts: datetime,
+    ) -> None:
+        while samples:
+            oldest_ts, _ = samples[0]
+            age_ms = int((ts - oldest_ts).total_seconds() * 1000.0)
+            # Xóa mẫu quá cũ để mô hình lane phản ánh điều kiện giao thông gần hiện tại.
+            if age_ms <= self._lane_fallback_reference_max_age_ms:
+                break
+            samples.popleft()
+
+    def _lane_fallback_reference_vector(
+        self,
+        *,
+        source_lane_id: int,
+        ts: datetime,
+    ) -> Optional[tuple[float, float]]:
+        # Tạo vector tham chiếu robust từ nhiều mẫu inlier khi lane không có direction_path tường minh.
+        samples = self._lane_fallback_reference_samples.get(source_lane_id)
+        if not samples:
+            return None
+
+        self._prune_lane_fallback_reference_samples(samples=samples, ts=ts)
+        if len(samples) < self._lane_fallback_reference_min_samples:
+            return None
+
+        raw_vectors = [vec for _, vec in samples]
+        # Trục thô để bắt hướng chung trước khi lọc inlier.
+        coarse = self._normalized_mean_vector(raw_vectors)
+        if coarse is None:
+            return None
+
+        # Lọc inlier theo dot để loại vector dị biệt.
+        inliers = [
+            vec for vec in raw_vectors
+            if ((vec[0] * coarse[0]) + (vec[1] * coarse[1])) >= self._lane_fallback_reference_inlier_dot_min
+        ]
+        if len(inliers) < self._lane_fallback_reference_min_samples:
+            return None
+
+        inlier_ratio = len(inliers) / len(raw_vectors)
+        # Cần đủ tỷ lệ inlier tối thiểu mới chấp nhận consensus lane.
+        if inlier_ratio < self._lane_fallback_reference_inlier_ratio_min:
+            return None
+
+        robust = self._normalized_mean_vector(inliers)
+        if robust is None:
+            return None
+
+        consistency = sum((vec[0] * robust[0]) + (vec[1] * robust[1]) for vec in inliers) / len(inliers)
+        # consistency thấp nghĩa là phân tán hướng cao, không tin cậy để làm vector tham chiếu.
+        if consistency < self._lane_fallback_reference_consensus_min:
+            return None
+        return robust
+
+    def _resolve_turn_reference_vector(
+        self,
+        *,
+        source_lane_id: int,
+        ts: datetime,
+        trajectory_entry_vector: Optional[tuple[float, float]],
+    ) -> Optional[tuple[float, float]]:
+        explicit_direction_path_vec = self._lane_direction_vectors.get(source_lane_id)
+        if explicit_direction_path_vec is not None:
+            # Có direction_path tường minh thì luôn ưu tiên.
+            return explicit_direction_path_vec
+
+        lane_model_vec = self._lane_fallback_reference_vector(
+            source_lane_id=source_lane_id,
+            ts=ts,
+        )
+        if lane_model_vec is not None:
+            # Có consensus lane thì có thể blend nhẹ với trajectory entry để theo thực tế.
+            return self._blend_lane_consensus_with_trajectory(
+                lane_consensus_vec=lane_model_vec,
+                trajectory_entry_vector=trajectory_entry_vector,
+            )
+        if trajectory_entry_vector is not None:
+            return trajectory_entry_vector
+        return None
+
+    def _blend_lane_consensus_with_trajectory(
+        self,
+        *,
+        lane_consensus_vec: tuple[float, float],
+        trajectory_entry_vector: Optional[tuple[float, float]],
+    ) -> tuple[float, float]:
+        if trajectory_entry_vector is None:
+            return lane_consensus_vec
+
+        blend_cap = self._lane_fallback_reference_trajectory_blend_max_weight
+        if blend_cap <= 0.0:
+            return lane_consensus_vec
+
+        alignment = (
+            (lane_consensus_vec[0] * trajectory_entry_vector[0])
+            + (lane_consensus_vec[1] * trajectory_entry_vector[1])
+        )
+        min_alignment = self._lane_fallback_reference_trajectory_blend_min_alignment_dot
+        # Chỉ blend khi lane-consensus và trajectory cùng chiều đủ tốt.
+        if alignment < min_alignment:
+            return lane_consensus_vec
+
+        alignment_span = max(1.0 - min_alignment, 1e-6)
+        alignment_ratio = min(max((alignment - min_alignment) / alignment_span, 0.0), 1.0)
+        # Trọng số blend tăng dần theo mức độ alignment.
+        trajectory_weight = blend_cap * alignment_ratio
+        if trajectory_weight <= 1e-6:
+            return lane_consensus_vec
+
+        lane_weight = 1.0 - trajectory_weight
+        blended = self._normalize_vector(
             (
-                commit_point[0] - lane_center[0],
-                commit_point[1] - lane_center[1],
+                (lane_consensus_vec[0] * lane_weight) + (trajectory_entry_vector[0] * trajectory_weight),
+                (lane_consensus_vec[1] * lane_weight) + (trajectory_entry_vector[1] * trajectory_weight),
             )
         )
-        if vec is not None:
-            return vec
-        return (0.0, 1.0)
+        return blended or lane_consensus_vec
 
     def _build_lane_known_maneuvers(
         self,
         lane_polygons: list[LanePolygon],
     ) -> dict[int, set[str]]:
+        # Gom toàn bộ maneuver hợp lệ theo lane để phục vụ bước scoring.
         by_lane: dict[int, set[str]] = {}
         for lane in lane_polygons:
             lane_set: set[str] = set()
@@ -1601,6 +2235,7 @@ class ViolationLogic:
         self,
         lane_polygons: list[LanePolygon],
     ) -> dict[int, dict[str, tuple[float, float]]]:
+        # Anchor dùng để suy dấu quay trái/phải so với hướng lane.
         anchors_by_lane: dict[int, dict[str, tuple[float, float]]] = {}
         for lane in lane_polygons:
             maneuvers = getattr(lane, "maneuvers", None) or {}
@@ -1612,19 +2247,16 @@ class ViolationLogic:
                     continue
                 exit_line = self._extract_maneuver_points(maneuver_cfg=maneuver_cfg, field="exit_line")
                 if exit_line:
+                    # Ưu tiên anchor theo exit_line nếu có vì phản ánh đích maneuver rõ nhất.
                     lane_anchors[maneuver] = self._line_midpoint(exit_line)
                     continue
                 exit_zone = self._extract_maneuver_points(maneuver_cfg=maneuver_cfg, field="exit_zone")
                 if exit_zone:
                     lane_anchors[maneuver] = self._centroid_of_points(exit_zone)
                     continue
-                corridor = self._extract_maneuver_points(maneuver_cfg=maneuver_cfg, field="turn_corridor")
-                if corridor:
-                    lane_anchors[maneuver] = self._centroid_of_points(corridor)
-                    continue
-                movement_path = self._extract_maneuver_points(maneuver_cfg=maneuver_cfg, field="movement_path")
-                if movement_path:
-                    lane_anchors[maneuver] = movement_path[-1]
+                turn_zone = self._extract_maneuver_points(maneuver_cfg=maneuver_cfg, field="turn_zone")
+                if turn_zone:
+                    lane_anchors[maneuver] = self._centroid_of_points(turn_zone)
             if lane_anchors:
                 anchors_by_lane[lane.lane_id] = lane_anchors
         return anchors_by_lane
@@ -1652,7 +2284,30 @@ class ViolationLogic:
             return ViolationLogic._centroid_of_points(points)
         start = points[0]
         end = points[1]
+        # Midpoint của line dùng làm mốc hình học đơn giản cho anchor/commit.
         return ((float(start[0]) + float(end[0])) / 2.0, (float(start[1]) + float(end[1])) / 2.0)
+
+    @staticmethod
+    def _estimate_lane_width_px(points: list[list[float]]) -> float:
+        if not points:
+            return 0.0
+        xs = [float(point[0]) for point in points]
+        ys = [float(point[1]) for point in points]
+        width_px = max(xs) - min(xs)
+        height_px = max(ys) - min(ys)
+        return max(min(width_px, height_px), 0.0)
+
+    @staticmethod
+    def _normalized_mean_vector(vectors: list[tuple[float, float]]) -> Optional[tuple[float, float]]:
+        if not vectors:
+            return None
+        sum_x = sum(vec[0] for vec in vectors)
+        sum_y = sum(vec[1] for vec in vectors)
+        # Chuẩn hóa tổng vector để trả kết quả dạng đơn vị.
+        mag = hypot(sum_x, sum_y)
+        if mag <= 1e-6:
+            return None
+        return (sum_x / mag, sum_y / mag)
 
     @staticmethod
     def _normalize_vector(vector: tuple[float, float]) -> Optional[tuple[float, float]]:
@@ -1661,6 +2316,29 @@ class ViolationLogic:
         if mag <= 1e-6:
             return None
         return (vx / mag, vy / mag)
+
+    @staticmethod
+    def _distance_point_to_segment(
+        *,
+        point: tuple[float, float],
+        start: tuple[float, float],
+        end: tuple[float, float],
+    ) -> float:
+        px, py = point
+        x1, y1 = start
+        x2, y2 = end
+
+        dx = x2 - x1
+        dy = y2 - y1
+        length_sq = (dx * dx) + (dy * dy)
+        if length_sq <= 1e-9:
+            return hypot(px - x1, py - y1)
+
+        t = ((px - x1) * dx + (py - y1) * dy) / length_sq
+        t = max(0.0, min(1.0, t))
+        proj_x = x1 + (dx * t)
+        proj_y = y1 + (dy * t)
+        return hypot(px - proj_x, py - proj_y)
 
     @staticmethod
     def _sign_of_value(value: float, *, tolerance: float = 1e-5) -> int:
@@ -1676,6 +2354,7 @@ class ViolationLogic:
         vehicle_type: Optional[str] = None,
         min_points: int = 3,
     ) -> list[dict]:
+        # Snapshot trajectory runtime cho API debug/giám sát.
         rows: list[dict] = []
         for state in self._vehicle_states.values():
             if lane_id is not None and state.current_stable_lane_id != lane_id:
@@ -1698,10 +2377,19 @@ class ViolationLogic:
                     "turn_reject_reasons": dict(state.turn_state.last_reject_reasons),
                 }
             )
+        # Ưu tiên xe mới xuất hiện gần nhất lên đầu danh sách.
         rows.sort(key=lambda row: row.get("last_seen_ts") or "", reverse=True)
         return rows[: max(int(limit), 1)]
 
+    def get_direction_status_for_vehicle(self, *, vehicle_id: int) -> tuple[str, Optional[float]]:
+        st = self._vehicle_states.get(vehicle_id)
+        if st is None:
+            # Fallback query trực tiếp DirectionLogic khi state vehicle đã bị prune.
+            return self._direction_logic.status_for_vehicle(vehicle_id=vehicle_id)
+        return (st.direction_status, st.direction_dot)
+
     def prune(self, *, current_ts: datetime, max_age_s: float) -> None:
+        # Dọn state xe cũ để giữ bộ nhớ ổn định cho hệ realtime chạy dài hạn.
         cutoff_ts = current_ts.timestamp() - float(max_age_s)
         to_delete: list[int] = []
         for vid, st in self._vehicle_states.items():
@@ -1723,5 +2411,7 @@ class ViolationLogic:
 
             if st.last_seen_ts.timestamp() < cutoff_ts:
                 to_delete.append(vid)
+        self._direction_logic.prune(current_ts=current_ts, max_age_s=max_age_s)
         for vid in to_delete:
             del self._vehicle_states[vid]
+

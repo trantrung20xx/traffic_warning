@@ -28,6 +28,11 @@ def insert_violation(session, event: ViolationEvent) -> int:
         lane_id=event.lane_id,
         violation=event.violation,
         evidence_image_path=event.image_path,
+        license_plate=event.license_plate,
+        license_plate_status=event.license_plate_status,
+        license_plate_confidence=event.license_plate_confidence,
+        license_plate_image_path=event.license_plate_image_path,
+        track_session_id=event.track_session_id,
         timestamp_utc=ts,
     )
     session.add(row)
@@ -42,6 +47,7 @@ def query_violation_counts(
     from_ts: Optional[str] = None,
     to_ts: Optional[str] = None,
 ):
+    # Aggregate nhanh theo camera/vị trí/loại xe/loại vi phạm cho endpoint stats.
     q = select(
         Violation.camera_id,
         Violation.road_name,
@@ -60,8 +66,10 @@ def query_violation_counts(
     parsed_from = _parse_ts(from_ts)
     parsed_to = _parse_ts(to_ts)
     if parsed_from:
+        # Lọc cận dưới thời gian theo UTC đã chuẩn hóa.
         q = q.where(Violation.timestamp_utc >= parsed_from)
     if parsed_to:
+        # Lọc cận trên thời gian theo UTC đã chuẩn hóa.
         q = q.where(Violation.timestamp_utc <= parsed_to)
 
     rows = session.execute(q).all()
@@ -81,6 +89,7 @@ def query_violation_counts(
 def _parse_ts(value: Optional[str]) -> Optional[datetime]:
     if not value:
         return None
+    # Mọi timestamp nhập vào đều đổi về UTC-aware datetime trước khi query.
     return ensure_utc_datetime(datetime.fromisoformat(value))
 
 
@@ -90,7 +99,9 @@ def _base_violation_query(
     from_ts: Optional[str] = None,
     to_ts: Optional[str] = None,
     camera_id: Optional[str] = None,
+    license_plate: Optional[str] = None,
 ):
+    # Query nền dùng chung cho history và analytics, đảm bảo điều kiện lọc nhất quán.
     q = select(Violation)
     parsed_from = _parse_ts(from_ts)
     parsed_to = _parse_ts(to_ts)
@@ -100,6 +111,10 @@ def _base_violation_query(
         q = q.where(Violation.timestamp_utc <= parsed_to)
     if camera_id:
         q = q.where(Violation.camera_id == camera_id)
+    if license_plate:
+        normalized = str(license_plate).strip().lower()
+        # So khớp không phân biệt hoa/thường để tìm biển số linh hoạt.
+        q = q.where(func.lower(Violation.license_plate).like(f"%{normalized}%"))
     return q
 
 
@@ -114,6 +129,7 @@ def _determine_time_series_granularity(
     parsed_to = _parse_ts(to_ts)
 
     if parsed_from and parsed_to and parsed_to > parsed_from:
+        # Ưu tiên chọn granularity theo khoảng thời gian truy vấn khi có đủ from/to.
         duration = parsed_to - parsed_from
         if duration <= timedelta(hours=chart_config.minute_granularity_max_range_hours):
             return "minute"
@@ -126,6 +142,7 @@ def _determine_time_series_granularity(
         return "month"
 
     if row_count <= chart_config.minute_granularity_max_range_hours * 60:
+        # Fallback theo số lượng điểm khi thiếu khoảng thời gian rõ ràng.
         return "minute"
     if row_count <= chart_config.hour_granularity_max_range_days * 24:
         return "hour"
@@ -137,6 +154,7 @@ def _determine_time_series_granularity(
 
 
 def _floor_bucket_in_vietnam(value: datetime, granularity: str) -> datetime:
+    # Gom bucket theo giờ Việt Nam để biểu đồ nghiệp vụ khớp múi giờ người vận hành.
     local_dt = to_vietnam_datetime(value).replace(microsecond=0)
 
     if granularity == "minute":
@@ -162,11 +180,13 @@ def _advance_bucket_in_vietnam(value: datetime, granularity: str) -> datetime:
     if granularity == "week":
         return value + timedelta(days=7)
     if value.month == 12:
+        # Chuyển tháng qua năm mới.
         return value.replace(year=value.year + 1, month=1)
     return value.replace(month=value.month + 1)
 
 
 def _new_time_series_entry(bucket_dt: datetime, next_bucket_dt: datetime) -> dict:
+    # Entry trung gian dùng defaultdict để cộng dồn breakdown thuận tiện.
     return {
         "bucket": bucket_dt.isoformat(),
         "bucket_end": next_bucket_dt.isoformat(),
@@ -185,6 +205,7 @@ def _build_time_series(
     to_ts: Optional[str],
     fill_missing: bool,
 ):
+    # Xây time-series trong bộ nhớ từ raw rows; tránh phụ thuộc hàm bucket theo DB engine.
     bucket_map: dict[str, dict] = {}
 
     for row in rows:
@@ -194,6 +215,7 @@ def _build_time_series(
             bucket_key,
             _new_time_series_entry(bucket_dt, _advance_bucket_in_vietnam(bucket_dt, granularity)),
         )
+        # Cộng dồn one-pass cho tổng và từng breakdown.
         entry["total"] += 1
         entry["camera_breakdown"][row.camera_id] += 1
         entry["vehicle_breakdown"][row.vehicle_type] += 1
@@ -210,16 +232,20 @@ def _build_time_series(
             for _, entry in sorted(bucket_map.items())
         ]
 
+    # Xác định range để fill bucket trống theo from/to hoặc theo min-max dữ liệu thực.
     range_start = _parse_ts(from_ts) or rows[0].timestamp_utc
     range_end = _parse_ts(to_ts) or rows[-1].timestamp_utc
     if range_end < range_start:
+        # Hoán đổi khi đầu vào from/to đảo ngược.
         range_start, range_end = range_end, range_start
 
     current_bucket = _floor_bucket_in_vietnam(range_start, granularity)
+    # end_exclusive là bucket ngay sau bucket chứa range_end.
     end_exclusive = _advance_bucket_in_vietnam(_floor_bucket_in_vietnam(range_end, granularity), granularity)
 
     series = []
     while current_bucket < end_exclusive:
+        # Fill bucket rỗng để biểu đồ timeline không bị đứt đoạn.
         bucket_key = current_bucket.isoformat()
         entry = bucket_map.get(bucket_key) or _new_time_series_entry(
             current_bucket,
@@ -244,13 +270,21 @@ def query_violation_history(
     from_ts: Optional[str] = None,
     to_ts: Optional[str] = None,
     camera_id: Optional[str] = None,
+    license_plate: Optional[str] = None,
     limit: Optional[int] = None,
 ):
-    q = _base_violation_query(session, from_ts=from_ts, to_ts=to_ts, camera_id=camera_id).order_by(
+    q = _base_violation_query(
+        session,
+        from_ts=from_ts,
+        to_ts=to_ts,
+        camera_id=camera_id,
+        license_plate=license_plate,
+    ).order_by(
         desc(Violation.timestamp_utc),
         desc(Violation.id),
     )
     if limit is not None:
+        # Limit ở mức query để tránh kéo toàn bộ lịch sử lên bộ nhớ.
         q = q.limit(int(limit))
     rows = session.execute(q).scalars().all()
     return [
@@ -269,6 +303,12 @@ def query_violation_history(
             "violation": row.violation,
             "image_path": row.evidence_image_path,
             "image_url": build_evidence_image_url(row.evidence_image_path),
+            "license_plate": row.license_plate,
+            "license_plate_status": row.license_plate_status,
+            "license_plate_confidence": row.license_plate_confidence,
+            "license_plate_image_path": row.license_plate_image_path,
+            "license_plate_image_url": build_evidence_image_url(row.license_plate_image_path),
+            "track_session_id": row.track_session_id,
             "timestamp": to_vietnam_isoformat(row.timestamp_utc),
         }
         for row in rows
@@ -301,6 +341,7 @@ def query_dashboard_analytics(
     road_summary_map: dict[str, dict] = {}
 
     for row in rows:
+        # Một pass duy nhất để build đồng thời các breakdown cho dashboard.
         vehicle_type_totals[row.vehicle_type] += 1
         violation_totals[row.violation] += 1
 
@@ -337,6 +378,7 @@ def query_dashboard_analytics(
         road_entry["violation_totals"][row.violation] += 1
 
     def _normalize_summary(entry: dict) -> dict:
+        # Chuyển defaultdict -> dict thuần để serialize JSON ổn định.
         return {
             **entry,
             "vehicle_type_totals": dict(entry["vehicle_type_totals"]),

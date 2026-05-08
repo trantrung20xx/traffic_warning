@@ -17,6 +17,25 @@ def _ensure_violation_schema(engine) -> None:
         columns = {column["name"] for column in inspector.get_columns("violations")}
         if "evidence_image_path" not in columns:
             connection.execute(text("ALTER TABLE violations ADD COLUMN evidence_image_path VARCHAR"))
+        if "license_plate" not in columns:
+            connection.execute(text("ALTER TABLE violations ADD COLUMN license_plate VARCHAR"))
+        if "license_plate_status" not in columns:
+            connection.execute(text("ALTER TABLE violations ADD COLUMN license_plate_status VARCHAR"))
+        if "license_plate_confidence" not in columns:
+            connection.execute(text("ALTER TABLE violations ADD COLUMN license_plate_confidence FLOAT"))
+        if "license_plate_image_path" not in columns:
+            connection.execute(text("ALTER TABLE violations ADD COLUMN license_plate_image_path VARCHAR"))
+        if "track_session_id" not in columns:
+            connection.execute(text("ALTER TABLE violations ADD COLUMN track_session_id VARCHAR"))
+        connection.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_violations_license_plate ON violations (license_plate)")
+        )
+        connection.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_violations_license_plate_status ON violations (license_plate_status)")
+        )
+        connection.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_violations_track_session_id ON violations (track_session_id)")
+        )
 
 
 def create_engine_and_session(db_path: Union[Path, str]):

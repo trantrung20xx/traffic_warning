@@ -2,49 +2,18 @@
   "cameras": [
     {
       "camera_id": "cam_01",
-      "rtsp_url": "C:\\Users\\trant\\Videos\\Captures\\video.mp4",
+      "rtsp_url": "D:\\Workspace\\DATN\\traffic_video_data\\4k\\4K Road traffic video for object detection and tracking - free download now!.mp4",
       "camera_type": "roadside",
-      "view_direction": "Đông - Bắc",
       "location": {
-        "road_name": "QL1A",
-        "intersection_name": "Ngã tư Phố Nối",
-        "gps_lat": 10.12345,
-        "gps_lng": 106.12345
+        "road_name": ""
       },
       "monitored_lanes": [
         1,
         2,
-        3,
-        4
+        3
       ],
-      "frame_width": 1280,
-      "frame_height": 720
-    },
-    {
-      "camera_id": "cam_02",
-      "rtsp_url": "abc",
-      "camera_type": "roadside",
-      "location": {
-        "road_name": "Ngã tư Sở"
-      },
-      "monitored_lanes": [
-        1
-      ],
-      "frame_width": 1280,
-      "frame_height": 720
-    },
-    {
-      "camera_id": "cam_03",
-      "rtsp_url": "bcd",
-      "camera_type": "roadside",
-      "location": {
-        "road_name": "Ngã tư Nhổn"
-      },
-      "monitored_lanes": [
-        1
-      ],
-      "frame_width": 1280,
-      "frame_height": 720
+      "frame_width": 1920,
+      "frame_height": 1080
     }
   ]
 }

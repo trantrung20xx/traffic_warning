@@ -1,14 +1,38 @@
-# Frontend
+# Frontend README
 
-Frontend là ứng dụng React + Vite cho 3 màn hình:
+Frontend là giao diện web để vận hành Traffic Warning. Frontend không tự nhận diện xe và không chạy model AI. Mọi xử lý nặng như đọc video, nhận diện xe, theo dõi xe, kiểm tra vi phạm và đọc biển số đều nằm ở backend.
 
-- Giám sát realtime.
-- Thống kê lịch sử vi phạm.
-- Quản lý camera và cấu hình lane/maneuver.
+## Mục Lục
 
-Frontend không chạy AI; toàn bộ dữ liệu lấy từ backend qua REST/WebSocket/MJPEG.
+- [Frontend dùng để làm gì](#frontend-dùng-để-làm-gì)
+- [Chạy frontend](#chạy-frontend)
+- [Cấu hình kết nối backend](#cấu-hình-kết-nối-backend)
+- [Các màn hình](#các-màn-hình)
+- [Cách cấu hình camera và làn trên UI](#cách-cấu-hình-camera-và-làn-trên-ui)
+- [Ý nghĩa các trường trên UI](#ý-nghĩa-các-trường-trên-ui)
+- [Dữ liệu frontend nhận từ backend](#dữ-liệu-frontend-nhận-từ-backend)
+- [Tổ chức source](#tổ-chức-source)
+- [Build production](#build-production)
 
-## Chạy frontend
+## Frontend Dùng Để Làm Gì
+
+| Việc | Giải thích |
+|---|---|
+| Giám sát realtime | Xem camera, xe đang được theo dõi, làn xe, quỹ đạo, biển số và vi phạm mới. |
+| Thống kê | Xem tổng số vi phạm, biểu đồ, lịch sử và xuất CSV/XLSX. |
+| Quản lý camera | Tạo/sửa/xóa camera, upload ảnh nền. |
+| Cấu hình làn | Vẽ vùng làn, vùng rẽ, vạch kiểm tra, chiều đi đúng. |
+| Kiểm tra cấu hình | Hiển thị cảnh báo nếu vùng làn/vùng rẽ dễ gây nhầm. |
+
+Nguồn dữ liệu:
+
+```text
+REST API      -> camera, cấu hình, lịch sử, thống kê, export
+WebSocket     -> xe realtime và vi phạm mới
+MJPEG preview -> ảnh camera trực tiếp
+```
+
+## Chạy Frontend
 
 ```powershell
 cd frontend
@@ -16,138 +40,312 @@ npm install
 npm run dev
 ```
 
-Mặc định chạy ở `http://localhost:5173`.
+Mở trình duyệt:
 
-## Cấu hình kết nối backend
+```text
+http://localhost:5173
+```
 
-| Biến | Giải thích |
-|---|---|
-| `VITE_API_BASE` | Base URL backend. Nếu không đặt, frontend dùng `http://localhost:8000`. |
+## Cấu Hình Kết Nối Backend
 
-Ví dụ `.env`:
+Frontend dùng 2 biến trong `frontend/.env`:
+
+| Biến | Ý nghĩa | Ví dụ |
+|---|---|---|
+| `VITE_API_BASE` | Địa chỉ backend đầy đủ. | `http://localhost:8000` |
+| `VITE_API_PORT` | Port backend khi không đặt `VITE_API_BASE`. | `8000` |
+
+Ví dụ `frontend/.env`:
 
 ```env
 VITE_API_BASE=http://localhost:8000
+VITE_API_PORT=8000
 ```
 
-## Mô hình `.pt` và cách chạy (liên quan frontend)
+Cách frontend tự chọn backend:
 
-Frontend không tải/chạy model YOLO trực tiếp. Model `.pt` chạy hoàn toàn ở backend.
+```text
+1. Nếu có VITE_API_BASE -> dùng giá trị này.
+2. Nếu không có -> lấy host đang mở frontend và ghép với VITE_API_PORT.
+3. Nếu vẫn không xác định được -> dùng http://localhost:8000.
+```
 
-Để đổi model:
+Ví dụ:
 
-1. Tải model `.pt` về máy (ví dụ `backend/yolov8m.pt`).
-2. Sửa `config/settings.json` tại `detection.weights_path`.
-3. Restart backend.
-
-Sau khi backend đổi model, frontend tự nhận kết quả mới qua API/WS, không cần build lại frontend.
-
-## Cấu hình người dùng thao tác trên UI (lane-centric + maneuver-centric)
-
-Phần này đồng bộ với schema backend `config/lane_configs/<camera_id>.json`.
-
-### Nhóm thông tin từng làn
-
-| Trường | Giải thích |
+| Bạn mở frontend tại | Frontend sẽ gọi backend |
 |---|---|
-| `polygon` | Biên làn để gán lane cho xe. |
-| `approach_zone` | Vùng xe đi vào trước khi rẽ, dùng để khóa làn nguồn. |
-| `commit_gate` | Vùng xác nhận xe bắt đầu thực hiện hướng đi (tùy chọn). |
-| `commit_line` | Vạch xác nhận xe bắt đầu thực hiện hướng đi (tùy chọn). |
-| `allowed_lane_changes` | Làn được phép chuyển tới (quy tắc cho lỗi `wrong_lane`). |
-| `allowed_vehicle_types` | Loại xe hợp lệ trong lane. |
-| `allowed_maneuvers` | Danh sách maneuver hợp lệ theo luật cho lane. |
+| `http://localhost:5173` | `http://localhost:8000` |
+| `http://192.168.1.20:5173` | `http://192.168.1.20:8000` |
+| Có `VITE_API_BASE=http://10.0.0.5:9000` | `http://10.0.0.5:9000` |
 
-### Maneuver configuration (`straight`, `left`, `right`, `u_turn`)
+Sau khi sửa `.env`, cần dừng và chạy lại:
 
-| Trường | Giải thích |
+```powershell
+npm run dev
+```
+
+## Các Màn Hình
+
+### 1. Giám sát
+
+Màn hình này dùng để xem camera đang chạy.
+
+Hiển thị:
+
+- Ảnh camera realtime.
+- Vùng làn đã vẽ.
+- Khung xe đang được backend theo dõi.
+- ID xe, loại xe, làn hiện tại.
+- Biển số và trạng thái đọc biển số nếu backend bật OCR.
+- Trạng thái hướng đi nếu làn có cấu hình hướng đúng chiều.
+- Quỹ đạo gần đây của xe.
+- Vi phạm mới.
+- FPS xử lý do backend gửi.
+
+Các trạng thái biển số:
+
+| Trạng thái | Nghĩa |
 |---|---|
-| `enabled` | Bật/tắt nhận diện maneuver. |
-| `allowed` | Cho phép/cấm maneuver theo luật. |
-| `movement_path` | Quỹ đạo kỳ vọng (polyline) để backend suy corridor/evidence. |
-| `corridor_preset` | Preset corridor (`narrow`, `normal`, `wide`). |
-| `corridor_width_px` | Độ rộng corridor (px), có thể để backend tự gán theo preset. |
-| `turn_corridor` | Polygon corridor; nếu không có và có `movement_path`, backend có thể tự sinh. |
-| `exit_line` | Vạch xác nhận xe đã đi ra đúng nhánh của maneuver. |
-| `exit_zone` | Vùng xác nhận xe đã đi ra đúng nhánh của maneuver. |
+| `pending` | Đang chờ đọc thêm. |
+| `confirmed` | Đã đủ số lần xác nhận. |
+| `uncertain` | Có kết quả nhưng chưa chắc. |
+| `unreadable` | Đã thử nhiều lần nhưng không đọc được. |
 
-## Ý nghĩa các trường analytics chart mà frontend sử dụng
+### 2. Thống kê
 
-Các trường này backend trả về qua `chart_config` và frontend dùng để chọn granularity/tick:
+Màn hình này dùng để xem dữ liệu đã lưu.
 
-| Key | Giải thích |
+Chức năng:
+
+- Lọc theo camera.
+- Lọc theo khoảng thời gian.
+- Tìm theo biển số.
+- Xem biểu đồ theo thời gian.
+- Xem thống kê theo camera, loại xe, loại vi phạm và khu vực.
+- Xem bảng lịch sử.
+- Mở chi tiết một vi phạm.
+- Tải CSV hoặc XLSX.
+
+### 3. Quản lý
+
+Màn hình này dùng để cấu hình hệ thống mà không cần sửa JSON bằng tay.
+
+Chức năng:
+
+- Thêm/sửa/xóa camera.
+- Upload ảnh nền để vẽ làn dễ hơn.
+- Vẽ vùng làn.
+- Vẽ vùng đi vào, vùng/vạch xác nhận.
+- Vẽ chiều đi đúng để phát hiện ngược chiều.
+- Vẽ vùng rẽ/vạch ra/vùng ra cho từng hướng.
+- Cấu hình xe nào được phép đi trong làn.
+- Cấu hình xe được phép đổi sang làn nào.
+- Bật/tắt hoặc cho phép/cấm từng hướng đi.
+- Undo/redo thao tác vẽ.
+
+## Cách Cấu Hình Camera Và Làn Trên UI
+
+### Quy trình khuyến nghị
+
+```text
+1. Tạo camera hoặc chọn camera cần sửa
+2. Nhập nguồn video và kích thước frame
+3. Upload ảnh nền chụp từ camera
+4. Vẽ polygon cho từng làn
+5. Vẽ vùng approach/commit nếu cần nhận diện rẽ
+6. Vẽ direction path/check zone nếu cần phát hiện ngược chiều
+7. Cấu hình loại xe, đổi làn và hướng đi được phép
+8. Xem cảnh báo validation
+9. Lưu cấu hình
+10. Mở màn hình Giám sát để kiểm tra realtime
+```
+
+### Khi vẽ làn
+
+Vẽ `polygon` bao sát phần mặt đường của làn. Không nên để hai làn chồng lên nhau quá nhiều, vì xe ở gần vạch có thể bị gán nhầm làn.
+
+### Khi vẽ phát hiện ngược chiều
+
+Vẽ `direction_path` theo đúng chiều xe được phép chạy.
+
+```text
+Điểm đầu -> điểm cuối = chiều đúng
+```
+
+`check_zone` nên là vùng xe chạy ổn định trong làn, tránh vùng giao nhau hoặc vùng rẽ phức tạp.
+
+### Khi vẽ hướng rẽ
+
+Mỗi hướng có thể dùng:
+
+- `turn_zone`: vùng xe đi qua khi thực hiện hướng đó.
+- `exit_line`: vạch xe cắt qua khi đi ra nhánh đó.
+- `exit_zone`: vùng xe đi vào sau khi ra nhánh đó.
+
+Không bắt buộc lúc nào cũng đủ cả 3 vùng, nhưng càng rõ thì backend càng dễ kết luận đúng.
+
+## Ý Nghĩa Các Trường Trên UI
+
+### Camera
+
+| Trường | Người dùng cần hiểu |
 |---|---|
-| `minute_granularity_max_range_hours` | Tối đa bao nhiêu giờ thì biểu đồ giữ granularity theo phút. |
-| `hour_granularity_max_range_days` | Tối đa bao nhiêu ngày thì giữ granularity theo giờ. |
-| `day_granularity_max_range_days` | Tối đa bao nhiêu ngày thì giữ granularity theo ngày. |
-| `week_granularity_max_range_days` | Tối đa bao nhiêu ngày thì giữ granularity theo tuần. |
-| `minute_axis_label_interval_minutes` | Khoảng cách nhãn phút trên trục X. |
-| `minute_axis_max_ticks` | Số tick tối đa khi vẽ minute chart. |
-| `hour_axis_max_ticks` | Số tick tối đa khi vẽ hour chart. |
-| `overview_axis_max_ticks` | Số tick tối đa khi vẽ day/week/month chart. |
-| `point_markers_max_points` | Ngưỡng số điểm để frontend quyết định hiển thị marker. |
+| `camera_id` | Tên duy nhất của camera. Không nên đổi tùy tiện sau khi đã có dữ liệu. |
+| `rtsp_url` | Link camera hoặc đường dẫn file video backend đọc. |
+| `camera_type` | Loại camera: ven đường, từ trên cao hoặc nút giao. |
+| `view_direction` | Mô tả hướng nhìn để người vận hành dễ nhớ. |
+| `road_name` | Tên đường, dùng trong lịch sử và thống kê. |
+| `intersection_name` | Tên nút giao, có thể để trống. |
+| `gps_lat`, `gps_lng` | Tọa độ GPS, có thể để trống. |
+| `frame_width`, `frame_height` | Kích thước ảnh dùng khi vẽ và xử lý. Đổi giá trị này có thể làm lệch vùng đã vẽ. |
+| `monitored_lanes` | Danh sách ID làn camera theo dõi. |
 
-## Cấu hình UI monitoring nhận từ backend
+### Lane
 
-`GET /api/cameras/{camera_id}` trả thêm `ui.monitoring`; frontend dùng để điều chỉnh hiển thị realtime mà không cần hard-code trong React.
-
-| Key | Giải thích |
+| Trường | Người dùng cần hiểu |
 |---|---|
-| `trajectory.default_limit` | Số quỹ đạo mặc định hiển thị trên màn hình giám sát. |
-| `trajectory.min_limit` / `trajectory.max_limit` | Giới hạn cho bộ chọn số quỹ đạo. |
-| `trajectory.max_points_per_vehicle` | Số điểm trajectory tối đa giữ trên mỗi xe. |
-| `trajectory.stale_ms` | Thời gian không cập nhật thì trajectory bị coi là cũ. |
-| `trajectory.min_point_distance_px` | Khoảng cách tối thiểu giữa 2 điểm để tránh vẽ nhiễu. |
-| `violation.list_max_rows` | Số vi phạm realtime tối đa giữ trên danh sách. |
-| `violation.highlight_duration_ms` | Thời gian highlight vi phạm mới. |
-| `processing_fps.stale_after_ms` / `processing_fps.poll_interval_ms` | Ngưỡng stale và chu kỳ poll FPS xử lý. |
+| `lane_id` | Số của làn. Dùng để đặt luật đổi làn và lưu vi phạm. |
+| `polygon` | Vùng chính của làn. Backend dựa vào đây để gán xe vào làn. |
+| `approach_zone` | Vùng xe đi vào trước khi rẽ. Giúp backend biết xe bắt đầu từ làn nào. |
+| `commit_gate` | Vùng xác nhận xe đã bắt đầu đi theo một hướng. |
+| `commit_line` | Vạch xác nhận xe đã bắt đầu đi theo một hướng. |
+| `allowed_lane_changes` | Xe từ làn này được phép chuyển sang những làn nào. |
+| `allowed_vehicle_types` | Những loại xe được phép đi trong làn này. |
+| `direction_rule` | Quy tắc chiều đi đúng để bắt xe đi ngược chiều. |
+| `maneuvers` | Cấu hình đi thẳng, rẽ trái, rẽ phải, quay đầu. |
 
-## API/WS mà frontend gọi (kèm giải thích)
+### Loại xe
 
-| Method | Endpoint | Giải thích |
-|---|---|---|
-| `GET` | `/api/health` | Kiểm tra backend sống trước khi vận hành. |
-| `GET` | `/api/cameras` | Lấy danh sách camera để render dropdown. |
-| `GET` | `/api/cameras/{camera_id}` | Lấy chi tiết camera + lane config + validation + cấu hình UI monitoring. |
-| `POST` | `/api/cameras` | Tạo camera mới từ màn hình quản lý. |
-| `PUT` | `/api/cameras/{camera_id}` | Lưu cập nhật camera/lane config. |
-| `DELETE` | `/api/cameras/{camera_id}` | Xóa camera. |
-| `GET` | `/api/cameras/{camera_id}/lanes` | Lấy lane theo pixel để vẽ canvas nhanh. |
-| `GET` | `/api/cameras/{camera_id}/trajectories` | Lấy trajectory theo track để vẽ nét xanh trên màn hình giám sát. |
-| `GET` | `/api/cameras/{camera_id}/preview` | Stream MJPEG cho ảnh camera realtime. |
-| `POST` | `/api/camera/{camera_id}/background-image` | Upload ảnh nền để căn hình học dễ hơn. |
-| `GET` | `/api/camera/{camera_id}/background-image` | Lấy ảnh nền camera. |
-| `DELETE` | `/api/camera/{camera_id}/background-image` | Xóa ảnh nền camera. |
-| `GET` | `/api/violations/history` | Lấy lịch sử vi phạm có lọc thời gian/camera. |
-| `GET` | `/api/violations/export` | Export lịch sử sang CSV/XLSX. |
-| `GET` | `/api/analytics/dashboard` | Lấy số liệu dashboard và time series. |
-| `GET` | `/api/stats` | Lấy thống kê tổng hợp theo thời gian. |
+Các giá trị đang dùng:
 
-| WebSocket | Giải thích |
+| Giá trị | Hiển thị |
 |---|---|
-| `WS /ws/tracks?camera_id=...` | Nhận track realtime để vẽ bbox/lane overlay. |
-| `WS /ws/violations?camera_id=...` | Nhận vi phạm realtime để cập nhật danh sách sự kiện. |
+| `motorcycle` | Xe máy |
+| `car` | Ô tô |
+| `truck` | Xe tải |
+| `bus` | Xe buýt |
 
-## Tổ chức source chính
+Lưu ý:
+
+- `detection.allowed_classes` trong backend quyết định loại xe nào được nhận diện.
+- `allowed_vehicle_types` trên UI chỉ quyết định loại xe nào được phép trong làn.
+
+Ví dụ: Nếu backend vẫn nhận diện `truck`, nhưng lane chỉ cho `car`, xe tải vào lane đó có thể bị báo `vehicle_type_not_allowed`.
+
+### Hướng đi
+
+Các hướng đang dùng:
+
+| Giá trị | Hiển thị |
+|---|---|
+| `straight` | Đi thẳng |
+| `right` | Rẽ phải |
+| `left` | Rẽ trái |
+| `u_turn` | Quay đầu |
+
+| Trường | Ý nghĩa |
+|---|---|
+| `enabled` | Backend có cần nhận diện hướng này không. |
+| `allowed` | Hướng này có được phép không. |
+| `turn_zone` | Vùng xe đi qua khi thực hiện hướng này. |
+| `exit_line` | Vạch xác nhận xe ra đúng hướng này. |
+| `exit_zone` | Vùng xác nhận xe ra đúng hướng này. |
+
+Ví dụ:
+
+```text
+Lane 1 cấm rẽ trái:
+  left.enabled = true
+  left.allowed = false
+```
+
+Nếu muốn backend không xét rẽ trái ở làn đó:
+
+```text
+left.enabled = false
+```
+
+### Ảnh nền
+
+Ảnh nền chỉ dùng để vẽ cấu hình dễ hơn. Nó không phải video realtime.
+
+| Nút | Ý nghĩa |
+|---|---|
+| Upload ảnh nền | Tải ảnh JPG/PNG làm nền để vẽ làn. |
+| Xóa ảnh nền | Xóa ảnh nền của camera. |
+
+Nên dùng ảnh chụp đúng cùng góc nhìn và kích thước gần với video đang xử lý.
+
+### Validation
+
+Backend trả về cảnh báo cấu hình. Các cảnh báo thường gặp:
+
+| Cảnh báo | Ý nghĩa |
+|---|---|
+| Lane overlap | Hai làn chồng lên nhau nhiều, dễ gán nhầm làn. |
+| Thiếu vùng/vạch | Một hướng bị bật nhưng thiếu vùng hỗ trợ nhận diện. |
+| Direction path thiếu | Bật bắt ngược chiều nhưng chưa vẽ đủ đường chỉ hướng. |
+| Vùng rẽ chồng nhau | Các hướng rẽ có vùng quá giống nhau, dễ kết luận nhầm. |
+
+Validation giúp giảm lỗi cấu hình, nhưng không thay thế việc kiểm tra bằng video thật trên màn hình Giám sát.
+
+## Dữ Liệu Frontend Nhận Từ Backend
+
+### REST API
+
+| Endpoint | Dùng ở đâu |
+|---|---|
+| `GET /api/cameras` | Load danh sách camera. |
+| `GET /api/cameras/{camera_id}` | Load chi tiết camera, lane config, UI config và validation. |
+| `POST /api/cameras` | Tạo camera. |
+| `PUT /api/cameras/{camera_id}` | Lưu camera/lane config. |
+| `DELETE /api/cameras/{camera_id}` | Xóa camera. |
+| `GET /api/cameras/{camera_id}/preview` | Hiển thị video preview. |
+| `POST /api/camera/{camera_id}/background-image` | Upload ảnh nền. |
+| `GET /api/camera/{camera_id}/background-image` | Hiển thị ảnh nền. |
+| `DELETE /api/camera/{camera_id}/background-image` | Xóa ảnh nền. |
+| `GET /api/violations/history` | Bảng lịch sử vi phạm. |
+| `GET /api/violations/export` | Tải CSV/XLSX. |
+| `GET /api/violations/evidence/{path}` | Xem ảnh bằng chứng. |
+| `GET /api/analytics/dashboard` | Biểu đồ và thống kê. |
+
+### WebSocket
+
+| WebSocket | Dữ liệu |
+|---|---|
+| `/ws/tracks?camera_id=...` | Xe realtime, khung xe, làn, biển số, hướng, FPS. |
+| `/ws/violations?camera_id=...` | Vi phạm mới realtime. |
+
+## Tổ Chức Source
 
 | File | Vai trò |
 |---|---|
-| `src/api.js` | Wrapper REST + WebSocket endpoint. |
-| `src/utils.js` | Label, timezone VN, normalize geometry, validate draft, analytics helper. |
+| `src/api.js` | Gọi REST API, mở WebSocket, tạo URL ảnh preview/evidence. |
+| `src/utils.js` | Nhãn tiếng Việt, xử lý thời gian, helper geometry, helper biểu đồ. |
+| `src/App.jsx` | Khung chính của ứng dụng và chuyển tab. |
 | `src/views/MonitoringView.jsx` | Màn hình giám sát realtime. |
-| `src/views/AnalyticsView.jsx` | Màn hình thống kê + lịch sử + export. |
-| `src/views/ManagementView.jsx` | Màn hình cấu hình camera/lane/maneuver. |
-| `src/components/CameraCanvas.jsx` | Canvas overlay + editor geometry. |
+| `src/views/AnalyticsView.jsx` | Màn hình thống kê và lịch sử. |
+| `src/views/ManagementView.jsx` | Màn hình quản lý camera/lane/maneuver. |
+| `src/components/CameraCanvas.jsx` | Canvas vẽ camera, làn, xe, quỹ đạo và editor hình học. |
+| `src/components/canvas/PolygonLayer.js` | Hàm vẽ polygon, line và điểm kéo thả. |
+| `src/components/canvas/BackgroundImageLayer.js` | Vẽ ảnh nền khi cấu hình. |
+| `src/components/icons/AppIcon.jsx` | Icon dùng trong UI. |
 
-## Build production
+## Build Production
 
 ```powershell
 cd frontend
 npm run build
+```
+
+Xem bản build:
+
+```powershell
 npm run preview
 ```
 
-## Tài liệu liên quan
+## Tài Liệu Liên Quan
 
-- Backend chi tiết: [backend/README.md](../backend/README.md)
-- Tài liệu tổng quan: [README.md](../README.md)
+- [README tổng quan](../README.md)
+- [Backend README](../backend/README.md)
+- [Phân tích kỹ thuật](../SYSTEM_TECHNICAL_ANALYSIS.md)

@@ -10,6 +10,7 @@ from app.managers.camera_manager import CameraManager
 
 
 def _is_client_connection_reset(exc: BaseException) -> bool:
+    # WinError 10054: client đóng socket đột ngột, không coi là lỗi server.
     return isinstance(exc, OSError) and getattr(exc, "winerror", None) == 10054
 
 
@@ -18,6 +19,7 @@ def create_ws_router(manager: CameraManager) -> APIRouter:
 
     async def _wait_for_queue_or_disconnect(ws: WebSocket, q: asyncio.Queue):
         """Chờ bản tin mới hoặc phát hiện client đã ngắt kết nối, tùy cái nào đến trước."""
+        # Chạy song song: một nhánh chờ queue nội bộ, một nhánh chờ tín hiệu websocket.
         queue_task = asyncio.create_task(q.get())
         receive_task = asyncio.create_task(ws.receive())
         done, pending = await asyncio.wait(
@@ -28,6 +30,7 @@ def create_ws_router(manager: CameraManager) -> APIRouter:
         for task in pending:
             task.cancel()
         if pending:
+            # Thu gom exception từ task cancel để không rò warning "Task exception was never retrieved".
             await asyncio.gather(*pending, return_exceptions=True)
 
         if receive_task in done:
@@ -48,15 +51,18 @@ def create_ws_router(manager: CameraManager) -> APIRouter:
                     queue_task.cancel()
                 return "disconnect", None
             if queue_task.done() and not queue_task.cancelled():
+                # Trường hợp queue và receive cùng xong: ưu tiên trả payload queue để không mất bản tin.
                 return "queue", queue_task.result()
             return "noop", None
 
         if queue_task.cancelled():
             return "noop", None
+        # Nhánh queue hoàn tất trước: trả payload cho vòng lặp websocket handler.
         return "queue", queue_task.result()
 
     @router.websocket("/ws/tracks")
     async def ws_tracks(ws: WebSocket, camera_id: Optional[str] = None):
+        # Chấp nhận kết nối ngay để client bắt đầu nhận stream.
         await ws.accept()
         manager.register_track_websocket(ws)
         q: Optional[asyncio.Queue] = None  # type: ignore[name-defined]
@@ -70,9 +76,12 @@ def create_ws_router(manager: CameraManager) -> APIRouter:
                     continue
                 msg = payload
                 if msg is None:
+                    # Sentinel None báo server đang shutdown hoặc listener bị đóng.
                     break
+                # Filter theo camera_id ngay trước khi gửi để giảm tải phía client.
                 if camera_id and msg.camera_id != camera_id:
                     continue
+                # Serialize bằng model_dump để đảm bảo schema realtime đồng nhất.
                 await ws.send_json(msg.model_dump(mode="json"))
         except asyncio.CancelledError:
             raise
@@ -110,6 +119,7 @@ def create_ws_router(manager: CameraManager) -> APIRouter:
                     break
                 if camera_id and ev.camera_id != camera_id:
                     continue
+                # Payload vi phạm bọc thêm "type" để client dễ mở rộng đa loại message.
                 await ws.send_json({"type": "violation", "event": ev.model_dump(mode="json")})
         except asyncio.CancelledError:
             raise

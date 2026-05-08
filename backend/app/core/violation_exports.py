@@ -17,6 +17,7 @@ VEHICLE_TYPE_LABELS = {
 
 VIOLATION_LABELS = {
     "wrong_lane": "Đi sai làn",
+    "wrong_direction": "Đi ngược chiều",
     "vehicle_type_not_allowed": "Loại phương tiện không đúng quy định",
     "turn_left_not_allowed": "Rẽ trái không đúng quy định",
     "turn_right_not_allowed": "Rẽ phải không đúng quy định",
@@ -24,25 +25,40 @@ VIOLATION_LABELS = {
     "turn_u_turn_not_allowed": "Quay đầu không đúng quy định",
 }
 
+LICENSE_PLATE_STATUS_LABELS = {
+    "pending": "Đang chờ xác nhận",
+    "confirmed": "Đã xác nhận",
+    "uncertain": "Chưa chắc chắn",
+    "unreadable": "Không đọc được",
+}
+
 CSV_EXPORT_COLUMNS: list[tuple[str, str]] = [
+    # (key dữ liệu, tiêu đề hiển thị trong file xuất)
     ("stt", "STT"),
     ("timestamp", "Thời gian vi phạm"),
     ("camera_id", "Camera"),
     ("violation", "Loại vi phạm"),
     ("vehicle_type", "Loại phương tiện"),
     ("vehicle_id", "Vehicle ID"),
+    ("license_plate", "Biển số"),
+    ("license_plate_status", "Trạng thái OCR"),
+    ("license_plate_confidence", "Độ tin cậy OCR"),
     ("lane_id", "Làn"),
     ("location", "Địa điểm / khu vực"),
     ("image_path", "Đường dẫn ảnh vi phạm"),
 ]
 
 XLSX_EXPORT_COLUMNS: list[tuple[str, str]] = [
+    # Bộ cột Excel giữ gần tương đương CSV để dễ đối soát.
     ("stt", "STT"),
     ("timestamp", "Thời gian vi phạm"),
     ("camera_id", "Camera"),
     ("violation", "Loại vi phạm"),
     ("vehicle_type", "Loại phương tiện"),
     ("vehicle_id", "Vehicle ID"),
+    ("license_plate", "Biển số"),
+    ("license_plate_status", "Trạng thái OCR"),
+    ("license_plate_confidence", "Độ tin cậy OCR"),
     ("lane_id", "Làn"),
     ("location", "Địa điểm"),
     ("image_path", "Đường dẫn ảnh"),
@@ -60,6 +76,7 @@ def _format_display_timestamp(value: Optional[str]) -> str:
     parsed = _parse_iso_datetime(value)
     if parsed is None:
         return "-"
+    # Hiển thị theo giờ Việt Nam để phù hợp nghiệp vụ vận hành.
     return to_vietnam_datetime(parsed).strftime("%d/%m/%Y %H:%M:%S")
 
 
@@ -82,12 +99,26 @@ def _format_value(value) -> str:
     return str(value)
 
 
+def _format_confidence(value: Optional[float]) -> str:
+    if value is None:
+        return "-"
+    try:
+        normalized = float(value)
+    except (TypeError, ValueError):
+        return "-"
+    if normalized < 0.0:
+        return "-"
+    # Đồng nhất 2 chữ số thập phân cho cột confidence.
+    return f"{normalized:.2f}"
+
+
 def _build_location_label(location: Optional[dict]) -> str:
     if not location:
         return "-"
     road_name = location.get("road_name")
     intersection = location.get("intersection")
     parts = [part for part in [road_name, intersection] if part]
+    # Ưu tiên format gọn "Đường · Giao lộ".
     return " · ".join(parts) if parts else "-"
 
 
@@ -100,8 +131,10 @@ def _build_evidence_link(row: dict, *, base_url: str) -> str:
     if not value:
         return "-"
     if value.startswith(("http://", "https://")):
+        # Đã là URL tuyệt đối thì giữ nguyên.
         return value
     if value.startswith("/"):
+        # URL tương đối kiểu "/api/..." sẽ được nối với base_url request hiện tại.
         return urljoin(base_url, value)
     return value
 
@@ -110,6 +143,7 @@ def build_violation_export_rows(rows: list[dict], *, base_url: str) -> list[dict
     """Chuẩn hóa dữ liệu lịch sử vi phạm thành các cột phục vụ xuất báo cáo."""
     export_rows = []
     for index, row in enumerate(rows, start=1):
+        # Map raw DB row -> payload export với nhãn tiếng Việt và giá trị đã chuẩn hóa.
         export_rows.append(
             {
                 "stt": str(index),
@@ -118,6 +152,9 @@ def build_violation_export_rows(rows: list[dict], *, base_url: str) -> list[dict
                 "violation": _get_label(VIOLATION_LABELS, row.get("violation")),
                 "vehicle_type": _get_label(VEHICLE_TYPE_LABELS, row.get("vehicle_type")),
                 "vehicle_id": _format_value(row.get("vehicle_id")),
+                "license_plate": _format_value(row.get("license_plate")),
+                "license_plate_status": _get_label(LICENSE_PLATE_STATUS_LABELS, row.get("license_plate_status")),
+                "license_plate_confidence": _format_confidence(row.get("license_plate_confidence")),
                 "lane_id": _format_value(row.get("lane_id")),
                 "location": _build_location_label(row.get("location")),
                 "image_path": _build_evidence_link(row, base_url=base_url),
@@ -137,8 +174,10 @@ def build_violation_history_csv(rows: list[dict]) -> bytes:
     """Đóng gói lịch sử vi phạm thành nội dung CSV có BOM để Excel đọc tiếng Việt đúng."""
     buffer = StringIO(newline="")
     writer = csv.writer(buffer)
+    # Ghi header theo cấu hình cột đã định nghĩa.
     writer.writerow([label for _, label in CSV_EXPORT_COLUMNS])
     for row in rows:
+        # Thứ tự value bám theo CSV_EXPORT_COLUMNS để file luôn ổn định.
         writer.writerow([row[key] for key, _ in CSV_EXPORT_COLUMNS])
     return buffer.getvalue().encode("utf-8-sig")
 
@@ -155,6 +194,7 @@ def build_violation_history_xlsx(rows: list[dict]) -> bytes:
     workbook = Workbook()
     worksheet = workbook.active
     worksheet.title = "Violation History"
+    # Freeze header để cuộn dài vẫn giữ tên cột.
     worksheet.freeze_panes = "A2"
 
     headers = [label for _, label in XLSX_EXPORT_COLUMNS]
@@ -171,6 +211,7 @@ def build_violation_history_xlsx(rows: list[dict]) -> bytes:
         for row_index in range(2, worksheet.max_row + 1):
             value = worksheet[f"{column_letter}{row_index}"].value
             max_length = max(max_length, len(str(value or "")))
+        # Giới hạn width để tránh cột quá rộng làm file khó đọc.
         worksheet.column_dimensions[column_letter].width = min(max(max_length + 2, 12), 60)
 
     output = BytesIO()

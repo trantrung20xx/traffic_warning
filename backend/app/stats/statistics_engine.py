@@ -23,9 +23,11 @@ class StatisticsEngine:
     """
 
     def __init__(self):
+        # Counter in-memory phục vụ dashboard realtime nhẹ.
         self._counts: dict[ViolationAggKey, int] = defaultdict(int)
 
     def update_realtime(self, event: ViolationEvent) -> None:
+        # Key gom theo camera/vị trí/loại xe/loại lỗi để phù hợp các thẻ tổng hợp UI.
         key = ViolationAggKey(
             camera_id=event.camera_id,
             road_name=event.location.road_name,
@@ -33,5 +35,6 @@ class StatisticsEngine:
             vehicle_type=event.vehicle_type,
             violation=event.violation,
         )
+        # Cộng dồn theo key để có thể đọc thống kê tức thời mà không query DB.
         self._counts[key] += 1
 
