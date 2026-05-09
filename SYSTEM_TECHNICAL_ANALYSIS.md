@@ -1,77 +1,283 @@
 # Tài liệu phân tích kỹ thuật hệ thống Traffic Warning
 
-Ngày rà soát: 2026-05-08
+Ngày rà soát: 2026-05-09
 
-Phạm vi: tài liệu này đồng bộ theo source hiện tại trong `backend`, `frontend`, `config`, `backend/requirements.txt` và `frontend/package.json`. Nội dung tập trung vào kiến trúc, luồng dữ liệu, thuật toán, config, API, DB, rủi ro kỹ thuật và hướng phát triển.
+Phạm vi: tài liệu này đồng bộ theo source hiện tại trong `backend`, `frontend`, `config` và `edge_camera_node`. Nội dung được viết để phục vụ báo cáo đồ án tốt nghiệp và để các công cụ hỗ trợ như Gemini/ChatGPT nắm đầy đủ ngữ cảnh, kiến trúc, phần cứng, luồng dữ liệu, trạng thái triển khai và các giới hạn kỹ thuật của hệ thống.
 
-## 1. Tổng Quan
+## 1. Tổng Quan Hệ Thống
 
-Traffic Warning là hệ thống giám sát giao thông thời gian thực theo kiến trúc client-server:
+Traffic Warning là hệ thống giám sát giao thông theo kiến trúc tách lớp:
 
-- Backend FastAPI xử lý video, AI detection/tracking, logic hình học, phát hiện vi phạm, OCR biển số, lưu dữ liệu và phát realtime.
-- Frontend React hiển thị camera preview, overlay lane/bbox/trajectory/FPS, lịch sử/thống kê và giao diện cấu hình camera/lane/maneuver.
-- Config dùng JSON cho camera/lane/settings; SQLite dùng để lưu lịch sử vi phạm.
+- `edge_camera_node` chạy trên Raspberry Pi 5, nhận hình từ camera 2K, mã hóa H.264 và phát RTSP ổn định.
+- `backend` FastAPI chạy xử lý chính: đọc video bằng OpenCV, YOLOv8, ByteTrack, gán làn, phát hiện vi phạm, OCR biển số, lưu SQLite và phát realtime.
+- `frontend` React hiển thị giám sát, thống kê, cấu hình camera/làn và popup trạng thái edge node.
+- `config` lưu cấu hình camera, lane, settings, ảnh nền, ảnh bằng chứng và database SQLite.
 
-Pipeline chính:
+Luồng tổng thể:
 
 ```text
-Video source
-  -> OpenCV frame reader
+Camera 2K trên Raspberry Pi 5
+  -> edge_camera_node phát RTSP ổn định
+  -> Backend đọc RTSP bằng OpenCV
   -> YOLOv8 + ByteTrack
   -> stable track ID
-  -> vehicle type smoothing
   -> lane assignment bằng polygon
-  -> direction / lane / maneuver / vehicle-type violation logic
-  -> license plate detector + OCR nếu bật
-  -> evidence image + SQLite
-  -> REST API / WebSocket / MJPEG
+  -> rule-based violation logic
+  -> OCR biển số nếu bật
+  -> SQLite + evidence image
+  -> REST API / WebSocket / MJPEG preview
   -> React frontend
 ```
 
-Các module lớn:
+Điểm phân tách trách nhiệm quan trọng:
 
-| Module | File/thư mục | Vai trò |
-|---|---|---|
-| Server | `backend/app/server.py` | Tạo FastAPI app, CORS, lifespan startup/shutdown, đăng ký REST/WS router. |
-| Camera manager | `backend/app/managers/camera_manager.py` | Load config, quản lý nhiều `CameraContext`, reload runtime, query DB, quản lý listener realtime. |
-| Camera context | `backend/app/managers/camera_context.py` | Pipeline xử lý cho từng camera, OCR worker, preview worker, evidence, DB, WebSocket callbacks. |
-| Video input | `backend/app/rtsp/rtsp_stream.py` | Thread đọc RTSP/HTTP/file local bằng OpenCV, resize frame, pacing file local. |
-| Vision | `backend/app/vision` | YOLO detector phương tiện, detector biển số, OCR Paddle/EasyOCR, resolver device/backend. |
-| Tracking | `backend/app/tracking/tracker.py` | Gọi `YOLO.model.track(..., persist=True)` với ByteTrack. |
-| Logic | `backend/app/logic` | Lane assignment, direction detection, violation engine, OCR temporal voting, stable track ID, geometry validator. |
-| DB | `backend/app/db` | SQLAlchemy model, SQLite engine/session, repository insert/query/dashboard. |
-| API | `backend/app/api` | REST API, MJPEG preview, WebSocket tracks/violations. |
-| Frontend | `frontend/src` | SPA React cho giám sát, thống kê, quản lý camera/lane/maneuver. |
+- Edge node không chạy AI, không OCR, không tracking, không quyết định vi phạm và không ghi database chính.
+- Backend là nơi duy nhất xử lý AI, logic vi phạm, evidence, REST API, WebSocket và SQLite.
+- Frontend chỉ gọi backend cho nghiệp vụ chính; riêng popup edge node gọi trực tiếp Health API của Raspberry Pi để xem trạng thái, bật/tắt stream và restart service.
 
-## 2. Công Nghệ
+## 2. Cấu Trúc Dự Án
+
+| Module           | File/thư mục                             | Vai trò                                                                                                              |
+| ---------------- | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| Edge camera node | `edge_camera_node`                       | Chương trình phần cứng trên Raspberry Pi 5, phát RTSP, hiển thị TFT, xử lý nút/LED, watchdog, health API và systemd. |
+| Server           | `backend/app/server.py`                  | Tạo FastAPI app, CORS, lifespan startup/shutdown, đăng ký REST/WS router.                                            |
+| Camera manager   | `backend/app/managers/camera_manager.py` | Load config, quản lý nhiều `CameraContext`, reload runtime, query DB, listener realtime.                             |
+| Camera context   | `backend/app/managers/camera_context.py` | Pipeline xử lý từng camera: đọc frame, tracking, OCR worker, violation, evidence, DB, realtime callbacks.            |
+| Video input      | `backend/app/rtsp/rtsp_stream.py`        | Thread đọc RTSP/HTTP/file local bằng OpenCV, resize frame, pacing file local.                                        |
+| Vision           | `backend/app/vision`                     | YOLO detector phương tiện, detector biển số, OCR Paddle/EasyOCR, resolver device/backend.                            |
+| Tracking         | `backend/app/tracking/tracker.py`        | Gọi `YOLO.model.track(..., persist=True)` với ByteTrack.                                                             |
+| Logic            | `backend/app/logic`                      | Lane assignment, direction detection, violation engine, OCR temporal voting, stable track ID, geometry validator.    |
+| DB               | `backend/app/db`                         | SQLAlchemy model, SQLite engine/session, repository insert/query/dashboard.                                          |
+| API              | `backend/app/api`                        | REST API, MJPEG preview, WebSocket tracks/violations.                                                                |
+| Frontend         | `frontend/src`                           | SPA React cho giám sát, thống kê, quản lý camera/lane/maneuver và popup edge node.                                   |
+| Config           | `config`                                 | Cấu hình server, camera, lane, ảnh nền, evidence và SQLite.                                                          |
+
+## 3. Danh Sách Linh Kiện Phần Cứng
+
+| Tên linh kiện                     | Số lượng | Chức năng với hệ thống                                                                                       |
+| --------------------------------- | -------: | ------------------------------------------------------------------------------------------------------------ |
+| Raspberry Pi 5                    |        1 | Máy tính biên chạy `edge_camera_node`, quản lý camera, RTSP pipeline, TFT, nút nhấn, LED và systemd service. |
+| Camera 2K                         |        1 | Cung cấp hình ảnh đầu vào cho edge node, mặc định phát ở 2560x1440 và 30 FPS theo `settings.json`.           |
+| Adapter USB-C 5V 5A               |        1 | Cấp nguồn chính cho Raspberry Pi 5 và các module nhỏ lấy nguồn từ Pi.                                        |
+| Tản nhiệt Raspberry Pi 5          |        1 | Giữ nhiệt độ ổn định để stream chạy lâu dài, giảm rủi ro throttling khi encode video.                        |
+| Thẻ nhớ microSD                   |        1 | Lưu Raspberry Pi OS, source `edge_camera_node`, virtualenv, config, log và runtime identity.                 |
+| Hộp tủ điện                       |        1 | Bảo vệ Pi, camera node và dây nối trong môi trường triển khai thực địa.                                      |
+| TFT IPS SPI 2.4 inch ILI9341      |        1 | Hiển thị camera ID, mDNS URL, IP fallback, trạng thái stream, FPS, nhiệt độ, lỗi và watchdog.                |
+| Nút nhấn momentary MODE           |        1 | Đổi màn hình trạng thái trên TFT.                                                                            |
+| Nút nhấn momentary RESTART_STREAM |        1 | Gửi lệnh restart pipeline RTSP cục bộ trên edge node.                                                        |
+| Nút nhấn momentary SAFE_SHUTDOWN  |        1 | Nhấn giữ để shutdown Raspberry Pi an toàn.                                                                   |
+| Nút nhấn momentary RESET_WATCHDOG |        1 | Xóa trạng thái lỗi/watchdog latched và thử khởi động lại pipeline.                                           |
+| LED ONLINE                        |        1 | Báo service edge node đang hoạt động bình thường.                                                            |
+| LED WARNING                       |        1 | Báo trạng thái cảnh báo như FPS thấp, mDNS lỗi hoặc lỗi chưa nghiêm trọng.                                   |
+| LED ERROR                         |        1 | Báo lỗi nghiêm trọng hoặc watchdog đã chốt lỗi.                                                              |
+| LED STREAMING                     |        1 | Báo RTSP pipeline đang chạy.                                                                                 |
+| Điện trở hạn dòng LED             |        4 | Hạn dòng cho từng LED để bảo vệ GPIO và LED.                                                                 |
+
+Ghi chú: RTC DS3231 không còn nằm trong thiết kế source hiện tại. Thời gian vi phạm do backend server ghi nhận, còn edge node chỉ cần thời gian đủ ổn định cho log cục bộ.
+
+## 4. Công Nghệ Sử Dụng
 
 Backend dependency chính:
 
-| Công nghệ | Vai trò |
-|---|---|
-| FastAPI, Starlette, Uvicorn | REST API, WebSocket, ASGI runtime. |
-| OpenCV | Đọc video, resize frame, encode JPEG preview/evidence. |
-| NumPy | Frame/image array. |
-| Ultralytics YOLOv8 | Detection/tracking phương tiện và detector biển số. |
-| ByteTrack | Object tracking qua Ultralytics `model.track`. |
-| PyTorch/Torchvision | Inference `.pt` mặc định. |
-| Shapely | Polygon/LineString, point-in-polygon, line intersection, geometry validation. |
-| Pydantic | Schema config/API/event. |
-| SQLAlchemy | ORM SQLite. |
-| PaddleOCR, EasyOCR | OCR biển số. |
-| openpyxl | Export XLSX. |
-| pytest | Test backend. |
+| Công nghệ                   | Vai trò                                                                       |
+| --------------------------- | ----------------------------------------------------------------------------- |
+| FastAPI, Starlette, Uvicorn | REST API, WebSocket, ASGI runtime.                                            |
+| OpenCV                      | Đọc video, resize frame, encode JPEG preview/evidence.                        |
+| NumPy                       | Frame/image array.                                                            |
+| Ultralytics YOLOv8          | Detection/tracking phương tiện và detector biển số.                           |
+| ByteTrack                   | Object tracking qua Ultralytics `model.track`.                                |
+| PyTorch/Torchvision         | Inference `.pt` mặc định.                                                     |
+| Shapely                     | Polygon/LineString, point-in-polygon, line intersection, geometry validation. |
+| Pydantic                    | Schema config/API/event.                                                      |
+| SQLAlchemy                  | ORM SQLite.                                                                   |
+| PaddleOCR, EasyOCR          | OCR biển số.                                                                  |
+| openpyxl                    | Export XLSX.                                                                  |
+| pytest                      | Test backend.                                                                 |
 
 Frontend dependency chính:
 
-| Công nghệ | Vai trò |
-|---|---|
-| React 18 | UI SPA. |
-| Vite | Dev server/build. |
-| lucide-react | Icon UI. |
-| Canvas 2D | Vẽ preview overlay, lane, bbox, trajectory và editor geometry. |
+| Công nghệ    | Vai trò                                                        |
+| ------------ | -------------------------------------------------------------- |
+| React 18     | UI SPA.                                                        |
+| Vite         | Dev server/build.                                              |
+| lucide-react | Icon UI.                                                       |
+| Canvas 2D    | Vẽ preview overlay, lane, bbox, trajectory và editor geometry. |
 
-## 3. Backend Lifecycle
+Edge dependency chính:
+
+| Công nghệ                | Vai trò                                                                                              |
+| ------------------------ | ---------------------------------------------------------------------------------------------------- |
+| Raspberry Pi OS          | Môi trường chạy trên Raspberry Pi 5.                                                                 |
+| rpicam-vid/libcamera-vid | Đọc camera Pi và encode H.264 bằng camera stack chính thống của Raspberry Pi.                        |
+| MediaMTX                 | RTSP server cục bộ, cung cấp URL RTSP cố định cho backend.                                           |
+| ffmpeg                   | Đọc MPEG-TS qua UDP nội bộ và publish vào MediaMTX bằng RTSP, dùng `-c:v copy` nên không encode lại. |
+| Avahi/mDNS               | Publish hostname ổn định dạng `cam-<mac>.local`.                                                     |
+| psutil                   | Đọc network interface, MAC, IP, CPU/RAM/disk và process/network status.                              |
+| gpiozero/lgpio           | Đọc nút nhấn và điều khiển LED trên Raspberry Pi 5.                                                  |
+| Pillow/spidev            | Render status lên TFT ILI9341 qua SPI.                                                               |
+| systemd                  | Tự chạy edge node khi boot và restart process khi service thoát.                                     |
+
+## 5. Edge Camera Node Trên Raspberry Pi 5
+
+### Vai trò
+
+`edge_camera_node` nằm trong thư mục riêng và không phụ thuộc Windows. Mục tiêu là copy xuống Raspberry Pi 5, cài dependency, bật systemd và để node tự phát RTSP sau mỗi lần boot.
+
+Edge node đảm nhiệm:
+
+- Đọc camera 2K.
+- Tuning ảnh nhẹ bằng tham số `rpicam-vid`.
+- Encode H.264.
+- Phát RTSP bằng MediaMTX.
+- Tự sinh và giữ cố định `camera_id`, hostname mDNS, port và stream path.
+- Hiển thị trạng thái trên TFT.
+- Đọc nút nhấn và điều khiển LED.
+- Watchdog restart pipeline khi tiến trình chết hoặc FPS thấp.
+- Health API cục bộ để frontend popup đọc trạng thái và điều khiển stream.
+
+Edge node không đảm nhiệm:
+
+- Không chạy YOLO/ByteTrack/OCR.
+- Không quyết định vi phạm.
+- Không ghi SQLite chính.
+- Không gửi WebSocket track/violation.
+- Không yêu cầu backend đổi logic xử lý.
+
+### Identity và URL ổn định
+
+File identity được tạo ở:
+
+```text
+edge_camera_node/config/runtime_identity.json
+```
+
+Quy tắc:
+
+- Ưu tiên MAC của `eth0`, nếu không có thì dùng `wlan0`, nếu vẫn thiếu thì dò interface không phải loopback.
+- `camera_id = cam_<mac>`, ví dụ `cam_dca632112233`.
+- `mdns_hostname = cam-<mac>.local`, ví dụ `cam-dca632112233.local`.
+- `node_id` là hash ổn định từ `/etc/machine-id` và MAC.
+- `rtsp_port` sinh ổn định trong dải 8554-8654 nếu không cấu hình port cố định.
+- `stream_path = /<camera_id>`.
+- Nếu identity đã tồn tại thì dùng lại, không sinh lại.
+
+URL chính:
+
+```text
+rtsp://cam-dca632112233.local:8554/cam_dca632112233
+```
+
+URL fallback:
+
+```text
+rtsp://<fallback_ip>:8554/cam_dca632112233
+```
+
+mDNS là đường chính. IP fallback được ghi một lần để hạn chế đổi URL, nhưng khi triển khai thực tế vẫn nên đặt DHCP reservation hoặc static IP nếu server dùng IP.
+
+### RTSP pipeline
+
+Luồng edge:
+
+```text
+rpicam-vid/libcamera-vid
+  -> H.264 MPEG-TS
+  -> udp://127.0.0.1:1234?pkt_size=1316
+  -> ffmpeg -c:v copy
+  -> rtsp://127.0.0.1:<port>/<camera_id>
+  -> MediaMTX
+  -> rtsp://cam-<mac>.local:<port>/<camera_id>
+```
+
+Lý do thiết kế:
+
+- `rpicam-vid` ổn định với camera stack của Raspberry Pi và hỗ trợ tuning ảnh.
+- UDP `127.0.0.1` chỉ là điểm trung chuyển nội bộ trong Pi, không lộ ra LAN.
+- `ffmpeg` chỉ copy video sang RTSP, không encode lại, nên giảm tải CPU.
+- MediaMTX chịu trách nhiệm phục vụ RTSP URL cố định cho backend/OpenCV.
+- Nếu port RTSP đã lưu bị process khác chiếm, edge node báo lỗi thay vì tự đổi port để tránh backend mất đồng bộ URL.
+
+### Tuning ảnh
+
+Profile trong `image_tuning.profile`:
+
+| Profile          | Cách dùng                                     |
+| ---------------- | --------------------------------------------- |
+| `normal`         | Mặc định, giữ hình tự nhiên và ổn định.       |
+| `low_light`      | Tăng nhẹ brightness/contrast cho cảnh tối.    |
+| `bright_scene`   | Giảm nhẹ brightness để tránh cháy sáng.       |
+| `sharpness_safe` | Tăng sharpness nhẹ để rõ biên xe/biển số hơn. |
+| `disabled`       | Không thêm tham số tuning.                    |
+
+Nguyên tắc hiện tại là không dùng xử lý ảnh nặng, không CLAHE mạnh, không super-resolution, không AI enhancement và không tự động đổi profile liên tục.
+
+### GPIO, TFT và LED
+
+Config GPIO nằm trong:
+
+```text
+edge_camera_node/config/settings.json
+```
+
+Mặc định:
+
+- Buttons: MODE `GPIO5`, RESTART_STREAM `GPIO6`, SAFE_SHUTDOWN `GPIO13`, RESET_WATCHDOG `GPIO19`.
+- LEDs: ONLINE `GPIO17`, WARNING `GPIO27`, ERROR `GPIO22`, STREAMING `GPIO23`.
+- TFT ILI9341: SPI0, DC `GPIO25`, RST `GPIO24`, backlight mặc định không điều khiển.
+
+TFT có nhiều màn hình: network/stream, hardware, camera, diagnostics. Nếu thiếu phần cứng, thiếu quyền GPIO/SPI hoặc chạy trên PC, code fallback console/mock để stream không chết vì lỗi phụ kiện.
+
+### Health API của edge node
+
+Health API chạy cố định ở port `8088`. Edge config loader sẽ từ chối `health_api.port` khác `8088` để frontend luôn gọi đúng API phần cứng khi suy host từ RTSP URL.
+
+Endpoint:
+
+| Endpoint               | Vai trò                                                                                    |
+| ---------------------- | ------------------------------------------------------------------------------------------ |
+| `GET /health`          | Trả trạng thái edge node, RTSP URL, mDNS, stream, nhiệt độ, CPU/RAM, uptime, lỗi gần nhất. |
+| `GET /identity`        | Trả identity cố định của node.                                                             |
+| `GET /stream/start`    | Bật lại RTSP pipeline.                                                                     |
+| `GET /stream/stop`     | Tắt RTSP pipeline.                                                                         |
+| `GET /restart-service` | Yêu cầu chương trình edge node thoát sạch; systemd tự khởi động lại do `Restart=always`.   |
+
+`/restart-stream` đã bị loại bỏ khỏi thiết kế hiện tại vì chức năng bật/tắt stream rõ nghĩa hơn.
+
+Các endpoint điều khiển dùng `health_api.allow_restart_endpoint`. Nếu cấu hình thêm `health_api.token`, request điều khiển phải kèm `?token=...`.
+
+### Watchdog và systemd
+
+`ProcessSupervisor` theo dõi MediaMTX, rpicam/libcamera và ffmpeg:
+
+- Nếu process chết thì restart pipeline có giới hạn.
+- Nếu restart quá nhiều trong cửa sổ thời gian thì latch watchdog và chuyển ERROR.
+- RESET_WATCHDOG xóa trạng thái latch và thử khởi động lại.
+- SIGTERM/SIGINT được handle để dừng process con sạch, tránh zombie.
+
+Systemd service:
+
+```ini
+Restart=always
+RestartSec=5
+```
+
+Khi `/restart-service` được gọi, app set trạng thái `SHUTTING_DOWN`, thoát vòng lặp chính, dừng các thành phần, `main()` trả về `0`, `SystemExit(main())` kết thúc process. Vì service dùng `Restart=always`, systemd khởi động lại chương trình sau 5 giây.
+
+### Cấu hình edge hiện tại
+
+`edge_camera_node/config/settings.json` đang đặt:
+
+- `camera.width`: 2560.
+- `camera.height`: 1440.
+- `camera.fps`: 30.
+- `image_tuning.profile`: `normal`.
+- `stream.bitrate`: 6000000.
+- `stream.udp_sink`: `udp://127.0.0.1:1234?pkt_size=1316`.
+- `watchdog.fps_warning_threshold`: 15.
+- `health_api.port`: `8088`.
+- `health_api.allow_restart_endpoint`: `true`.
+
+## 6. Backend Lifecycle
 
 ### `server.py`
 
@@ -107,12 +313,7 @@ Các hành vi đáng chú ý:
 3. Chạy tracker trong thread bằng `asyncio.to_thread`.
 4. Ổn định raw track ID bằng `StableTrackIdAssigner`.
 5. Chuẩn bị snapshot OCR biển số hiện có và enqueue job OCR mới nếu đủ interval.
-6. Với từng track:
-   - Làm mượt loại xe bằng `TemporalVehicleTypeAssigner`.
-   - Tính raw lane bằng `LaneLogic`.
-   - Làm mượt lane bằng `TemporalLaneAssigner`.
-   - Tạo `TrackVehicle` cho WebSocket.
-   - Gọi `ViolationLogic.update_and_maybe_generate_violation`.
+6. Với từng track: làm mượt loại xe, gán lane, làm mượt lane, tạo `TrackVehicle`, gọi violation logic.
 7. Push `TrackMessage` theo `websocket.track_push_interval_ms`.
 8. Nếu có violation candidate, tạo evidence, lưu DB và push `ViolationEvent`.
 9. Prune state định kỳ theo `performance.processing.prune_interval_ms` và `event_lifecycle.state_prune_max_age_s`.
@@ -124,7 +325,7 @@ Worker nền:
 - OCR worker dùng queue theo `vehicle_id`; mỗi xe chỉ giữ job mới nhất để tránh backlog cũ.
 - OCR worker có batch size và max pending jobs để bảo vệ pipeline realtime.
 
-## 4. AI, Tracking Và OCR
+## 7. AI, Tracking Và OCR
 
 ### Detector phương tiện
 
@@ -138,12 +339,12 @@ File: `backend/app/vision/detector.py`
 
 Backend inference được source hỗ trợ:
 
-| Backend | Điều kiện weight |
-|---|---|
-| `pytorch` | Mặc định hoặc `.pt`. |
-| `tensorrt` | `.engine`. |
-| `openvino` | `.xml` hoặc `_openvino_model`. |
-| `onnxruntime` | `.onnx`. |
+| Backend       | Điều kiện weight               |
+| ------------- | ------------------------------ |
+| `pytorch`     | Mặc định hoặc `.pt`.           |
+| `tensorrt`    | `.engine`.                     |
+| `openvino`    | `.xml` hoặc `_openvino_model`. |
+| `onnxruntime` | `.onnx`.                       |
 
 ### Tracking
 
@@ -179,14 +380,14 @@ Pipeline:
 
 Trạng thái OCR:
 
-| Trạng thái | Ý nghĩa |
-|---|---|
-| `pending` | Đang chờ đủ bằng chứng OCR. |
-| `confirmed` | Text đủ số hit và confidence. |
-| `uncertain` | Có nhiều candidate cạnh tranh. |
+| Trạng thái   | Ý nghĩa                                         |
+| ------------ | ----------------------------------------------- |
+| `pending`    | Đang chờ đủ bằng chứng OCR.                     |
+| `confirmed`  | Text đủ số hit và confidence.                   |
+| `uncertain`  | Có nhiều candidate cạnh tranh.                  |
 | `unreadable` | Quá số lần thử nhưng không có candidate hợp lệ. |
 
-## 5. Lane Assignment Và Geometry
+## 8. Lane Assignment Và Geometry
 
 ### Geometry low-level
 
@@ -233,7 +434,7 @@ Validator kiểm tra các rủi ro cấu hình:
 - Maneuver path overlap dễ gây nhầm left/right/u_turn.
 - Cảnh báo semantic được trả trong API camera detail/lane payload để UI hiển thị.
 
-## 6. Violation Engine
+## 9. Violation Engine
 
 File: `backend/app/logic/violation_logic.py`
 
@@ -321,7 +522,7 @@ Sau khi xác nhận maneuver, nếu maneuver không nằm trong `allowed_maneuve
 - Sau `event_lifecycle.violation_rearm_window_ms`, lifecycle được re-arm để cho phép phát lại nếu hành vi tái diễn.
 - Dedup hiện nằm trong memory, không phải unique constraint ở DB.
 
-## 7. Evidence, DB Và Export
+## 10. Evidence, DB Và Export
 
 ### Evidence image
 
@@ -337,22 +538,22 @@ File: `backend/app/core/evidence_images.py`
 
 Model `Violation` hiện tại:
 
-| Cột | Ý nghĩa |
-|---|---|
-| `id` | Primary key tự tăng. |
-| `camera_id` | Camera phát hiện. |
-| `road_name`, `intersection`, `gps_lat`, `gps_lng` | Vị trí camera. |
-| `vehicle_id` | Stable vehicle ID trong phiên runtime. |
-| `vehicle_type` | Loại xe đã làm mượt. |
-| `lane_id` | Lane liên quan. |
-| `violation` | Mã vi phạm. |
-| `evidence_image_path` | Relative path ảnh bằng chứng tổng quan. |
-| `license_plate` | Biển số OCR nếu có. |
-| `license_plate_status` | Trạng thái OCR. |
-| `license_plate_confidence` | Confidence OCR. |
-| `license_plate_image_path` | Relative path ảnh crop biển số nếu có. |
-| `track_session_id` | Phiên runtime của camera context. |
-| `timestamp_utc` | Thời điểm UTC. |
+| Cột                                               | Ý nghĩa                                 |
+| ------------------------------------------------- | --------------------------------------- |
+| `id`                                              | Primary key tự tăng.                    |
+| `camera_id`                                       | Camera phát hiện.                       |
+| `road_name`, `intersection`, `gps_lat`, `gps_lng` | Vị trí camera.                          |
+| `vehicle_id`                                      | Stable vehicle ID trong phiên runtime.  |
+| `vehicle_type`                                    | Loại xe đã làm mượt.                    |
+| `lane_id`                                         | Lane liên quan.                         |
+| `violation`                                       | Mã vi phạm.                             |
+| `evidence_image_path`                             | Relative path ảnh bằng chứng tổng quan. |
+| `license_plate`                                   | Biển số OCR nếu có.                     |
+| `license_plate_status`                            | Trạng thái OCR.                         |
+| `license_plate_confidence`                        | Confidence OCR.                         |
+| `license_plate_image_path`                        | Relative path ảnh crop biển số nếu có.  |
+| `track_session_id`                                | Phiên runtime của camera context.       |
+| `timestamp_utc`                                   | Thời điểm UTC.                          |
 
 `backend/app/db/database.py` có schema patch để thêm các cột mới nếu DB cũ thiếu.
 
@@ -374,31 +575,41 @@ File: `backend/app/core/violation_exports.py`
 - `build_violation_history_csv()`: CSV có BOM UTF-8 để Excel đọc tiếng Việt.
 - `build_violation_history_xlsx()`: Excel có header bold, freeze pane và auto width có giới hạn.
 
-## 8. API Và WebSocket
+## 11. API Và WebSocket
 
-### REST API
+### REST API backend
 
-| Endpoint | Vai trò |
-|---|---|
-| `GET /api/health` | Healthcheck. |
-| `GET /api/cameras` | Danh sách camera. |
-| `GET /api/cameras/{camera_id}` | Camera detail, lane config, validation, runtime status, UI config. |
-| `POST /api/cameras` | Tạo camera + lane config. |
-| `PUT /api/cameras/{camera_id}` | Cập nhật camera + lane config. |
-| `DELETE /api/cameras/{camera_id}` | Xóa camera và dữ liệu file liên quan. |
-| `POST /api/camera/{camera_id}/background-image` | Upload ảnh nền JPG/PNG. |
-| `GET /api/camera/{camera_id}/background-image` | Lấy ảnh nền. |
-| `DELETE /api/camera/{camera_id}/background-image` | Xóa ảnh nền. |
-| `GET /api/cameras/{camera_id}/lanes` | Lane polygons dạng pixel, kèm validation. |
-| `GET /api/cameras/{camera_id}/trajectories` | Trajectory runtime gần đây. |
-| `GET /api/cameras/{camera_id}/preview` | MJPEG stream. |
-| `GET /api/violations/evidence/{evidence_path}` | Evidence image. |
-| `GET /api/violations/history` | Lịch sử vi phạm. |
-| `GET /api/violations/export` | Export CSV/XLSX. |
-| `GET /api/analytics/dashboard` | Dashboard analytics. |
-| `GET /api/stats` | Count thống kê theo filter. |
+| Endpoint                                          | Vai trò                                                            |
+| ------------------------------------------------- | ------------------------------------------------------------------ |
+| `GET /api/health`                                 | Healthcheck backend.                                               |
+| `GET /api/cameras`                                | Danh sách camera.                                                  |
+| `GET /api/cameras/{camera_id}`                    | Camera detail, lane config, validation, runtime status, UI config. |
+| `POST /api/cameras`                               | Tạo camera + lane config.                                          |
+| `PUT /api/cameras/{camera_id}`                    | Cập nhật camera + lane config.                                     |
+| `DELETE /api/cameras/{camera_id}`                 | Xóa camera và dữ liệu file liên quan.                              |
+| `POST /api/camera/{camera_id}/background-image`   | Upload ảnh nền JPG/PNG.                                            |
+| `GET /api/camera/{camera_id}/background-image`    | Lấy ảnh nền.                                                       |
+| `DELETE /api/camera/{camera_id}/background-image` | Xóa ảnh nền.                                                       |
+| `GET /api/cameras/{camera_id}/lanes`              | Lane polygons dạng pixel, kèm validation.                          |
+| `GET /api/cameras/{camera_id}/trajectories`       | Trajectory runtime gần đây.                                        |
+| `GET /api/cameras/{camera_id}/preview`            | MJPEG stream.                                                      |
+| `GET /api/violations/evidence/{evidence_path}`    | Evidence image.                                                    |
+| `GET /api/violations/history`                     | Lịch sử vi phạm.                                                   |
+| `GET /api/violations/export`                      | Export CSV/XLSX.                                                   |
+| `GET /api/analytics/dashboard`                    | Dashboard analytics.                                               |
+| `GET /api/stats`                                  | Count thống kê theo filter.                                        |
 
-### WebSocket
+### Health API edge node
+
+| Endpoint               | Vai trò                                           |
+| ---------------------- | ------------------------------------------------- |
+| `GET /health`          | Health edge camera node.                          |
+| `GET /identity`        | Identity cố định của edge node.                   |
+| `GET /stream/start`    | Bật RTSP pipeline.                                |
+| `GET /stream/stop`     | Tắt RTSP pipeline.                                |
+| `GET /restart-service` | Restart chương trình edge node thông qua systemd. |
+
+### WebSocket backend
 
 `WS /ws/tracks?camera_id=...` gửi `TrackMessage`:
 
@@ -412,24 +623,24 @@ File: `backend/app/core/violation_exports.py`
 
 ```json
 {
-  "type": "violation",
-  "event": {
-    "id": 1,
-    "camera_id": "cam_01",
-    "vehicle_id": 1,
-    "vehicle_type": "car",
-    "lane_id": 2,
-    "violation": "wrong_lane",
-    "image_url": "/api/violations/evidence/...",
-    "license_plate": "30A12345",
-    "timestamp": "..."
-  }
+	"type": "violation",
+	"event": {
+		"id": 1,
+		"camera_id": "cam_01",
+		"vehicle_id": 1,
+		"vehicle_type": "car",
+		"lane_id": 2,
+		"violation": "wrong_lane",
+		"image_url": "/api/violations/evidence/...",
+		"license_plate": "30A12345",
+		"timestamp": "..."
+	}
 }
 ```
 
 WebSocket handler có cơ chế chờ song song giữa queue nội bộ và disconnect message để nhận biết client đóng kết nối.
 
-## 9. Frontend
+## 12. Frontend
 
 ### App lifecycle
 
@@ -481,6 +692,9 @@ Chức năng:
 - Upload/xóa background image.
 - Undo/redo geometry.
 - Validate local và hiển thị validation từ backend.
+- Mở popup edge camera từ item camera để xem Health API, identity, RTSP URL, mDNS, IP fallback, bật/tắt stream và restart edge service.
+
+Popup edge camera hoạt động bằng cách suy host từ `rtsp_url`. Ví dụ từ `rtsp://cam-dca632112233.local:8554/cam_dca632112233`, frontend gọi `http://cam-dca632112233.local:8088`.
 
 ### Canvas
 
@@ -491,9 +705,9 @@ File: `frontend/src/components/CameraCanvas.jsx`
 - Hỗ trợ thêm điểm, kéo vertex, chèn điểm vào cạnh, kéo cả polygon/line và clamp trong frame.
 - Khi save, payload gửi về backend ở tọa độ normalized `[0, 1]`.
 
-## 10. Config Hiện Tại
+## 13. Config Hiện Tại
 
-`config/settings.json` hiện đang có các điểm đáng chú ý:
+Server `config/settings.json` có các điểm đáng chú ý:
 
 - `detection.weights_path`: `backend/yolov8m.pt`.
 - `detection.device`: `auto`.
@@ -507,13 +721,21 @@ File: `frontend/src/components/CameraCanvas.jsx`
 - `license_plate.easyocr_use_gpu`: `true`.
 - `license_plate.paddle_use_gpu`: `false`.
 
+Edge `edge_camera_node/config/settings.json` có các điểm đáng chú ý:
+
+- Camera mặc định 2560x1440, 30 FPS.
+- Bitrate RTSP mặc định 6 Mbps.
+- Tuning ảnh mặc định `normal`.
+- Health API cố định port `8088` và bật endpoint điều khiển.
+- GPIO/TFT pin mapping có thể chỉnh bằng JSON.
+
 Config geometry:
 
 - Lane/maneuver/direction geometry được validate normalized `[0, 1]`.
 - `allowed_maneuvers` có thể được tự suy ra từ `maneuvers.*.allowed` khi không khai báo.
 - Nếu maneuver `enabled=false`, backend ép `allowed=false`.
 
-## 11. Kiểm Thử Hiện Có
+## 14. Kiểm Thử Hiện Có
 
 `backend/tests` bao phủ các vùng quan trọng:
 
@@ -525,33 +747,50 @@ Config geometry:
 - Timezone.
 - API behavior ở một số phần.
 
+`edge_camera_node/tests` bao phủ:
+
+- Sinh camera ID ổn định từ MAC.
+- Runtime identity không đổi sau restart.
+- Port allocator ổn định.
+- Config JSON load/validate.
+- State transition BOOTING/ONLINE/WARNING/ERROR.
+- URL builder/identity behavior không cần phần cứng thật.
+
 Các lệnh kiểm thử:
 
 ```powershell
 python -m compileall backend/app
 cd backend
 python -m pytest tests -q
+cd ../edge_camera_node
+pytest -q
 cd ../frontend
 npm run build
 ```
 
-## 12. Điểm Mạnh
+## 15. Điểm Mạnh
 
-- Pipeline end-to-end rõ ràng từ video đến cảnh báo realtime.
-- Tách module tốt: vision, tracking, lane, direction, violation, API, DB, frontend.
+- Pipeline end-to-end rõ ràng từ camera thực địa đến cảnh báo realtime.
+- Edge node tách riêng phần phần cứng, giúp backend chỉ cần đọc RTSP URL như camera thông thường.
+- RTSP URL ổn định theo mDNS hostname sinh từ MAC, không phụ thuộc random/timestamp.
+- Edge node có fallback IP, TFT, LED, nút nhấn, watchdog và systemd auto-start.
+- Backend tách module tốt: vision, tracking, lane, direction, violation, API, DB, frontend.
 - Lane assignment giải thích được bằng hình học, không phụ thuộc AI lane detection.
 - Có smoothing nhiều lớp: stable track ID, vehicle type, lane ID.
 - Direction detection có consensus, tail segment, displacement và candidate window.
 - Turn detection dùng evidence fusion thay vì single signal.
 - Lifecycle chống phát trùng trong runtime.
 - OCR biển số tách worker nền, có temporal voting và degrade an toàn khi OCR lỗi.
-- UI có công cụ cấu hình lane/maneuver trực quan và validator.
+- UI có công cụ cấu hình lane/maneuver trực quan, validator và popup health edge node.
 - Có evidence image, dashboard, history và export CSV/XLSX.
 
-## 13. Rủi Ro Và Hạn Chế
+## 16. Rủi Ro Và Hạn Chế
 
-- Chưa có authentication/authorization/user role.
-- Chưa có audit log cho thao tác cấu hình.
+- Chưa có authentication/authorization/user role cho backend/frontend.
+- Health API edge node có thể dùng token, nhưng frontend popup hiện chưa có UI nhập/lưu token.
+- Edge node phụ thuộc rpicam/libcamera, ffmpeg, MediaMTX và Avahi trên Raspberry Pi OS; cần kiểm tra môi trường khi triển khai.
+- Nếu mạng hoặc router chặn multicast/mDNS, `.local` có thể không resolve; phải dùng IP fallback hoặc cấu hình mạng.
+- Nếu port RTSP đã lưu bị process lạ chiếm, node báo lỗi và không tự đổi port để giữ ổn định URL.
 - Mỗi `CameraContext` tự load detector/tracker, nhiều camera có thể tốn RAM/VRAM.
 - YOLO/ByteTrack vẫn là bottleneck chính khi nhiều camera hoặc model lớn.
 - SQLite phù hợp demo/đồ án, chưa tối ưu cho nhiều writer hoặc triển khai nhiều instance.
@@ -560,9 +799,8 @@ npm run build
 - Xóa camera sẽ xóa evidence image của camera, chưa có retention/archive policy.
 - Geometry phụ thuộc người dùng vẽ đúng; validator cảnh báo nhưng không thể loại toàn bộ cấu hình rủi ro.
 - Frontend trajectory live chủ yếu dựng từ WebSocket track; reload màn hình sẽ mất trajectory live đang có.
-- Chưa có endpoint health chi tiết cho từng camera: connected, last frame time, FPS, error message.
 
-## 14. False Positive Và False Negative Tiềm Ẩn
+## 17. False Positive Và False Negative Tiềm Ẩn
 
 False positive:
 
@@ -571,6 +809,7 @@ False positive:
 - Exit/commit line đặt quá gần vùng nhiễu.
 - Turn zone/exit zone overlap giữa nhiều maneuver.
 - OCR đọc sai nhưng đủ confidence trong vài lần liên tiếp.
+- Edge camera rung, quá tối, quá sáng hoặc FPS thấp làm input kém ổn định.
 
 False negative:
 
@@ -580,11 +819,13 @@ False negative:
 - Xe đi quá chậm hoặc đứng yên làm direction vector không đủ displacement.
 - Model YOLO bỏ sót xe nhỏ/xa khi confidence threshold cao.
 - Biển số quá nhỏ/mờ/góc xiên làm detector/OCR không đủ confidence.
+- RTSP stream mất tạm thời khiến backend bỏ lỡ một đoạn hành vi.
 
-## 15. Hướng Phát Triển
+## 18. Hướng Phát Triển
 
 - Thêm auth, role và audit log.
-- Thêm camera health endpoint và UI trạng thái kết nối.
+- Thêm UI cấu hình token cho popup edge node nếu dùng Health API điều khiển có bảo vệ.
+- Thêm camera health endpoint chi tiết phía backend để tổng hợp trạng thái stream/server/edge trên một màn hình.
 - Chia sẻ model/worker pool hoặc GPU scheduler cho nhiều camera.
 - Lưu `evidence_summary` vào DB để giải thích quyết định sau này.
 - Thêm violation detail endpoint theo ID.
@@ -594,11 +835,12 @@ False negative:
 - Thêm replay/trajectory history từ backend vào Monitoring.
 - Tối ưu OCR theo batch lớn hơn hoặc queue ưu tiên khi mật độ xe cao.
 - Chuẩn hóa profile OCR riêng cho biển số Việt Nam nếu dùng production.
+- Thêm kiểm thử tích hợp dài hạn trên Raspberry Pi 5 để đo nhiệt độ, FPS, restart count và độ ổn định mDNS/RTSP.
 
-## 16. Nội Dung Tóm Tắt Đưa Vào Báo Cáo
+## 19. Nội Dung Tóm Tắt Đưa Vào Báo Cáo
 
-Hệ thống Traffic Warning kết hợp YOLOv8, ByteTrack và luật hình học lane/maneuver để giám sát giao thông thời gian thực. Backend FastAPI xử lý video, tracking, gán làn, phát hiện vi phạm, OCR biển số, lưu SQLite và phát dữ liệu realtime qua WebSocket. Frontend React cung cấp màn hình giám sát, thống kê và công cụ cấu hình lane/maneuver bằng canvas.
+Hệ thống Traffic Warning gồm edge camera node trên Raspberry Pi 5, backend FastAPI và frontend React. Edge node có nhiệm vụ đọc camera 2K, mã hóa H.264 và phát RTSP ổn định bằng `rpicam-vid`, `ffmpeg` và MediaMTX. Node tự sinh `camera_id`, hostname mDNS và port ổn định từ MAC address, hiển thị trạng thái trên TFT, điều khiển LED/nút nhấn, có watchdog và tự chạy lại bằng systemd sau khi boot.
 
-Điểm kỹ thuật chính là hệ thống không dùng AI để nhận diện làn; lane được cấu hình thủ công bằng polygon và được xử lý bằng Shapely. Vi phạm được phát hiện bằng state machine và evidence fusion: sai làn dựa trên stable lane transition, ngược chiều dựa trên vector trajectory và direction path, rẽ sai dựa trên turn/exit zone, line crossing, heading, curvature và temporal continuity. OCR biển số là nhánh bổ sung, có detector riêng và temporal voting để tránh chốt kết quả từ một frame đơn lẻ.
+Backend đọc RTSP từ edge node hoặc nguồn video khác bằng OpenCV, sau đó dùng YOLOv8, ByteTrack và luật hình học lane/maneuver để giám sát giao thông thời gian thực. Hệ thống không dùng AI để nhận diện làn; lane được cấu hình thủ công bằng polygon và xử lý bằng Shapely. Vi phạm được phát hiện bằng state machine và evidence fusion: sai làn dựa trên stable lane transition, ngược chiều dựa trên vector trajectory và direction path, rẽ sai dựa trên turn/exit zone, line crossing, heading, curvature và temporal continuity.
 
-Thiết kế hiện phù hợp đồ án/demo kỹ thuật, có khả năng giải thích quyết định và chỉnh cấu hình trực quan. Khi triển khai production, cần bổ sung auth, audit log, health monitoring, retention policy, tối ưu đa camera/GPU và lưu evidence summary vào DB.
+OCR biển số là nhánh bổ sung, có detector riêng và temporal voting để tránh chốt kết quả từ một frame đơn lẻ. Frontend cung cấp màn hình giám sát realtime, thống kê/lịch sử vi phạm, công cụ cấu hình lane/maneuver bằng canvas và popup quản lý edge node. Thiết kế hiện phù hợp đồ án/demo kỹ thuật, có khả năng giải thích quyết định và chỉnh cấu hình trực quan. Khi triển khai production, cần bổ sung auth, audit log, health monitoring tập trung, retention policy, tối ưu đa camera/GPU và kiểm thử vận hành dài hạn trên Raspberry Pi 5.

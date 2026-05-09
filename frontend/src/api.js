@@ -24,6 +24,8 @@ function resolveApiBase() {
 }
 
 const API_BASE = resolveApiBase();
+// Cố định port API edge để đồng bộ toàn hệ thống; tách khỏi dải RTSP 8554-8654.
+const EDGE_HEALTH_API_PORT = 8088;
 
 function apiUrl(path) {
   return `${API_BASE}${path}`;
@@ -273,9 +275,9 @@ function parseRtspHost(rtspUrl) {
   return withoutCredentials.split(":")[0];
 }
 
-function buildEdgeBaseUrl(rtspUrl, healthPort = 8088) {
+function buildEdgeBaseUrl(rtspUrl) {
   const host = parseRtspHost(rtspUrl);
-  return `http://${host}:${healthPort}`;
+  return `http://${host}:${EDGE_HEALTH_API_PORT}`;
 }
 
 async function requestAbsoluteJson(url, options) {
@@ -299,33 +301,33 @@ function buildRestartQuery(token) {
   return `?token=${encodeURIComponent(token)}`;
 }
 
-export function getEdgeHealthBaseUrl(rtspUrl, healthPort = 8088) {
-  return buildEdgeBaseUrl(rtspUrl, healthPort);
+export function getEdgeHealthBaseUrl(rtspUrl) {
+  return buildEdgeBaseUrl(rtspUrl);
 }
 
-export async function fetchEdgeHealth(rtspUrl, healthPort = 8088) {
-  return await requestAbsoluteJson(`${buildEdgeBaseUrl(rtspUrl, healthPort)}/health`);
+export async function fetchEdgeHealth(rtspUrl) {
+  return await requestAbsoluteJson(`${buildEdgeBaseUrl(rtspUrl)}/health`);
 }
 
-export async function fetchEdgeIdentity(rtspUrl, healthPort = 8088) {
-  return await requestAbsoluteJson(`${buildEdgeBaseUrl(rtspUrl, healthPort)}/identity`);
+export async function fetchEdgeIdentity(rtspUrl) {
+  return await requestAbsoluteJson(`${buildEdgeBaseUrl(rtspUrl)}/identity`);
 }
 
-export async function triggerEdgeStreamStart(rtspUrl, { token = null, healthPort = 8088 } = {}) {
+export async function triggerEdgeStreamStart(rtspUrl, { token = null } = {}) {
   return await requestAbsoluteJson(
-    `${buildEdgeBaseUrl(rtspUrl, healthPort)}/stream/start${buildRestartQuery(token)}`,
+    `${buildEdgeBaseUrl(rtspUrl)}/stream/start${buildRestartQuery(token)}`,
   );
 }
 
-export async function triggerEdgeStreamStop(rtspUrl, { token = null, healthPort = 8088 } = {}) {
+export async function triggerEdgeStreamStop(rtspUrl, { token = null } = {}) {
   return await requestAbsoluteJson(
-    `${buildEdgeBaseUrl(rtspUrl, healthPort)}/stream/stop${buildRestartQuery(token)}`,
+    `${buildEdgeBaseUrl(rtspUrl)}/stream/stop${buildRestartQuery(token)}`,
   );
 }
 
-export async function triggerEdgeRestartService(rtspUrl, { token = null, healthPort = 8088 } = {}) {
+export async function triggerEdgeRestartService(rtspUrl, { token = null } = {}) {
   return await requestAbsoluteJson(
-    `${buildEdgeBaseUrl(rtspUrl, healthPort)}/restart-service${buildRestartQuery(token)}`,
+    `${buildEdgeBaseUrl(rtspUrl)}/restart-service${buildRestartQuery(token)}`,
   );
 }
 

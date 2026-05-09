@@ -39,6 +39,7 @@
     "fps_warning_threshold": 15
   },
   "health_api": {
+    "port": 8088,
     "allow_restart_endpoint": true
   }
 }

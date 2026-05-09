@@ -12,6 +12,8 @@ ALLOWED_IMAGE_TUNING_PROFILES = {
     "sharpness_safe",
     "disabled",
 }
+# Cố định port Health API để frontend truy cập trực tiếp edge node ổn định.
+EDGE_HEALTH_API_PORT = 8088
 
 
 @dataclass(frozen=True)
@@ -59,7 +61,7 @@ class WatchdogConfig:
 @dataclass(frozen=True)
 class HealthApiConfig:
     host: str = "0.0.0.0"
-    port: int = 8088
+    port: int = EDGE_HEALTH_API_PORT
     allow_restart_endpoint: bool = True
     token: str | None = None
 
@@ -204,9 +206,15 @@ def load_config(config_path: Path) -> AppConfig:
         temperature_error_c=float(raw_watchdog.get("temperature_error_c", 82)),
     )
 
+    health_port = int(raw_health.get("port", EDGE_HEALTH_API_PORT))
+    if health_port != EDGE_HEALTH_API_PORT:
+        raise ValueError(
+            f"health_api.port must be fixed at {EDGE_HEALTH_API_PORT} for frontend-edge API compatibility."
+        )
+
     health = HealthApiConfig(
         host=str(raw_health.get("host", "0.0.0.0")),
-        port=int(raw_health.get("port", 8088)),
+        port=EDGE_HEALTH_API_PORT,
         allow_restart_endpoint=bool(raw_health.get("allow_restart_endpoint", True)),
         token=raw_health.get("token"),
     )

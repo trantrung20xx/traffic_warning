@@ -101,6 +101,18 @@ Video input
 | `config/evidence_images` | Ảnh bằng chứng vi phạm. |
 | `config/traffic_warning.sqlite` | Database SQLite lưu lịch sử vi phạm. |
 
+## Edge Camera Node
+
+Edge camera node trên Raspberry Pi 5 phát RTSP cho backend và cung cấp Health API để frontend popup đọc trạng thái/điều khiển stream.
+
+| Thành phần | Cổng/chuẩn hiện tại |
+|---|---|
+| RTSP stream | Sinh ổn định trong dải `8554-8654` nếu không cấu hình `fixed_rtsp_port`. |
+| Health API phần cứng | Cố định `8088`; frontend suy host từ `rtsp_url` rồi gọi `http://<rtsp-host>:8088`. |
+| mDNS hostname | Dạng `cam-<mac>.local`, ưu tiên dùng trong RTSP URL chính. |
+
+Health API edge dùng các endpoint `GET /health`, `GET /identity`, `GET /stream/start`, `GET /stream/stop` và `GET /restart-service`. Port Health API được cố định để tránh frontend gọi sai cổng khi quản lý nhiều edge camera.
+
 ## Chạy Hệ Thống
 
 ### 1. Chạy backend
