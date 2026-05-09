@@ -2,7 +2,7 @@
 
 `edge_camera_node` là chương trình chạy trên Raspberry Pi 5 để lấy hình từ camera, mã hóa H.264 và phát RTSP ổn định cho server Traffic Warning đọc bằng OpenCV.
 
-Node này không chạy YOLO, OCR, tracking, logic vi phạm, database, WebSocket của server. Backend và frontend server hiện có chỉ cần dùng RTSP URL.
+Node này không chạy YOLO, OCR, tracking, logic vi phạm, database, WebSocket của server. Backend chỉ cần đọc RTSP URL như một camera thông thường; frontend popup quản lý edge node gọi trực tiếp Health API của Raspberry Pi qua host suy từ RTSP URL.
 
 ## 1. Luồng Hoạt Động
 
@@ -33,11 +33,17 @@ Ví dụ:
 {
   "camera_id": "cam_dca632112233",
   "node_id": "dca632112233",
+  "mac_address": "dca632112233",
+  "interface": "eth0",
   "mdns_hostname": "cam-dca632112233.local",
   "rtsp_port": 8554,
-  "stream_path": "/cam_dca632112233"
+  "stream_path": "/cam_dca632112233",
+  "fallback_ip": "192.168.1.50",
+  "created_at": "2026-05-09T10:00:00+07:00"
 }
 ```
+
+`rtsp_port` được sinh ổn định trong dải `8554-8654` nếu không cấu hình `identity.fixed_rtsp_port`. RTSP port không liên quan đến Health API port.
 
 URL chính nên dùng:
 
@@ -105,6 +111,7 @@ Cấu hình hiện tại:
     "fps_warning_threshold": 15
   },
   "health_api": {
+    "port": 8088,
     "allow_restart_endpoint": true
   }
 }
@@ -119,6 +126,8 @@ Thông thường chỉ cần chỉnh:
 - `stream.bitrate` nếu mạng yếu hoặc hình chưa đủ nét
 
 `udp_sink` là điểm trung chuyển nội bộ trong Pi. Giữ mặc định nếu không bị xung đột cổng nội bộ.
+
+`health_api.port` hiện được cố định ở `8088` để frontend luôn gọi đúng API phần cứng. Nếu cấu hình khác `8088`, node sẽ từ chối cấu hình khi khởi động.
 
 ## 4. Image Tuning
 
@@ -296,11 +305,13 @@ Nếu `.local` không resolve được, dùng IP fallback hiển thị trên TFT
 
 ## 8. Health API
 
-Health API chạy mặc định ở:
+Health API chạy cố định ở:
 
 ```text
 http://<mdns-hostname>:8088
 ```
+
+Frontend popup dùng cùng chuẩn này: lấy host từ `rtsp_url`, bỏ RTSP port, rồi gọi `http://<rtsp-host>:8088`.
 
 Endpoint:
 
@@ -327,6 +338,7 @@ Nếu muốn khóa endpoint điều khiển:
 ```json
 {
   "health_api": {
+    "port": 8088,
     "allow_restart_endpoint": false
   }
 }
@@ -337,6 +349,7 @@ Nếu muốn dùng token:
 ```json
 {
   "health_api": {
+    "port": 8088,
     "allow_restart_endpoint": true,
     "token": "doi_chuoi_bi_mat_o_day"
   }
@@ -372,6 +385,8 @@ Nếu môi trường không resolve được `.local`, dùng IP fallback:
   "frame_height": 1440
 }
 ```
+
+`camera_id` trong server là định danh phần mềm dùng cho lane config, evidence và thống kê; nó có thể khác `camera_id` do edge node tự sinh. Liên kết đến phần cứng được xác định qua `rtsp_url`.
 
 Frontend quản lý camera có popup edge node để xem health, identity, bật/tắt stream và restart service từ xa. Popup gọi trực tiếp Health API trên Raspberry Pi, không đi qua backend server.
 
@@ -433,6 +448,7 @@ systemctl show traffic-camera-node.service -p NRestarts
 
 - URL chính là mDNS URL.
 - Reboot không đổi `camera_id`, hostname, port, stream path.
+- RTSP port nằm trong dải `8554-8654`; Health API port cố định `8088`.
 - Không xóa `config/runtime_identity.json` nếu camera đã được khai báo trên server.
 - Nếu thay Pi hoặc thay interface mạng, MAC có thể đổi và identity mới sẽ được tạo.
 - Edge node được thiết kế để boot lên là tự chạy lại.
