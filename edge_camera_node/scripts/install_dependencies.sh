@@ -7,7 +7,7 @@ CONFIG_FILE="${ROOT_DIR}/config/settings.json"
 
 if [[ ! -f "${CONFIG_FILE}" ]]; then
   echo "[ERROR] Missing config file: ${CONFIG_FILE}"
-  echo "Create it before install (copy from repo default or your deployment template)."
+  echo "Create it before install."
   exit 1
 fi
 
@@ -33,7 +33,8 @@ sudo apt install -y \
   avahi-utils \
   ffmpeg \
   curl \
-  tar
+  tar \
+  jq
 
 if ! command -v rpicam-vid >/dev/null 2>&1; then
   echo "[WARN] rpicam-vid not found. Installing camera apps..."
@@ -42,6 +43,7 @@ fi
 
 if ! command -v mediamtx >/dev/null 2>&1; then
   echo "[2/5] Installing MediaMTX binary..."
+
   ARCH="$(uname -m)"
   case "$ARCH" in
     aarch64) MTX_ARCH="linux_arm64" ;;
@@ -55,9 +57,33 @@ if ! command -v mediamtx >/dev/null 2>&1; then
   TMP_DIR="$(mktemp -d)"
   pushd "$TMP_DIR" >/dev/null
 
-  MTX_URL="https://github.com/bluenviron/mediamtx/releases/latest/download/mediamtx_${MTX_ARCH}.tar.gz"
-  curl -fsSL "$MTX_URL" -o mediamtx.tar.gz
+  echo "[INFO] Finding latest MediaMTX release asset for ${MTX_ARCH}..."
+
+  MTX_URL="$(
+    curl -fsSL https://api.github.com/repos/bluenviron/mediamtx/releases/latest \
+    | jq -r --arg arch "$MTX_ARCH" '
+        .assets[]
+        | select(.name | endswith($arch + ".tar.gz"))
+        | .browser_download_url
+      ' \
+    | head -n 1
+  )"
+
+  if [[ -z "${MTX_URL}" || "${MTX_URL}" == "null" ]]; then
+    echo "[ERROR] Could not find MediaMTX release asset for ${MTX_ARCH}"
+    exit 1
+  fi
+
+  echo "[INFO] Downloading: ${MTX_URL}"
+  curl -fL "${MTX_URL}" -o mediamtx.tar.gz
+
   tar -xzf mediamtx.tar.gz
+
+  if [[ ! -f mediamtx ]]; then
+    echo "[ERROR] MediaMTX binary not found after extraction."
+    exit 1
+  fi
+
   sudo install -m 0755 mediamtx /usr/local/bin/mediamtx
 
   popd >/dev/null
@@ -66,12 +92,14 @@ fi
 
 echo "[3/5] Creating Python virtual environment..."
 python3 -m venv "$VENV_DIR"
+
 source "${VENV_DIR}/bin/activate"
 python -m pip install --upgrade pip wheel setuptools
 
 echo "[4/5] Installing Python dependencies..."
 pip install -r "${ROOT_DIR}/requirements.txt"
 
+echo "[5/5] Enabling services..."
 sudo systemctl enable avahi-daemon || true
 sudo systemctl start avahi-daemon || true
 
