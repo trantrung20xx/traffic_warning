@@ -68,7 +68,8 @@
         ]
       ],
       "allowed_lane_changes": [
-        1
+        1,
+        2
       ],
       "allowed_vehicle_types": [
         "motorcycle",
@@ -177,13 +178,14 @@
         ]
       ],
       "allowed_lane_changes": [
-        2
+        2,
+        1
       ],
       "allowed_vehicle_types": [
         "motorcycle",
-        "car",
         "truck",
-        "bus"
+        "bus",
+        "car"
       ],
       "direction_rule": {
         "enabled": true,

@@ -19,13 +19,16 @@ sudo apt install -y \
   python3-pip \
   python3-dev \
   build-essential \
-  libatlas-base-dev \
+  pkg-config \
+  libopenblas-dev \
+  liblapack-dev \
   libjpeg-dev \
   zlib1g-dev \
   libopenjp2-7 \
   libtiff6 \
   python3-spidev \
-  libgpiod2 \
+  gpiod \
+  libgpiod-dev \
   avahi-daemon \
   avahi-utils \
   ffmpeg \
@@ -48,12 +51,15 @@ if ! command -v mediamtx >/dev/null 2>&1; then
       exit 1
       ;;
   esac
+
   TMP_DIR="$(mktemp -d)"
   pushd "$TMP_DIR" >/dev/null
+
   MTX_URL="https://github.com/bluenviron/mediamtx/releases/latest/download/mediamtx_${MTX_ARCH}.tar.gz"
   curl -fsSL "$MTX_URL" -o mediamtx.tar.gz
   tar -xzf mediamtx.tar.gz
   sudo install -m 0755 mediamtx /usr/local/bin/mediamtx
+
   popd >/dev/null
   rm -rf "$TMP_DIR"
 fi
@@ -61,7 +67,7 @@ fi
 echo "[3/5] Creating Python virtual environment..."
 python3 -m venv "$VENV_DIR"
 source "${VENV_DIR}/bin/activate"
-python -m pip install --upgrade pip wheel
+python -m pip install --upgrade pip wheel setuptools
 
 echo "[4/5] Installing Python dependencies..."
 pip install -r "${ROOT_DIR}/requirements.txt"
