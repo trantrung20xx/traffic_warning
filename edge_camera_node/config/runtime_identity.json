@@ -1,0 +1,11 @@
+{
+  "camera_id": "cam_2ccf6788f9e5",
+  "node_id": "36be62afb543",
+  "mac_address": "2ccf6788f9e5",
+  "interface": "eth0",
+  "mdns_hostname": "cam-2ccf6788f9e5.local",
+  "rtsp_port": 8593,
+  "stream_path": "/cam_2ccf6788f9e5",
+  "fallback_ip": "172.20.10.2",
+  "created_at": "2026-05-10T16:57:58.276547+07:00"
+}

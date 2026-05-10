@@ -12,6 +12,16 @@ ALLOWED_IMAGE_TUNING_PROFILES = {
     "sharpness_safe",
     "disabled",
 }
+ALLOWED_STREAM_PIPELINE_MODES = {
+    "auto",
+    "libav_mpegts",
+    "h264",
+}
+ALLOWED_STREAM_SOURCES = {
+    "auto",
+    "rpi_csi",
+    "usb_v4l2",
+}
 # Cố định port Health API để frontend truy cập trực tiếp edge node ổn định.
 EDGE_HEALTH_API_PORT = 8088
 
@@ -47,6 +57,10 @@ class StreamConfig:
     rpicam_vid_binary: str = "rpicam-vid"
     ffmpeg_binary: str = "ffmpeg"
     udp_sink: str = "udp://127.0.0.1:1234?pkt_size=1316"
+    pipeline_mode: str = "auto"
+    source: str = "auto"
+    usb_device: str = "auto"
+    usb_input_format: str = "auto"
 
 
 @dataclass(frozen=True)
@@ -196,7 +210,23 @@ def load_config(config_path: Path) -> AppConfig:
         rpicam_vid_binary=str(raw_stream.get("rpicam_vid_binary", "rpicam-vid")),
         ffmpeg_binary=str(raw_stream.get("ffmpeg_binary", "ffmpeg")),
         udp_sink=str(raw_stream.get("udp_sink", "udp://127.0.0.1:1234?pkt_size=1316")),
+        pipeline_mode=str(raw_stream.get("pipeline_mode", "auto")).strip().lower(),
+        source=str(raw_stream.get("source", "auto")).strip().lower(),
+        usb_device=str(raw_stream.get("usb_device", "auto")).strip(),
+        usb_input_format=str(raw_stream.get("usb_input_format", "auto")).strip().lower(),
     )
+    if stream.pipeline_mode not in ALLOWED_STREAM_PIPELINE_MODES:
+        raise ValueError(
+            f"Unsupported stream.pipeline_mode: {stream.pipeline_mode}. "
+            f"Expected one of: {sorted(ALLOWED_STREAM_PIPELINE_MODES)}"
+        )
+    if stream.source not in ALLOWED_STREAM_SOURCES:
+        raise ValueError(
+            f"Unsupported stream.source: {stream.source}. "
+            f"Expected one of: {sorted(ALLOWED_STREAM_SOURCES)}"
+        )
+    if not stream.usb_device:
+        raise ValueError("stream.usb_device must not be empty.")
 
     watchdog = WatchdogConfig(
         max_restarts_per_window=int(raw_watchdog.get("max_restarts_per_window", 5)),

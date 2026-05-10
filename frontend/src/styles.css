@@ -1127,7 +1127,18 @@ select {
   margin-top: 14px;
 }
 
+.edge-health-host-override {
+  margin-top: 12px;
+}
+
+.edge-health-host-override-note {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 /* Tách rõ các khối trạng thái trong popup edge camera. */
+.edge-health-host-override + .message-bar,
 .edge-health-badges + .message-bar {
   margin-top: 12px;
 }
@@ -2084,4 +2095,3 @@ select {
     padding: 12px;
   }
 }
-

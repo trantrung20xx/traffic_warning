@@ -33,7 +33,11 @@
   },
   "stream": {
     "bitrate": 6000000,
-    "udp_sink": "udp://127.0.0.1:1234?pkt_size=1316"
+    "udp_sink": "udp://127.0.0.1:1234?pkt_size=1316",
+    "pipeline_mode": "auto",
+    "source": "usb_v4l2",
+    "usb_device": "auto",
+    "usb_input_format": "auto"
   },
   "watchdog": {
     "fps_warning_threshold": 15

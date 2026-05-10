@@ -41,7 +41,11 @@ create_default_settings() {
     "backlight_pin": null
   },
   "stream": {
-    "bitrate": 6000000
+    "bitrate": 6000000,
+    "pipeline_mode": "auto",
+    "source": "auto",
+    "usb_device": "auto",
+    "usb_input_format": "auto"
   },
   "watchdog": {
     "fps_warning_threshold": 15

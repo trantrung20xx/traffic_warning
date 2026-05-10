@@ -116,6 +116,40 @@ const VALIDATION_LEVELS = ["error", "warning", "info"];
 const VALIDATION_LEVEL_ORDER = { error: 0, warning: 1, info: 2 };
 const VALIDATION_LEVEL_ICONS = { error: "❌", warning: "⚠️", info: "ℹ️" };
 const MAX_DRAFT_HISTORY = 80;
+const EDGE_HOST_OVERRIDE_STORAGE_KEY = "traffic_warning.edge_host_overrides_v1";
+
+function loadEdgeHostOverrideMap() {
+	try {
+		const raw = window.localStorage.getItem(EDGE_HOST_OVERRIDE_STORAGE_KEY);
+		if (!raw) return {};
+		const parsed = JSON.parse(raw);
+		return parsed && typeof parsed === "object" ? parsed : {};
+	} catch {
+		return {};
+	}
+}
+
+function getEdgeHostOverrideForCamera(cameraId) {
+	if (!cameraId || typeof window === "undefined") return "";
+	const map = loadEdgeHostOverrideMap();
+	const value = map[cameraId];
+	return typeof value === "string" ? value : "";
+}
+
+function saveEdgeHostOverrideForCamera(cameraId, host) {
+	if (!cameraId || typeof window === "undefined") return;
+	const map = loadEdgeHostOverrideMap();
+	if (host && host.trim()) {
+		map[cameraId] = host.trim();
+	} else {
+		delete map[cameraId];
+	}
+	try {
+		window.localStorage.setItem(EDGE_HOST_OVERRIDE_STORAGE_KEY, JSON.stringify(map));
+	} catch {
+		// Bỏ qua lỗi storage quota/private mode; UI vẫn hoạt động theo state hiện tại.
+	}
+}
 
 function cloneDraftState(value) {
 	return JSON.parse(JSON.stringify(value));
@@ -521,6 +555,7 @@ export default function ManagementView({
 	const [confirmBusy, setConfirmBusy] = useState(false);
 	const [edgePopupCameraId, setEdgePopupCameraId] = useState(null);
 	const [edgeHealthBaseUrl, setEdgeHealthBaseUrl] = useState("");
+	const [edgeHostOverride, setEdgeHostOverride] = useState("");
 	const [edgeHealthData, setEdgeHealthData] = useState(null);
 	const [edgeIdentityData, setEdgeIdentityData] = useState(null);
 	const [edgeLoading, setEdgeLoading] = useState(false);
@@ -1036,19 +1071,29 @@ export default function ManagementView({
 	}, []);
 
 	const loadEdgeNodeStatus = useCallback(
-		async (camera, { silent = false } = {}) => {
+		async (camera, { silent = false, preferBaseUrl = "" } = {}) => {
 			if (!camera?.rtsp_url) {
 				throw new Error("Camera chưa có RTSP URL.");
 			}
 			if (!silent) setEdgeLoading(true);
 			setEdgeError("");
 			try {
-				const baseUrl = getEdgeHealthBaseUrl(camera.rtsp_url);
+				const initialBaseUrl =
+					preferBaseUrl ||
+					edgeHealthBaseUrl ||
+					getEdgeHealthBaseUrl(camera.rtsp_url, { overrideHost: edgeHostOverride });
+				const healthResponse = await fetchEdgeHealth(camera.rtsp_url, {
+					overrideHost: edgeHostOverride,
+					preferBaseUrl: initialBaseUrl,
+				});
+				const identityResponse = await fetchEdgeIdentity(camera.rtsp_url, {
+					overrideHost: edgeHostOverride,
+					preferBaseUrl: healthResponse.baseUrl,
+				});
+				const health = healthResponse.payload;
+				const identity = identityResponse.payload;
+				const baseUrl = healthResponse.baseUrl;
 				setEdgeHealthBaseUrl(baseUrl);
-				const [health, identity] = await Promise.all([
-					fetchEdgeHealth(camera.rtsp_url),
-					fetchEdgeIdentity(camera.rtsp_url),
-				]);
 				setEdgeHealthData(health);
 				setEdgeIdentityData(identity);
 				return { health, identity, baseUrl };
@@ -1060,7 +1105,7 @@ export default function ManagementView({
 				if (!silent) setEdgeLoading(false);
 			}
 		},
-		[],
+		[edgeHealthBaseUrl, edgeHostOverride],
 	);
 
 	const pollEdgeNodeAfterRestart = useCallback(
@@ -1086,13 +1131,22 @@ export default function ManagementView({
 
 	const openEdgeHealthPopup = useCallback(
 		(camera) => {
+			const savedHostOverride = getEdgeHostOverrideForCamera(camera.camera_id);
 			setEdgePopupCameraId(camera.camera_id);
+			setEdgeHostOverride(savedHostOverride);
+			setEdgeHealthBaseUrl(
+				getEdgeHealthBaseUrl(camera.rtsp_url, { overrideHost: savedHostOverride }),
+			);
 			setEdgeHealthData(null);
 			setEdgeIdentityData(null);
 			setEdgeError("");
 			setEdgeActionBusy(false);
 			clearEdgeHealthPolling();
-			loadEdgeNodeStatus(camera).catch((error) => {
+			loadEdgeNodeStatus(camera, {
+				preferBaseUrl: getEdgeHealthBaseUrl(camera.rtsp_url, {
+					overrideHost: savedHostOverride,
+				}),
+			}).catch((error) => {
 				setMessage(error.message || "Không thể tải health của edge node.");
 			});
 		},
@@ -1104,11 +1158,24 @@ export default function ManagementView({
 		clearEdgeHealthPolling();
 		setEdgePopupCameraId(null);
 		setEdgeHealthBaseUrl("");
+		setEdgeHostOverride("");
 		setEdgeHealthData(null);
 		setEdgeIdentityData(null);
 		setEdgeError("");
 		setEdgeLoading(false);
 	}, [clearEdgeHealthPolling, edgeActionBusy]);
+
+	const handleEdgeHostOverrideChange = useCallback(
+		(value) => {
+			setEdgeHostOverride(value);
+			if (!edgePopupCamera) return;
+			saveEdgeHostOverrideForCamera(edgePopupCamera.camera_id, value);
+			setEdgeHealthBaseUrl(
+				getEdgeHealthBaseUrl(edgePopupCamera.rtsp_url, { overrideHost: value }),
+			);
+		},
+		[edgePopupCamera],
+	);
 
 	const requestEdgeToggleStream = useCallback(() => {
 		if (!edgePopupCamera) return;
@@ -1130,18 +1197,30 @@ export default function ManagementView({
 				setConfirmBusy(true);
 				setEdgeActionBusy(true);
 				try {
+					let resolvedBaseUrl = edgeHealthBaseUrl;
 					if (nextEnabled) {
-						await triggerEdgeStreamStart(camera.rtsp_url);
+						const response = await triggerEdgeStreamStart(camera.rtsp_url, {
+							overrideHost: edgeHostOverride,
+							preferBaseUrl: edgeHealthBaseUrl,
+						});
+						if (response?.baseUrl) resolvedBaseUrl = response.baseUrl;
 					} else {
-						await triggerEdgeStreamStop(camera.rtsp_url);
+						const response = await triggerEdgeStreamStop(camera.rtsp_url, {
+							overrideHost: edgeHostOverride,
+							preferBaseUrl: edgeHealthBaseUrl,
+						});
+						if (response?.baseUrl) resolvedBaseUrl = response.baseUrl;
 					}
+					setEdgeHealthBaseUrl(resolvedBaseUrl || "");
 					setConfirmDialog(null);
 					setMessage(
 						nextEnabled
 							? `Đã gửi lệnh bật stream cho ${camera.camera_id}.`
 							: `Đã gửi lệnh tắt stream cho ${camera.camera_id}.`,
 					);
-					await loadEdgeNodeStatus(camera);
+					await loadEdgeNodeStatus(camera, {
+						preferBaseUrl: resolvedBaseUrl,
+					});
 				} catch (error) {
 					setMessage(error.message || "Không thể đổi trạng thái stream từ xa.");
 				} finally {
@@ -1150,7 +1229,13 @@ export default function ManagementView({
 				}
 			},
 		});
-	}, [edgePopupCamera, edgeStreamEnabled, loadEdgeNodeStatus]);
+	}, [
+		edgeHealthBaseUrl,
+		edgeHostOverride,
+		edgePopupCamera,
+		edgeStreamEnabled,
+		loadEdgeNodeStatus,
+	]);
 
 	const requestEdgeRestartService = useCallback(() => {
 		if (!edgePopupCamera) return;
@@ -1168,7 +1253,13 @@ export default function ManagementView({
 				setConfirmBusy(true);
 				setEdgeActionBusy(true);
 				try {
-					await triggerEdgeRestartService(camera.rtsp_url);
+					const response = await triggerEdgeRestartService(camera.rtsp_url, {
+						overrideHost: edgeHostOverride,
+						preferBaseUrl: edgeHealthBaseUrl,
+					});
+					if (response?.baseUrl) {
+						setEdgeHealthBaseUrl(response.baseUrl);
+					}
 					setConfirmDialog(null);
 					setMessage(`Đã gửi lệnh restart edge node ${camera.camera_id}.`);
 					pollEdgeNodeAfterRestart(camera, 0);
@@ -1180,7 +1271,7 @@ export default function ManagementView({
 				}
 			},
 		});
-	}, [edgePopupCamera, pollEdgeNodeAfterRestart]);
+	}, [edgeHealthBaseUrl, edgeHostOverride, edgePopupCamera, pollEdgeNodeAfterRestart]);
 
 	const closeConfirmDialog = () => {
 		if (saving || confirmBusy) return;
@@ -2200,18 +2291,19 @@ export default function ManagementView({
 								))}
 							</div>
 						) : null}
-						{laneMessage ? (
-							<div className="message-bar lane-editor-message">
-								{laneMessage}
-							</div>
-						) : null}
+							{laneMessage ? (
+								<div className="message-bar lane-editor-message">
+									{laneMessage}
+								</div>
+							) : null}
+						</section>
 					</section>
-				</section>
-			</div>
+				</div>
 			<EdgeCameraHealthModal
 				open={Boolean(edgePopupCamera)}
 				camera={edgePopupCamera}
 				healthBaseUrl={edgeHealthBaseUrl}
+				hostOverride={edgeHostOverride}
 				health={edgeHealthData}
 				identity={edgeIdentityData}
 				streamEnabled={edgeStreamEnabled}
@@ -2221,10 +2313,13 @@ export default function ManagementView({
 				onClose={closeEdgeHealthPopup}
 				onRefresh={() => {
 					if (!edgePopupCamera) return;
-					loadEdgeNodeStatus(edgePopupCamera).catch((error) => {
+					loadEdgeNodeStatus(edgePopupCamera, {
+						preferBaseUrl: edgeHealthBaseUrl,
+					}).catch((error) => {
 						setMessage(error.message || "Không thể tải lại health edge node.");
 					});
 				}}
+				onHostOverrideChange={handleEdgeHostOverrideChange}
 				onToggleStream={requestEdgeToggleStream}
 				onRestartService={requestEdgeRestartService}
 			/>

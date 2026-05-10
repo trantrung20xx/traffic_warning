@@ -8,7 +8,7 @@ from logging import Logger
 from ..config import AppConfig
 from ..state import NodeState, NodeStatus
 from .fps_probe import FpsProbe
-from .rtsp_pipeline import RtspPipeline
+from .rtsp_pipeline import PipelineStartError, RtspPipeline
 
 
 class ProcessSupervisor:
@@ -43,6 +43,8 @@ class ProcessSupervisor:
         self._watchdog_latched = False
         # Bật/tắt watchdog restart theo ý người vận hành.
         self._stream_enabled = True
+        # Mốc thời gian retry tiếp theo để tránh spam restart khi lỗi phần cứng.
+        self._next_retry_monotonic = 0.0
 
     def start(self) -> None:
         # Đặt lại cờ điều khiển trước khi bắt đầu giám sát.
@@ -51,12 +53,18 @@ class ProcessSupervisor:
         self._manual_stop_event.clear()
         self._watchdog_latched = False
         self._stream_enabled = True
+        self._next_retry_monotonic = 0.0
         self._state.set_stream_enabled(True)
         try:
             # Thử khởi động pipeline ngay lần đầu.
             self._pipeline.start()
             self._state.set_stream_running(True)
             self._state.transition(NodeStatus.STREAMING)
+        except PipelineStartError as exc:
+            self._state.set_stream_running(False)
+            self._state.set_error(str(exc))
+            self._logger.exception("Initial RTSP pipeline start failed.")
+            self._try_restart_with_limits(f"initial start failed: {exc}", error=exc)
         except Exception as exc:
             # Nếu khởi động lỗi thì ghi trạng thái và chuyển qua cơ chế khởi động lại có giới hạn.
             self._state.set_stream_running(False)
@@ -92,6 +100,7 @@ class ProcessSupervisor:
             if self._watchdog_latched:
                 return False
             self._stream_enabled = True
+            self._next_retry_monotonic = 0.0
             self._state.set_stream_enabled(True)
             self._manual_stop_event.clear()
             self._manual_start_event.set()
@@ -111,6 +120,7 @@ class ProcessSupervisor:
         # RESET_WATCHDOG: bỏ chốt watchdog và xóa lịch sử khởi động lại cũ.
         self._watchdog_latched = False
         self._restart_history.clear()
+        self._next_retry_monotonic = 0.0
         self._state.set_restart_count(0)
         self._state.set_watchdog_latched(False)
         self._state.clear_error()
@@ -135,6 +145,10 @@ class ProcessSupervisor:
                     self._state.set_stream_running(True)
                     self._state.transition(NodeStatus.STREAMING)
                     self._logger.warning("RTSP stream started by remote command.")
+                except PipelineStartError as exc:
+                    self._state.set_stream_running(False)
+                    self._state.set_warning(f"Start stream failed: {exc}")
+                    self._next_retry_monotonic = time.monotonic() + exc.retry_after_s
                 except Exception as exc:
                     self._state.set_stream_running(False)
                     self._state.set_warning(f"Start stream failed: {exc}")
@@ -142,7 +156,7 @@ class ProcessSupervisor:
             if self._manual_restart_event.is_set():
                 # Tiêu thụ lệnh khởi động lại thủ công.
                 self._manual_restart_event.clear()
-                self._try_restart_with_limits("manual restart requested")
+                self._try_restart_with_limits("manual restart requested", ignore_retry_delay=True)
 
             health = self._pipeline.health()
             if not self._stream_enabled:
@@ -170,35 +184,68 @@ class ProcessSupervisor:
             # Chu kỳ cố định giúp overhead thấp và hành vi ổn định.
             time.sleep(2)
 
-    def _try_restart_with_limits(self, reason: str) -> None:
+    def _try_restart_with_limits(
+        self,
+        reason: str,
+        error: Exception | None = None,
+        ignore_retry_delay: bool = False,
+    ) -> None:
         # Đánh giá tần suất khởi động lại trong cửa sổ thời gian.
         now = time.monotonic()
-        window = self._config.watchdog.restart_window_seconds
-        max_restarts = self._config.watchdog.max_restarts_per_window
-
-        # Cửa sổ trượt ngăn vòng lặp khởi động lại vô hạn gây áp lực CPU/SD.
-        while self._restart_history and now - self._restart_history[0] > window:
-            self._restart_history.popleft()
-
-        if len(self._restart_history) >= max_restarts:
-            self._watchdog_latched = True
-            self._state.set_watchdog_latched(True)
-            self._state.set_error(
-                f"Watchdog latched: too many restarts in {window}s. Last reason: {reason}"
-            )
-            self._pipeline.stop()
-            self._logger.error("Watchdog latched. Manual RESET_WATCHDOG required.")
+        if not ignore_retry_delay and now < self._next_retry_monotonic:
             return
 
-        # Nếu còn lượt khởi động lại thì ghi dấu thời gian và thử lại.
-        self._restart_history.append(now)
-        self._state.set_restart_count(len(self._restart_history))
+        window = self._config.watchdog.restart_window_seconds
+        max_restarts = self._config.watchdog.max_restarts_per_window
+        count_toward_watchdog = True
+        retry_after_s = 0.5
+        if isinstance(error, PipelineStartError):
+            count_toward_watchdog = error.count_toward_watchdog
+            retry_after_s = error.retry_after_s
+
+        # Cửa sổ trượt ngăn vòng lặp khởi động lại vô hạn gây áp lực CPU/SD.
+        counted_this_attempt = False
+        if count_toward_watchdog:
+            while self._restart_history and now - self._restart_history[0] > window:
+                self._restart_history.popleft()
+
+            if len(self._restart_history) >= max_restarts:
+                self._watchdog_latched = True
+                self._state.set_watchdog_latched(True)
+                self._state.set_error(
+                    f"Watchdog latched: too many restarts in {window}s. Last reason: {reason}"
+                )
+                self._pipeline.stop()
+                self._logger.error("Watchdog latched. Manual RESET_WATCHDOG required.")
+                return
+
+            # Nếu còn lượt khởi động lại thì ghi dấu thời gian và thử lại.
+            self._restart_history.append(now)
+            counted_this_attempt = True
+            self._state.set_restart_count(len(self._restart_history))
+        else:
+            # Lỗi phần cứng/cấu hình camera: không latch watchdog, retry thưa để chờ môi trường hồi phục.
+            self._logger.warning(
+                "Skipping watchdog count for restart. next_retry_in=%.1fs reason=%s",
+                retry_after_s,
+                reason,
+            )
+
         try:
             self._logger.warning("Restarting RTSP pipeline. reason=%s", reason)
             self._pipeline.restart()
+            self._next_retry_monotonic = 0.0
             self._state.set_stream_running(True)
             self._state.transition(NodeStatus.STREAMING)
+        except PipelineStartError as exc:
+            if counted_this_attempt and not exc.count_toward_watchdog and self._restart_history:
+                self._restart_history.pop()
+                self._state.set_restart_count(len(self._restart_history))
+            self._next_retry_monotonic = time.monotonic() + exc.retry_after_s
+            self._state.set_stream_running(False)
+            self._state.set_warning(f"Restart failed: {exc}")
         except Exception as exc:
             # Nếu khởi động lại lỗi thì giữ trạng thái cảnh báo để hiện trên màn hình chẩn đoán.
+            self._next_retry_monotonic = time.monotonic() + retry_after_s
             self._state.set_stream_running(False)
             self._state.set_warning(f"Restart failed: {exc}")

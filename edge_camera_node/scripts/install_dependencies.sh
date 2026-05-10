@@ -138,6 +138,7 @@ python -m pip install --upgrade pip wheel setuptools
 
 echo "[4/5] Installing Python dependencies..."
 pip install --upgrade -r "${REQUIREMENTS_FILE}"
+pip install --upgrade -e "${ROOT_DIR}"
 
 echo "[5/5] Enabling services..."
 sudo systemctl enable avahi-daemon || true

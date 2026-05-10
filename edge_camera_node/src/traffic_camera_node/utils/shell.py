@@ -21,14 +21,21 @@ def command_exists(command: str) -> bool:
 
 
 def run_command(command: list[str], timeout: int = 10) -> CommandResult:
-    proc = subprocess.run(
-        command,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        check=False,
-    )
-    return CommandResult(proc.returncode, proc.stdout.strip(), proc.stderr.strip())
+    try:
+        proc = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+        return CommandResult(proc.returncode, proc.stdout.strip(), proc.stderr.strip())
+    except subprocess.TimeoutExpired as exc:
+        stdout = exc.stdout.decode("utf-8", errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
+        stderr = exc.stderr.decode("utf-8", errors="replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
+        timed_out = f"Command timed out after {timeout}s: {' '.join(command)}"
+        merged_stderr = f"{stderr.strip()} {timed_out}".strip()
+        return CommandResult(returncode=124, stdout=stdout.strip(), stderr=merged_stderr)
 
 
 def request_safe_shutdown() -> CommandResult:

@@ -275,9 +275,68 @@ function parseRtspHost(rtspUrl) {
   return withoutCredentials.split(":")[0];
 }
 
-function buildEdgeBaseUrl(rtspUrl) {
-  const host = parseRtspHost(rtspUrl);
-  return `http://${host}:${EDGE_HEALTH_API_PORT}`;
+function normalizeHostForEdge(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+
+  let host = raw;
+  host = host.replace(/^https?:\/\//i, "");
+  host = host.replace(/^rtsp:\/\//i, "");
+  host = host.replace(/\/.*$/, "");
+
+  if (host.startsWith("[")) {
+    const end = host.indexOf("]");
+    if (end > 0) {
+      return host.slice(1, end).trim();
+    }
+  }
+
+  if (host.includes(":")) {
+    const [first, second] = host.split(":");
+    if (/^\d+$/.test(second || "")) {
+      return first.trim();
+    }
+  }
+
+  return host.trim();
+}
+
+function formatHostForHttpUrl(host) {
+  const value = String(host || "").trim();
+  if (!value) return "";
+  // IPv6 cần đặt trong [] khi ghép vào URL.
+  if (value.includes(":") && !value.startsWith("[") && !value.endsWith("]")) {
+    return `[${value}]`;
+  }
+  return value;
+}
+
+function pushUniqueHost(target, host) {
+  const normalized = normalizeHostForEdge(host);
+  if (!normalized) return;
+  if (!target.includes(normalized)) {
+    target.push(normalized);
+  }
+}
+
+function buildEdgeBaseCandidates(rtspUrl, { overrideHost = "" } = {}) {
+  const hosts = [];
+  pushUniqueHost(hosts, overrideHost);
+
+  const rtspHost = parseRtspHost(rtspUrl);
+  pushUniqueHost(hosts, rtspHost);
+
+  // Một số mạng nội bộ resolve tên ngắn tốt hơn `.local`.
+  if (rtspHost.endsWith(".local")) {
+    pushUniqueHost(hosts, rtspHost.slice(0, -".local".length));
+  }
+
+  // Fallback cuối: thử host đang mở frontend (hữu ích khi reverse proxy chung host).
+  if (typeof window !== "undefined") {
+    pushUniqueHost(hosts, window.location.hostname);
+  }
+
+  return hosts.map((host) => `http://${formatHostForHttpUrl(host)}:${EDGE_HEALTH_API_PORT}`);
 }
 
 async function requestAbsoluteJson(url, options) {
@@ -301,33 +360,90 @@ function buildRestartQuery(token) {
   return `?token=${encodeURIComponent(token)}`;
 }
 
-export function getEdgeHealthBaseUrl(rtspUrl) {
-  return buildEdgeBaseUrl(rtspUrl);
+async function requestEdgeAbsoluteWithFallback({
+  rtspUrl,
+  path,
+  method = "GET",
+  token = null,
+  overrideHost = "",
+  preferBaseUrl = "",
+}) {
+  const suffix = `${path}${buildRestartQuery(token)}`;
+  const candidates = buildEdgeBaseCandidates(rtspUrl, { overrideHost });
+  if (preferBaseUrl && !candidates.includes(preferBaseUrl)) {
+    candidates.unshift(preferBaseUrl);
+  }
+
+  if (!candidates.length) {
+    throw new Error("Không thể suy ra host edge từ RTSP URL.");
+  }
+
+  const errors = [];
+  for (const baseUrl of candidates) {
+    const url = `${baseUrl}${suffix}`;
+    try {
+      const payload = await requestAbsoluteJson(url, { method });
+      return { payload, baseUrl };
+    } catch (error) {
+      const detail = error?.message || String(error);
+      errors.push(`${baseUrl} -> ${detail}`);
+    }
+  }
+
+  throw new Error(`Không thể kết nối edge node. Đã thử: ${errors.join(" | ")}`);
 }
 
-export async function fetchEdgeHealth(rtspUrl) {
-  return await requestAbsoluteJson(`${buildEdgeBaseUrl(rtspUrl)}/health`);
+export function getEdgeHealthBaseUrl(rtspUrl, { overrideHost = "" } = {}) {
+  return buildEdgeBaseCandidates(rtspUrl, { overrideHost })[0] || "";
 }
 
-export async function fetchEdgeIdentity(rtspUrl) {
-  return await requestAbsoluteJson(`${buildEdgeBaseUrl(rtspUrl)}/identity`);
+export async function fetchEdgeHealth(rtspUrl, options = {}) {
+  return await requestEdgeAbsoluteWithFallback({
+    rtspUrl,
+    path: "/health",
+    overrideHost: options.overrideHost,
+    preferBaseUrl: options.preferBaseUrl,
+  });
 }
 
-export async function triggerEdgeStreamStart(rtspUrl, { token = null } = {}) {
-  return await requestAbsoluteJson(
-    `${buildEdgeBaseUrl(rtspUrl)}/stream/start${buildRestartQuery(token)}`,
-  );
+export async function fetchEdgeIdentity(rtspUrl, options = {}) {
+  return await requestEdgeAbsoluteWithFallback({
+    rtspUrl,
+    path: "/identity",
+    overrideHost: options.overrideHost,
+    preferBaseUrl: options.preferBaseUrl,
+  });
 }
 
-export async function triggerEdgeStreamStop(rtspUrl, { token = null } = {}) {
-  return await requestAbsoluteJson(
-    `${buildEdgeBaseUrl(rtspUrl)}/stream/stop${buildRestartQuery(token)}`,
-  );
+export async function triggerEdgeStreamStart(rtspUrl, { token = null, overrideHost = "", preferBaseUrl = "" } = {}) {
+  return await requestEdgeAbsoluteWithFallback({
+    rtspUrl,
+    path: "/stream/start",
+    method: "GET",
+    token,
+    overrideHost,
+    preferBaseUrl,
+  });
 }
 
-export async function triggerEdgeRestartService(rtspUrl, { token = null } = {}) {
-  return await requestAbsoluteJson(
-    `${buildEdgeBaseUrl(rtspUrl)}/restart-service${buildRestartQuery(token)}`,
-  );
+export async function triggerEdgeStreamStop(rtspUrl, { token = null, overrideHost = "", preferBaseUrl = "" } = {}) {
+  return await requestEdgeAbsoluteWithFallback({
+    rtspUrl,
+    path: "/stream/stop",
+    method: "GET",
+    token,
+    overrideHost,
+    preferBaseUrl,
+  });
 }
 
+export async function triggerEdgeRestartService(rtspUrl, { token = null, overrideHost = "", preferBaseUrl = "" } = {}) {
+  return await requestEdgeAbsoluteWithFallback({
+    rtspUrl,
+    path: "/restart-service",
+    method: "GET",
+    token,
+    overrideHost,
+    preferBaseUrl,
+  });
+}

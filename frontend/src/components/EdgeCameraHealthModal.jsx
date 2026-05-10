@@ -15,6 +15,7 @@ export default function EdgeCameraHealthModal({
   open,
   camera,
   healthBaseUrl,
+  hostOverride,
   health,
   identity,
   streamEnabled,
@@ -23,6 +24,7 @@ export default function EdgeCameraHealthModal({
   actionBusy,
   onClose,
   onRefresh,
+  onHostOverrideChange,
   onToggleStream,
   onRestartService,
 }) {
@@ -78,6 +80,21 @@ export default function EdgeCameraHealthModal({
             {healthBaseUrl || "-"}
           </span>
         </div>
+
+        <label className="field edge-health-host-override">
+          <span>Host edge override (tùy chọn)</span>
+          <input
+            type="text"
+            value={hostOverride || ""}
+            onChange={(event) => onHostOverrideChange?.(event.target.value)}
+            placeholder="Ví dụ: 172.20.10.2 hoặc cam-xxx.local"
+            disabled={actionBusy}
+            autoComplete="off"
+          />
+          <small className="edge-health-host-override-note">
+            Dùng khi trình duyệt không truy cập được host từ RTSP URL mặc định.
+          </small>
+        </label>
 
         {loading ? <div className="message-bar">Đang tải health/identity...</div> : null}
         {error ? <div className="message-bar warning">{error}</div> : null}

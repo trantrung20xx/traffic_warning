@@ -105,7 +105,7 @@ class MdnsPublisher:
             ):
                 return "OK", None
 
-            self.stop()
+            self._stop_unlocked()
             try:
                 self._process = subprocess.Popen(
                     [avahi_publish, "-a", "-R", hostname, ip_address],
@@ -121,16 +121,19 @@ class MdnsPublisher:
             self._logger.info("Started mDNS publish: %s -> %s", hostname, ip_address)
             return "OK", None
 
+    def _stop_unlocked(self) -> None:
+        if not self._process:
+            return
+        if self._process.poll() is None:
+            self._process.terminate()
+            try:
+                self._process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                self._process.kill()
+        self._process = None
+        self._published_hostname = None
+        self._published_ip = None
+
     def stop(self) -> None:
         with self._lock:
-            if not self._process:
-                return
-            if self._process.poll() is None:
-                self._process.terminate()
-                try:
-                    self._process.wait(timeout=3)
-                except subprocess.TimeoutExpired:
-                    self._process.kill()
-            self._process = None
-            self._published_hostname = None
-            self._published_ip = None
+            self._stop_unlocked()

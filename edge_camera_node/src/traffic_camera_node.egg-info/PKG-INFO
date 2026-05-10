@@ -1,3 +1,19 @@
+Metadata-Version: 2.4
+Name: traffic-camera-node
+Version: 0.1.0
+Summary: Raspberry Pi 5 edge camera node for stable RTSP streaming
+Author: Traffic Warning Team
+License: MIT
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: psutil<7.0,>=5.9
+Requires-Dist: gpiozero<3.0,>=2.0
+Requires-Dist: lgpio<1.0,>=0.2.2.0
+Requires-Dist: Pillow<12.0,>=10.0
+Requires-Dist: spidev<4.0,>=3.6
+Provides-Extra: dev
+Requires-Dist: pytest<9.0,>=8.0; extra == "dev"
+
 # Edge Camera Node Cho Raspberry Pi 5
 
 `edge_camera_node` là chương trình chạy trên Raspberry Pi 5 để lấy hình từ camera, mã hóa H.264 và phát RTSP ổn định cho server Traffic Warning đọc bằng OpenCV.
@@ -105,11 +121,7 @@ Cấu hình hiện tại:
   },
   "stream": {
     "bitrate": 6000000,
-    "udp_sink": "udp://127.0.0.1:1234?pkt_size=1316",
-    "pipeline_mode": "auto",
-    "source": "auto",
-    "usb_device": "auto",
-    "usb_input_format": "auto"
+    "udp_sink": "udp://127.0.0.1:1234?pkt_size=1316"
   },
   "watchdog": {
     "fps_warning_threshold": 15
@@ -128,16 +140,6 @@ Thông thường chỉ cần chỉnh:
 - `gpio.buttons.*`, `gpio.leds.*` nếu đổi dây GPIO
 - `display.*` nếu đổi chân TFT
 - `stream.bitrate` nếu mạng yếu hoặc hình chưa đủ nét
-- `stream.pipeline_mode`:
-  - `auto`: ưu tiên `libav_mpegts`, tự fallback sang `h264` nếu mode đầu lỗi
-  - `libav_mpegts`: ép dùng `--codec libav --libav-format mpegts`
-  - `h264`: ép dùng H264 thuần từ `rpicam-vid`
-- `stream.source`:
-  - `auto`: tự chọn CSI (`rpicam`) nếu có, fallback USB (`/dev/video*`) nếu không có CSI
-  - `rpi_csi`: ép dùng camera CSI qua `rpicam-vid`
-  - `usb_v4l2`: ép dùng webcam USB qua `ffmpeg -f v4l2`
-- `stream.usb_device`: `auto` (khuyến nghị) hoặc đường dẫn cụ thể như `/dev/video2`
-- `stream.usb_input_format`: `auto` (khuyến nghị), hoặc `mjpeg`/`yuyv422` tùy webcam
 
 `udp_sink` là điểm trung chuyển nội bộ trong Pi. Giữ mặc định nếu không bị xung đột cổng nội bộ.
 

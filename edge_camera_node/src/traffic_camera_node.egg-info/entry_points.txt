@@ -1,0 +1,2 @@
+[console_scripts]
+traffic-camera-node = traffic_camera_node.main:main
