@@ -115,8 +115,18 @@ class EdgeDiscoveryService:
 
     async def rescan(self) -> list[dict[str, Any]]:
         await asyncio.to_thread(self._rescan_sync)
-        await asyncio.sleep(0.6)
-        return self.list_registry()
+        # Mạng mDNS có thể phản hồi chậm hơn 1 vòng RTT; đợi ngắn theo polling để
+        # UI nhận được kết quả ổn định hơn ngay sau thao tác Rescan.
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 3.0
+        latest: list[dict[str, Any]] = []
+        while True:
+            latest = self.list_registry()
+            if latest:
+                return latest
+            if loop.time() >= deadline:
+                return latest
+            await asyncio.sleep(0.2)
 
     def list_registry(self) -> list[dict[str, Any]]:
         with self._lock:
@@ -260,13 +270,19 @@ class EdgeDiscoveryService:
     def _build_registry_item(self, *, service_name: str, info: ServiceInfo) -> dict[str, Any] | None:
         txt = _decode_txt_properties(getattr(info, "properties", {}))
         service_host = _normalize_host(getattr(info, "server", "") or txt.get("host"))
+        txt_ip_address = _normalize_host(txt.get("ip_address"))
         parsed_addresses: list[str] = []
         try:
             parsed_addresses = list(info.parsed_addresses())  # type: ignore[call-arg]
         except Exception:
             parsed_addresses = []
-        ip_address = next((address for address in parsed_addresses if address), None)
-        host = service_host or (ip_address or "")
+        ip_address = next((address for address in parsed_addresses if address), None) or (txt_ip_address or None)
+        probe_hosts: list[str] = []
+        for candidate in (service_host, ip_address):
+            normalized = _normalize_host(candidate)
+            if normalized and normalized not in probe_hosts:
+                probe_hosts.append(normalized)
+        host = probe_hosts[0] if probe_hosts else ""
 
         api_port = _safe_int(getattr(info, "port", 0), 0)
         if not host or api_port <= 0:
@@ -284,14 +300,29 @@ class EdgeDiscoveryService:
         health_api_url = _http_url(host, api_port, health_path)
 
         identity_payload: dict[str, Any] | None = None
-        status = "online"
-        try:
-            identity_raw = self._http_json_request(identity_api_url, "GET")
-            if isinstance(identity_raw, dict):
-                identity_payload = identity_raw
-        except Exception as exc:
-            status = "offline"
-            self._logger.warning("Identity probe failed for %s (%s): %s", service_name, identity_api_url, exc)
+        status = "offline"
+        probe_error: Exception | None = None
+        reachable_host = host
+        for probe_host in probe_hosts:
+            candidate_identity_url = _http_url(probe_host, api_port, identity_path)
+            try:
+                identity_raw = self._http_json_request(candidate_identity_url, "GET")
+                if isinstance(identity_raw, dict):
+                    identity_payload = identity_raw
+                status = "online"
+                reachable_host = probe_host
+                identity_api_url = candidate_identity_url
+                health_api_url = _http_url(probe_host, api_port, health_path)
+                break
+            except Exception as exc:
+                probe_error = exc
+        if status != "online" and probe_error is not None:
+            self._logger.warning(
+                "Identity probe failed for %s hosts=%s: %s",
+                service_name,
+                probe_hosts,
+                probe_error,
+            )
 
         camera_id = str(
             (identity_payload or {}).get("camera_id")
@@ -305,23 +336,23 @@ class EdgeDiscoveryService:
             str((identity_payload or {}).get("stream_path") or txt.get("rtsp_path") or ""),
             f"/{camera_id}",
         )
-        if status == "online":
-            status = "online"
         rtsp_url = str((identity_payload or {}).get("rtsp_url") or "")
-        if not rtsp_url and rtsp_port > 0:
-            rtsp_url = f"rtsp://{host}:{rtsp_port}/{stream_path.lstrip('/')}"
+        if (not rtsp_url or reachable_host != service_host) and rtsp_port > 0:
+            rtsp_url = f"rtsp://{reachable_host}:{rtsp_port}/{stream_path.lstrip('/')}"
 
         return {
             "camera_id": camera_id,
             "node_id": node_id,
             "mac_address": mac_address,
-            "host": host,
+            "host": reachable_host,
+            "mdns_host": service_host,
+            "ip_address": ip_address,
             "api_port": api_port,
             "rtsp_port": rtsp_port,
             "stream_path": stream_path,
             "rtsp_url": rtsp_url,
-            "health_api_url": str((identity_payload or {}).get("health_api_url") or health_api_url),
-            "identity_api_url": str((identity_payload or {}).get("identity_api_url") or identity_api_url),
+            "health_api_url": health_api_url,
+            "identity_api_url": identity_api_url,
             "status": status,
             "last_seen": _utcnow_iso(),
         }

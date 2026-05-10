@@ -483,3 +483,92 @@ traffic_camera_node.stream.rtsp_pipeline.PipelineStartError: rpicam-vid exited i
 2026-05-10 19:30:17,003 | INFO | traffic_camera_node | Starting mediamtx: /usr/local/bin/mediamtx
 2026-05-10 19:30:18,005 | INFO | traffic_camera_node | Starting camera source kind=usb_v4l2 mode=libav_mpegts: /usr/bin/ffmpeg -hide_banner -loglevel warning -f v4l2 -framerate 30 -video_size 2560x1440 -i /dev/video0 -an -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -b:v 6000000 -g 30 -x264-params repeat-headers=1 -f rtsp -rtsp_transport tcp rtsp://127.0.0.1:8593/cam_2ccf6788f9e5
 2026-05-10 19:30:18,705 | WARNING | traffic_camera_node | RTSP stream started by remote command.
+2026-05-10 20:29:32,416 | INFO | traffic_camera_node | Traffic camera node starting. version=0.1.0
+2026-05-10 20:29:32,417 | INFO | traffic_camera_node | Loaded identity: {'camera_id': 'cam_2ccf6788f9e5', 'node_id': '36be62afb543', 'mac_address': '2ccf6788f9e5', 'interface': 'eth0', 'mdns_hostname': 'cam-2ccf6788f9e5.local', 'rtsp_port': 8593, 'stream_path': '/cam_2ccf6788f9e5', 'fallback_ip': '172.20.10.2', 'created_at': '2026-05-10T16:57:58.276547+07:00'}
+2026-05-10 20:29:32,488 | INFO | traffic_camera_node | GPIO LEDs initialized (online=17 warning=27 error=22 streaming=23).
+2026-05-10 20:29:33,107 | INFO | traffic_camera_node | ILI9341 renderer initialized successfully.
+2026-05-10 20:29:33,109 | INFO | traffic_camera_node | GPIO buttons initialized (mode=5 restart=6 shutdown=13 reset=19).
+2026-05-10 20:29:33,111 | INFO | traffic_camera_node | Health API started at http://0.0.0.0:8088
+2026-05-10 20:29:33,113 | INFO | traffic_camera_node | Started mDNS publish: cam-2ccf6788f9e5.local -> 172.20.10.2
+2026-05-10 20:29:34,020 | INFO | traffic_camera_node | Starting mediamtx: /usr/local/bin/mediamtx
+2026-05-10 20:29:35,023 | INFO | traffic_camera_node | Using USB video device: /dev/video19
+2026-05-10 20:29:35,023 | INFO | traffic_camera_node | Starting camera source kind=usb_v4l2 mode=libav_mpegts: /usr/bin/ffmpeg -hide_banner -loglevel warning -f v4l2 -framerate 30 -video_size 2560x1440 -i /dev/video19 -an -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -b:v 6000000 -g 30 -x264-params repeat-headers=1 -f rtsp -rtsp_transport tcp rtsp://127.0.0.1:8593/cam_2ccf6788f9e5
+2026-05-10 20:29:35,724 | WARNING | traffic_camera_node | Pipeline mode=libav_mpegts failed to start: camera source exited immediately after start (exit=237). stderr: [in#0 @ 0x55561b321510] Error opening input: No such device | Error opening input file /dev/video19. | Error opening input files: No such device
+2026-05-10 20:29:35,726 | ERROR | traffic_camera_node | Initial RTSP pipeline start failed.
+Traceback (most recent call last):
+  File "/home/trantrung/Documents/traffic_warning/edge_camera_node/src/traffic_camera_node/stream/process_supervisor.py", line 60, in start
+    self._pipeline.start()
+    ~~~~~~~~~~~~~~~~~~~~^^
+  File "/home/trantrung/Documents/traffic_warning/edge_camera_node/src/traffic_camera_node/stream/rtsp_pipeline.py", line 660, in start
+    raise failures[-1]
+  File "/home/trantrung/Documents/traffic_warning/edge_camera_node/src/traffic_camera_node/stream/rtsp_pipeline.py", line 631, in start
+    self._start_once(mode)
+    ~~~~~~~~~~~~~~~~^^^^^^
+  File "/home/trantrung/Documents/traffic_warning/edge_camera_node/src/traffic_camera_node/stream/rtsp_pipeline.py", line 605, in _start_once
+    raise self._classify_start_failure(
+    ...<3 lines>...
+    )
+traffic_camera_node.stream.rtsp_pipeline.PipelineStartError: camera source exited immediately after start (exit=237). stderr: [in#0 @ 0x55561b321510] Error opening input: No such device | Error opening input file /dev/video19. | Error opening input files: No such device
+2026-05-10 20:29:35,729 | WARNING | traffic_camera_node | Restarting RTSP pipeline. reason=initial start failed: camera source exited immediately after start (exit=237). stderr: [in#0 @ 0x55561b321510] Error opening input: No such device | Error opening input file /dev/video19. | Error opening input files: No such device
+2026-05-10 20:29:36,234 | INFO | traffic_camera_node | Starting mediamtx: /usr/local/bin/mediamtx
+2026-05-10 20:29:37,235 | INFO | traffic_camera_node | Starting camera source kind=usb_v4l2 mode=libav_mpegts: /usr/bin/ffmpeg -hide_banner -loglevel warning -f v4l2 -framerate 30 -video_size 2560x1440 -i /dev/video19 -an -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -b:v 6000000 -g 30 -x264-params repeat-headers=1 -f rtsp -rtsp_transport tcp rtsp://127.0.0.1:8593/cam_2ccf6788f9e5
+2026-05-10 20:29:37,936 | WARNING | traffic_camera_node | Pipeline mode=libav_mpegts failed to start: camera source exited immediately after start (exit=237). stderr: [in#0 @ 0x5555c526d510] Error opening input: No such device | Error opening input file /dev/video19. | Error opening input files: No such device
+2026-05-10 20:29:39,940 | WARNING | traffic_camera_node | Restarting RTSP pipeline. reason=Pipeline is not started
+2026-05-10 20:29:40,445 | INFO | traffic_camera_node | Starting mediamtx: /usr/local/bin/mediamtx
+2026-05-10 20:29:41,446 | INFO | traffic_camera_node | Starting camera source kind=usb_v4l2 mode=libav_mpegts: /usr/bin/ffmpeg -hide_banner -loglevel warning -f v4l2 -framerate 30 -video_size 2560x1440 -i /dev/video19 -an -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -b:v 6000000 -g 30 -x264-params repeat-headers=1 -f rtsp -rtsp_transport tcp rtsp://127.0.0.1:8593/cam_2ccf6788f9e5
+2026-05-10 20:29:42,147 | WARNING | traffic_camera_node | Pipeline mode=libav_mpegts failed to start: camera source exited immediately after start (exit=237). stderr: [in#0 @ 0x5555b92c1510] Error opening input: No such device | Error opening input file /dev/video19. | Error opening input files: No such device
+2026-05-10 20:29:44,148 | WARNING | traffic_camera_node | Restarting RTSP pipeline. reason=Pipeline is not started
+2026-05-10 20:29:44,653 | INFO | traffic_camera_node | Starting mediamtx: /usr/local/bin/mediamtx
+2026-05-10 20:29:45,655 | INFO | traffic_camera_node | Starting camera source kind=usb_v4l2 mode=libav_mpegts: /usr/bin/ffmpeg -hide_banner -loglevel warning -f v4l2 -framerate 30 -video_size 2560x1440 -i /dev/video19 -an -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -b:v 6000000 -g 30 -x264-params repeat-headers=1 -f rtsp -rtsp_transport tcp rtsp://127.0.0.1:8593/cam_2ccf6788f9e5
+2026-05-10 20:29:46,356 | WARNING | traffic_camera_node | Pipeline mode=libav_mpegts failed to start: camera source exited immediately after start (exit=237). stderr: [in#0 @ 0x5555eba85510] Error opening input: No such device | Error opening input file /dev/video19. | Error opening input files: No such device
+2026-05-10 20:29:48,357 | WARNING | traffic_camera_node | Restarting RTSP pipeline. reason=Pipeline is not started
+2026-05-10 20:29:48,864 | INFO | traffic_camera_node | Starting mediamtx: /usr/local/bin/mediamtx
+2026-05-10 20:29:49,866 | INFO | traffic_camera_node | Using USB video device: /dev/video0
+2026-05-10 20:29:49,866 | INFO | traffic_camera_node | Starting camera source kind=usb_v4l2 mode=libav_mpegts: /usr/bin/ffmpeg -hide_banner -loglevel warning -f v4l2 -framerate 30 -video_size 2560x1440 -i /dev/video0 -an -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -b:v 6000000 -g 30 -x264-params repeat-headers=1 -f rtsp -rtsp_transport tcp rtsp://127.0.0.1:8593/cam_2ccf6788f9e5
+2026-05-10 20:29:51,625 | INFO | traffic_camera_node | Received signal 2; stopping service.
+2026-05-10 20:29:52,513 | INFO | traffic_camera_node | Stopping camera node components.
+2026-05-10 20:29:52,567 | WARNING | traffic_camera_node | Restarting RTSP pipeline. reason=mediamtx exited code 0
+2026-05-10 20:29:53,072 | INFO | traffic_camera_node | Starting mediamtx: /usr/local/bin/mediamtx
+2026-05-10 20:29:54,073 | INFO | traffic_camera_node | Starting camera source kind=usb_v4l2 mode=libav_mpegts: /usr/bin/ffmpeg -hide_banner -loglevel warning -f v4l2 -framerate 30 -video_size 2560x1440 -i /dev/video0 -an -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -b:v 6000000 -g 30 -x264-params repeat-headers=1 -f rtsp -rtsp_transport tcp rtsp://127.0.0.1:8593/cam_2ccf6788f9e5
+2026-05-10 20:29:54,197 | INFO | traffic_camera_node | Received signal 2; stopping service.
+2026-05-10 20:29:54,774 | WARNING | traffic_camera_node | Pipeline mode=libav_mpegts failed to start: camera source exited immediately after start (exit=-2)
+2026-05-10 20:29:56,168 | INFO | traffic_camera_node | Received signal 2; stopping service.
+2026-05-10 20:29:56,361 | INFO | traffic_camera_node | Received signal 2; stopping service.
+2026-05-10 20:29:56,503 | INFO | traffic_camera_node | Received signal 2; stopping service.
+2026-05-10 20:29:56,679 | INFO | traffic_camera_node | Received signal 2; stopping service.
+2026-05-10 20:29:56,775 | INFO | traffic_camera_node | Camera node stopped cleanly.
+2026-05-10 20:29:56,803 | INFO | traffic_camera_node | Received signal 2; stopping service.
+2026-05-10 20:29:58,234 | INFO | traffic_camera_node | Traffic camera node starting. version=0.1.0
+2026-05-10 20:29:58,234 | INFO | traffic_camera_node | Loaded identity: {'camera_id': 'cam_2ccf6788f9e5', 'node_id': '36be62afb543', 'mac_address': '2ccf6788f9e5', 'interface': 'eth0', 'mdns_hostname': 'cam-2ccf6788f9e5.local', 'rtsp_port': 8593, 'stream_path': '/cam_2ccf6788f9e5', 'fallback_ip': '172.20.10.2', 'created_at': '2026-05-10T16:57:58.276547+07:00'}
+2026-05-10 20:29:58,265 | INFO | traffic_camera_node | GPIO LEDs initialized (online=17 warning=27 error=22 streaming=23).
+2026-05-10 20:29:58,779 | INFO | traffic_camera_node | ILI9341 renderer initialized successfully.
+2026-05-10 20:29:58,782 | INFO | traffic_camera_node | GPIO buttons initialized (mode=5 restart=6 shutdown=13 reset=19).
+2026-05-10 20:29:58,783 | INFO | traffic_camera_node | Health API started at http://0.0.0.0:8088
+2026-05-10 20:29:58,784 | INFO | traffic_camera_node | Started mDNS publish: cam-2ccf6788f9e5.local -> 172.20.10.2
+2026-05-10 20:29:59,704 | INFO | traffic_camera_node | Starting mediamtx: /usr/local/bin/mediamtx
+2026-05-10 20:30:00,706 | INFO | traffic_camera_node | Using USB video device: /dev/video0
+2026-05-10 20:30:00,706 | INFO | traffic_camera_node | Starting camera source kind=usb_v4l2 mode=libav_mpegts: /usr/bin/ffmpeg -hide_banner -loglevel warning -f v4l2 -framerate 30 -video_size 2560x1440 -i /dev/video0 -an -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -b:v 6000000 -g 30 -x264-params repeat-headers=1 -f rtsp -rtsp_transport tcp rtsp://127.0.0.1:8593/cam_2ccf6788f9e5
+2026-05-10 20:31:03,528 | INFO | traffic_camera_node | Received signal 2; stopping service.
+2026-05-10 20:31:03,601 | WARNING | traffic_camera_node | Restarting RTSP pipeline. reason=mediamtx exited code 0
+2026-05-10 20:31:04,270 | INFO | traffic_camera_node | Starting mediamtx: /usr/local/bin/mediamtx
+2026-05-10 20:31:04,281 | INFO | traffic_camera_node | Stopping camera node components.
+2026-05-10 20:31:05,272 | INFO | traffic_camera_node | Starting camera source kind=usb_v4l2 mode=libav_mpegts: /usr/bin/ffmpeg -hide_banner -loglevel warning -f v4l2 -framerate 30 -video_size 2560x1440 -i /dev/video0 -an -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -b:v 6000000 -g 30 -x264-params repeat-headers=1 -f rtsp -rtsp_transport tcp rtsp://127.0.0.1:8593/cam_2ccf6788f9e5
+2026-05-10 20:31:06,782 | INFO | traffic_camera_node | Received signal 2; stopping service.
+2026-05-10 20:31:07,344 | INFO | traffic_camera_node | Received signal 2; stopping service.
+2026-05-10 20:31:07,501 | INFO | traffic_camera_node | Received signal 2; stopping service.
+2026-05-10 20:31:07,627 | INFO | traffic_camera_node | Received signal 2; stopping service.
+2026-05-10 20:31:07,788 | INFO | traffic_camera_node | Received signal 2; stopping service.
+2026-05-10 20:31:07,893 | INFO | traffic_camera_node | Received signal 2; stopping service.
+2026-05-10 20:31:07,973 | INFO | traffic_camera_node | Camera node stopped cleanly.
+2026-05-10 20:31:08,058 | INFO | traffic_camera_node | Received signal 2; stopping service.
+2026-05-10 20:31:29,835 | INFO | traffic_camera_node | Traffic camera node starting. version=0.1.0
+2026-05-10 20:31:29,835 | INFO | traffic_camera_node | Loaded identity: {'camera_id': 'cam_2ccf6788f9e5', 'node_id': '36be62afb543', 'mac_address': '2ccf6788f9e5', 'interface': 'eth0', 'mdns_hostname': 'cam-2ccf6788f9e5.local', 'rtsp_port': 8593, 'stream_path': '/cam_2ccf6788f9e5', 'fallback_ip': '172.20.10.2', 'created_at': '2026-05-10T16:57:58.276547+07:00'}
+2026-05-10 20:31:29,867 | INFO | traffic_camera_node | GPIO LEDs initialized (online=17 warning=27 error=22 streaming=23).
+2026-05-10 20:31:30,381 | INFO | traffic_camera_node | ILI9341 renderer initialized successfully.
+2026-05-10 20:31:30,383 | INFO | traffic_camera_node | GPIO buttons initialized (mode=5 restart=6 shutdown=13 reset=19).
+2026-05-10 20:31:30,385 | INFO | traffic_camera_node | Health API started at http://0.0.0.0:8088
+2026-05-10 20:31:30,387 | INFO | traffic_camera_node | Started mDNS publish: cam-2ccf6788f9e5.local -> 172.20.10.2
+2026-05-10 20:31:30,387 | INFO | traffic_camera_node | Started DNS-SD service: _traffic-node._tcp.local name=cam_2ccf6788f9e5 host=cam-2ccf6788f9e5.local port=8088
+2026-05-10 20:31:31,377 | INFO | traffic_camera_node | Starting mediamtx: /usr/local/bin/mediamtx
+2026-05-10 20:31:32,379 | INFO | traffic_camera_node | Using USB video device: /dev/video0
+2026-05-10 20:31:32,379 | INFO | traffic_camera_node | Starting camera source kind=usb_v4l2 mode=libav_mpegts: /usr/bin/ffmpeg -hide_banner -loglevel warning -f v4l2 -framerate 30 -video_size 2560x1440 -i /dev/video0 -an -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -b:v 6000000 -g 30 -x264-params repeat-headers=1 -f rtsp -rtsp_transport tcp rtsp://127.0.0.1:8593/cam_2ccf6788f9e5

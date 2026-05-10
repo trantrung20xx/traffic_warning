@@ -161,6 +161,7 @@ class CameraNodeApp:
                 mac_address=self._identity.mac_address,
                 rtsp_port=self._identity.rtsp_port,
                 rtsp_path=self._identity.stream_path,
+                ip_address=net.ip_address,
             ),
         )
         if mdns_status == "OK":

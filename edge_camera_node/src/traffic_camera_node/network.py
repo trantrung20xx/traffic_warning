@@ -4,6 +4,7 @@ import shutil
 import socket
 import subprocess
 import threading
+import time
 from dataclasses import dataclass
 from logging import Logger
 
@@ -34,6 +35,7 @@ class MdnsServiceMetadata:
     mac_address: str
     rtsp_port: int
     rtsp_path: str
+    ip_address: str | None = None
     health_path: str = "/api/health"
     identity_path: str = "/api/identity"
     api_version: str = "1"
@@ -44,7 +46,7 @@ class MdnsServiceMetadata:
         return self.camera_id
 
     def txt_records(self) -> tuple[str, ...]:
-        return (
+        records = [
             f"camera_id={self.camera_id}",
             f"node_id={self.node_id}",
             f"mac={self.mac_address}",
@@ -53,7 +55,10 @@ class MdnsServiceMetadata:
             f"rtsp_path={self.rtsp_path}",
             f"health_path={self.health_path}",
             f"identity_path={self.identity_path}",
-        )
+        ]
+        if self.ip_address:
+            records.append(f"ip_address={self.ip_address}")
+        return tuple(records)
 
 
 def detect_ipv4(preferred_interfaces: tuple[str, ...]) -> NetworkInfo:
@@ -182,6 +187,10 @@ class MdnsPublisher:
                     stderr=subprocess.PIPE,
                     text=True,
                 )
+                startup_error = self._validate_process_startup()
+                if startup_error is not None:
+                    self._stop_unlocked()
+                    return "ERROR", startup_error
             except Exception as exc:  # pragma: no cover - phụ thuộc môi trường máy chạy
                 self._host_process = None
                 self._service_process = None
@@ -202,6 +211,42 @@ class MdnsPublisher:
                 api_port,
             )
             return "OK", None
+
+    def _validate_process_startup(self, grace_s: float = 0.25) -> str | None:
+        deadline = time.monotonic() + max(0.05, grace_s)
+        while time.monotonic() < deadline:
+            if self._process_exited(self._host_process) or self._process_exited(self._service_process):
+                break
+            time.sleep(0.03)
+
+        if self._process_exited(self._host_process):
+            return self._format_process_error("avahi-publish", self._host_process)
+        if self._process_exited(self._service_process):
+            return self._format_process_error("avahi-publish-service", self._service_process)
+        return None
+
+    def _process_exited(self, process: subprocess.Popen[str] | None) -> bool:
+        if process is None:
+            return True
+        return process.poll() is not None
+
+    def _format_process_error(
+        self,
+        process_name: str,
+        process: subprocess.Popen[str] | None,
+    ) -> str:
+        if process is None:
+            return f"{process_name} failed to start"
+        return_code = process.poll()
+        detail = ""
+        try:
+            if process.stderr is not None:
+                detail = process.stderr.read().strip()
+        except Exception:
+            detail = ""
+        if detail:
+            return f"{process_name} exited early (code={return_code}): {detail}"
+        return f"{process_name} exited early (code={return_code})"
 
     def _service_signature(
         self,

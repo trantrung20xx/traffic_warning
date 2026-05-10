@@ -94,3 +94,41 @@ def test_build_registry_item_falls_back_to_txt_when_identity_unreachable() -> No
     assert item["status"] == "offline"
     assert item["rtsp_url"] == "rtsp://172.20.10.99:8559/cam_fallback"
 
+
+def test_build_registry_item_falls_back_to_ip_when_mdns_host_unreachable() -> None:
+    discovery = EdgeDiscoveryService()
+    info = _FakeServiceInfo(
+        host="cam-mdns-only.local.",
+        port=8088,
+        properties={
+            b"camera_id": b"cam_probe",
+            b"node_id": b"node_probe",
+            b"mac": b"aabbccddee00",
+            b"rtsp_port": b"8559",
+            b"rtsp_path": b"/cam_probe",
+        },
+        addresses=["192.168.1.99"],
+    )
+
+    def _probe(url: str, _method: str) -> dict:
+        if "cam-mdns-only.local" in url:
+            raise OSError("name resolution failed")
+        if "192.168.1.99" in url:
+            return {
+                "camera_id": "cam_probe",
+                "node_id": "node_probe",
+                "mac_address": "aabbccddee00",
+                "rtsp_port": 8559,
+                "stream_path": "/cam_probe",
+            }
+        raise AssertionError(f"unexpected url: {url}")
+
+    discovery._http_json_request = _probe  # type: ignore[method-assign]
+    item = discovery._build_registry_item(service_name="cam_probe._traffic-node._tcp.local.", info=info)
+
+    assert item is not None
+    assert item["camera_id"] == "cam_probe"
+    assert item["status"] == "online"
+    assert item["host"] == "192.168.1.99"
+    assert item["mdns_host"] == "cam-mdns-only.local"
+    assert item["rtsp_url"] == "rtsp://192.168.1.99:8559/cam_probe"
