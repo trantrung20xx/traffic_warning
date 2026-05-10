@@ -24,6 +24,38 @@ class RtspUrls:
     ip_fallback_rtsp_url: str | None
 
 
+TRAFFIC_NODE_SERVICE_TYPE = "_traffic-node._tcp.local."
+
+
+@dataclass(frozen=True)
+class MdnsServiceMetadata:
+    camera_id: str
+    node_id: str
+    mac_address: str
+    rtsp_port: int
+    rtsp_path: str
+    health_path: str = "/api/health"
+    identity_path: str = "/api/identity"
+    api_version: str = "1"
+    service_type: str = TRAFFIC_NODE_SERVICE_TYPE
+
+    @property
+    def service_name(self) -> str:
+        return self.camera_id
+
+    def txt_records(self) -> tuple[str, ...]:
+        return (
+            f"camera_id={self.camera_id}",
+            f"node_id={self.node_id}",
+            f"mac={self.mac_address}",
+            f"api_version={self.api_version}",
+            f"rtsp_port={self.rtsp_port}",
+            f"rtsp_path={self.rtsp_path}",
+            f"health_path={self.health_path}",
+            f"identity_path={self.identity_path}",
+        )
+
+
 def detect_ipv4(preferred_interfaces: tuple[str, ...]) -> NetworkInfo:
     addrs = psutil.net_if_addrs()
     for interface in preferred_interfaces:
@@ -78,16 +110,25 @@ def probe_mdns(hostname: str) -> tuple[str, str | None]:
 
 
 class MdnsPublisher:
-    """Phát hostname mDNS ổn định qua avahi, không tự đổi chuỗi hostname."""
+    """Phát hostname mDNS và DNS-SD service qua avahi."""
 
     def __init__(self, logger: Logger) -> None:
         self._logger = logger
-        self._process: subprocess.Popen[str] | None = None
+        self._host_process: subprocess.Popen[str] | None = None
+        self._service_process: subprocess.Popen[str] | None = None
         self._lock = threading.Lock()
         self._published_hostname: str | None = None
         self._published_ip: str | None = None
+        self._published_service_signature: tuple[str, ...] | None = None
 
-    def publish(self, hostname: str, ip_address: str | None) -> tuple[str, str | None]:
+    def publish(
+        self,
+        *,
+        hostname: str,
+        ip_address: str | None,
+        api_port: int,
+        service_metadata: MdnsServiceMetadata,
+    ) -> tuple[str, str | None]:
         if ip_address is None:
             self.stop()
             return "ERROR", "No IPv4 address available"
@@ -95,44 +136,105 @@ class MdnsPublisher:
         avahi_publish = shutil.which("avahi-publish")
         if not avahi_publish:
             return "ERROR", "avahi-publish command not found"
+        if api_port <= 0:
+            return "ERROR", f"Invalid API port: {api_port}"
+
+        avahi_publish_service = shutil.which("avahi-publish-service")
+        if not avahi_publish_service:
+            return "ERROR", "avahi-publish-service command not found"
 
         with self._lock:
             if (
-                self._process
-                and self._process.poll() is None
+                self._host_process
+                and self._host_process.poll() is None
                 and hostname == self._published_hostname
                 and ip_address == self._published_ip
+                and self._service_process
+                and self._service_process.poll() is None
+                and self._published_service_signature
+                == self._service_signature(hostname, api_port, service_metadata)
             ):
                 return "OK", None
 
             self._stop_unlocked()
             try:
-                self._process = subprocess.Popen(
+                self._host_process = subprocess.Popen(
                     [avahi_publish, "-a", "-R", hostname, ip_address],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.PIPE,
                     text=True,
                 )
+                service_type_for_publish = service_metadata.service_type.rstrip(".")
+                if service_type_for_publish.endswith(".local"):
+                    service_type_for_publish = service_type_for_publish[: -len(".local")]
+                service_args = [
+                    avahi_publish_service,
+                    "-H",
+                    hostname,
+                    service_metadata.service_name,
+                    service_type_for_publish,
+                    str(api_port),
+                    *service_metadata.txt_records(),
+                ]
+                self._service_process = subprocess.Popen(
+                    service_args,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
             except Exception as exc:  # pragma: no cover - phụ thuộc môi trường máy chạy
-                self._process = None
+                self._host_process = None
+                self._service_process = None
                 return "ERROR", str(exc)
             self._published_hostname = hostname
             self._published_ip = ip_address
+            self._published_service_signature = self._service_signature(
+                hostname=hostname,
+                api_port=api_port,
+                service_metadata=service_metadata,
+            )
             self._logger.info("Started mDNS publish: %s -> %s", hostname, ip_address)
+            self._logger.info(
+                "Started DNS-SD service: %s name=%s host=%s port=%s",
+                service_metadata.service_type.rstrip("."),
+                service_metadata.service_name,
+                hostname,
+                api_port,
+            )
             return "OK", None
 
+    def _service_signature(
+        self,
+        hostname: str,
+        api_port: int,
+        service_metadata: MdnsServiceMetadata,
+    ) -> tuple[str, ...]:
+        return (
+            hostname,
+            str(api_port),
+            service_metadata.service_name,
+            service_metadata.service_type,
+            *service_metadata.txt_records(),
+        )
+
     def _stop_unlocked(self) -> None:
-        if not self._process:
-            return
-        if self._process.poll() is None:
-            self._process.terminate()
-            try:
-                self._process.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                self._process.kill()
-        self._process = None
+        self._terminate_process(self._service_process)
+        self._terminate_process(self._host_process)
+        self._service_process = None
+        self._host_process = None
         self._published_hostname = None
         self._published_ip = None
+        self._published_service_signature = None
+
+    def _terminate_process(self, process: subprocess.Popen[str] | None) -> None:
+        if not process:
+            return
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                process.kill()
 
     def stop(self) -> None:
         with self._lock:

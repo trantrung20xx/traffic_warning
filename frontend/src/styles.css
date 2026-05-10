@@ -704,7 +704,7 @@ select {
 
 .camera-card-item {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   gap: 10px;
   align-items: center;
   width: 100%;
@@ -721,27 +721,6 @@ select {
   cursor: pointer;
   min-width: 0;
   padding: 0;
-}
-
-.camera-card-tools {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 36px;
-  border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--muted);
-  cursor: pointer;
-  flex: 0 0 auto;
-  margin-left: auto;
-}
-
-.camera-card-tools:hover {
-  color: var(--text);
-  border-color: rgba(28, 166, 255, 0.34);
-  background: rgba(28, 166, 255, 0.16);
 }
 
 .tracked-vehicle-row {
@@ -1102,106 +1081,6 @@ select {
   box-shadow: var(--shadow);
 }
 
-.edge-health-modal {
-  width: min(940px, 100%);
-  max-height: min(88vh, 920px);
-  overflow: auto;
-  padding: 24px;
-  border-radius: 24px;
-  border: 1px solid rgba(160, 210, 229, 0.18);
-  background: linear-gradient(180deg, rgba(8, 29, 44, 0.98), rgba(12, 37, 55, 0.96));
-  box-shadow: var(--shadow);
-}
-
-.edge-health-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 14px;
-}
-
-.edge-health-badges {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-top: 14px;
-}
-
-.edge-health-host-override {
-  margin-top: 12px;
-}
-
-.edge-health-host-override-note {
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.45;
-}
-
-/* Tách rõ các khối trạng thái trong popup edge camera. */
-.edge-health-host-override + .message-bar,
-.edge-health-badges + .message-bar {
-  margin-top: 12px;
-}
-
-.edge-health-modal .message-bar + .message-bar {
-  margin-top: 10px;
-}
-
-.edge-health-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 18px;
-  margin-top: 16px;
-}
-
-.edge-health-card {
-  padding: 16px;
-  border-radius: 16px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  background: rgba(255, 255, 255, 0.03);
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.edge-health-card .panel-kicker {
-  margin-bottom: 6px;
-}
-
-.edge-health-row {
-  display: flex;
-  justify-content: space-between;
-  gap: 14px;
-  align-items: flex-start;
-  padding: 10px 0;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-}
-
-.edge-health-row:last-child {
-  border-bottom: 0;
-}
-
-.edge-health-row span {
-  color: var(--muted);
-  flex: 0 0 42%;
-  min-width: 0;
-}
-
-.edge-health-row strong {
-  flex: 1 1 auto;
-  text-align: left;
-  word-break: break-word;
-  white-space: pre-wrap;
-}
-
-.edge-health-actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 12px;
-  margin-top: 20px;
-}
-
 .button.warning-action {
   background: rgba(255, 190, 61, 0.16);
   border-color: rgba(255, 190, 61, 0.3);
@@ -1310,6 +1189,50 @@ select {
   border: 1px solid rgba(160, 210, 229, 0.18);
   background: linear-gradient(180deg, rgba(8, 29, 44, 0.99), rgba(12, 37, 55, 0.97));
   box-shadow: var(--shadow);
+}
+
+.edge-cameras-layout {
+  display: block;
+}
+
+.edge-cameras-panel {
+  min-height: 360px;
+}
+
+.edge-camera-table-wrap {
+  margin-top: 12px;
+  overflow-x: auto;
+}
+
+.edge-camera-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 980px;
+}
+
+.edge-camera-table th,
+.edge-camera-table td {
+  padding: 12px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  text-align: left;
+  vertical-align: top;
+}
+
+.edge-camera-table th {
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.edge-camera-rtsp-cell {
+  word-break: break-all;
+  max-width: 360px;
+}
+
+.edge-camera-actions {
+  display: flex;
+  gap: 8px;
 }
 
 .confirm-dialog-header {
@@ -2023,10 +1946,6 @@ select {
     grid-template-columns: 1fr;
   }
 
-  .edge-health-grid {
-    grid-template-columns: 1fr;
-  }
-
   .lane-inline-fields,
   .lane-field-target,
   .lane-field-changes,
@@ -2037,6 +1956,10 @@ select {
 
   .editor-actions .button {
     flex: 1 1 calc(50% - 10px);
+  }
+
+  .edge-camera-actions {
+    flex-direction: column;
   }
 }
 
@@ -2065,11 +1988,6 @@ select {
   }
 
   .violation-modal {
-    padding: 16px;
-    border-radius: 20px;
-  }
-
-  .edge-health-modal {
     padding: 16px;
     border-radius: 20px;
   }

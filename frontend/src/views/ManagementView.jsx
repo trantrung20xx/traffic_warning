@@ -2,20 +2,13 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import AppIcon from "../components/AppIcon";
 import CameraCanvas from "../components/CameraCanvas";
 import ConfirmDialog from "../components/ConfirmDialog";
-import EdgeCameraHealthModal from "../components/EdgeCameraHealthModal";
 import Toast from "../components/Toast";
 import {
 	createCamera,
 	deleteBackgroundImage,
 	deleteCamera,
-	fetchEdgeHealth,
-	fetchEdgeIdentity,
 	fetchCameraDetail,
-	getEdgeHealthBaseUrl,
 	getBackgroundImageUrl,
-	triggerEdgeRestartService,
-	triggerEdgeStreamStart,
-	triggerEdgeStreamStop,
 	uploadBackgroundImage,
 	updateCamera,
 } from "../api";
@@ -116,40 +109,6 @@ const VALIDATION_LEVELS = ["error", "warning", "info"];
 const VALIDATION_LEVEL_ORDER = { error: 0, warning: 1, info: 2 };
 const VALIDATION_LEVEL_ICONS = { error: "❌", warning: "⚠️", info: "ℹ️" };
 const MAX_DRAFT_HISTORY = 80;
-const EDGE_HOST_OVERRIDE_STORAGE_KEY = "traffic_warning.edge_host_overrides_v1";
-
-function loadEdgeHostOverrideMap() {
-	try {
-		const raw = window.localStorage.getItem(EDGE_HOST_OVERRIDE_STORAGE_KEY);
-		if (!raw) return {};
-		const parsed = JSON.parse(raw);
-		return parsed && typeof parsed === "object" ? parsed : {};
-	} catch {
-		return {};
-	}
-}
-
-function getEdgeHostOverrideForCamera(cameraId) {
-	if (!cameraId || typeof window === "undefined") return "";
-	const map = loadEdgeHostOverrideMap();
-	const value = map[cameraId];
-	return typeof value === "string" ? value : "";
-}
-
-function saveEdgeHostOverrideForCamera(cameraId, host) {
-	if (!cameraId || typeof window === "undefined") return;
-	const map = loadEdgeHostOverrideMap();
-	if (host && host.trim()) {
-		map[cameraId] = host.trim();
-	} else {
-		delete map[cameraId];
-	}
-	try {
-		window.localStorage.setItem(EDGE_HOST_OVERRIDE_STORAGE_KEY, JSON.stringify(map));
-	} catch {
-		// Bỏ qua lỗi storage quota/private mode; UI vẫn hoạt động theo state hiện tại.
-	}
-}
 
 function cloneDraftState(value) {
 	return JSON.parse(JSON.stringify(value));
@@ -553,15 +512,6 @@ export default function ManagementView({
 	const [configValidation, setConfigValidation] = useState([]);
 	const [confirmDialog, setConfirmDialog] = useState(null);
 	const [confirmBusy, setConfirmBusy] = useState(false);
-	const [edgePopupCameraId, setEdgePopupCameraId] = useState(null);
-	const [edgeHealthBaseUrl, setEdgeHealthBaseUrl] = useState("");
-	const [edgeHostOverride, setEdgeHostOverride] = useState("");
-	const [edgeHealthData, setEdgeHealthData] = useState(null);
-	const [edgeIdentityData, setEdgeIdentityData] = useState(null);
-	const [edgeLoading, setEdgeLoading] = useState(false);
-	const [edgeError, setEdgeError] = useState("");
-	const [edgeActionBusy, setEdgeActionBusy] = useState(false);
-	const edgeHealthPollTimeoutRef = useRef(null);
 	const undoStackRef = useRef([]);
 	const redoStackRef = useRef([]);
 	const [historyRevision, setHistoryRevision] = useState(0);
@@ -612,28 +562,6 @@ export default function ManagementView({
 				resetDraftHistory();
 			});
 	}, [activeCameraId, selectedCameraId, isNewCamera, resetDraftHistory]);
-
-	useEffect(
-		() => () => {
-			if (edgeHealthPollTimeoutRef.current) {
-				window.clearTimeout(edgeHealthPollTimeoutRef.current);
-				edgeHealthPollTimeoutRef.current = null;
-			}
-		},
-		[],
-	);
-
-	const edgePopupCamera = useMemo(
-		() => cameras.find((camera) => camera.camera_id === edgePopupCameraId) || null,
-		[cameras, edgePopupCameraId],
-	);
-	const edgeStreamEnabled = useMemo(() => {
-		if (!edgeHealthData) return false;
-		if (typeof edgeHealthData.stream_enabled === "boolean") {
-			return edgeHealthData.stream_enabled;
-		}
-		return Boolean(edgeHealthData.stream_running);
-	}, [edgeHealthData]);
 
 	const selectedLane = useMemo(
 		() =>
@@ -1063,216 +991,6 @@ export default function ManagementView({
 		setLaneMessage("Đã xóa toàn bộ polygon hiện tại.");
 	};
 
-	const clearEdgeHealthPolling = useCallback(() => {
-		if (edgeHealthPollTimeoutRef.current) {
-			window.clearTimeout(edgeHealthPollTimeoutRef.current);
-			edgeHealthPollTimeoutRef.current = null;
-		}
-	}, []);
-
-	const loadEdgeNodeStatus = useCallback(
-		async (camera, { silent = false, preferBaseUrl = "" } = {}) => {
-			if (!camera?.rtsp_url) {
-				throw new Error("Camera chưa có RTSP URL.");
-			}
-			if (!silent) setEdgeLoading(true);
-			setEdgeError("");
-			try {
-				const initialBaseUrl =
-					preferBaseUrl ||
-					edgeHealthBaseUrl ||
-					getEdgeHealthBaseUrl(camera.rtsp_url, { overrideHost: edgeHostOverride });
-				const healthResponse = await fetchEdgeHealth(camera.rtsp_url, {
-					overrideHost: edgeHostOverride,
-					preferBaseUrl: initialBaseUrl,
-				});
-				const identityResponse = await fetchEdgeIdentity(camera.rtsp_url, {
-					overrideHost: edgeHostOverride,
-					preferBaseUrl: healthResponse.baseUrl,
-				});
-				const health = healthResponse.payload;
-				const identity = identityResponse.payload;
-				const baseUrl = healthResponse.baseUrl;
-				setEdgeHealthBaseUrl(baseUrl);
-				setEdgeHealthData(health);
-				setEdgeIdentityData(identity);
-				return { health, identity, baseUrl };
-			} catch (error) {
-				const detail = error?.message || "Không thể kết nối edge node.";
-				setEdgeError(detail);
-				throw new Error(detail);
-			} finally {
-				if (!silent) setEdgeLoading(false);
-			}
-		},
-		[edgeHealthBaseUrl, edgeHostOverride],
-	);
-
-	const pollEdgeNodeAfterRestart = useCallback(
-		(camera, attempt = 0) => {
-			clearEdgeHealthPolling();
-			edgeHealthPollTimeoutRef.current = window.setTimeout(async () => {
-				try {
-					await loadEdgeNodeStatus(camera, { silent: true });
-					setEdgeActionBusy(false);
-					setMessage("Edge node đã khởi động lại và kết nối lại thành công.");
-				} catch (_error) {
-					if (attempt >= 30) {
-						setEdgeActionBusy(false);
-						setMessage("Đã gửi lệnh restart nhưng edge node chưa phản hồi lại.");
-						return;
-					}
-					pollEdgeNodeAfterRestart(camera, attempt + 1);
-				}
-			}, 2000);
-		},
-		[clearEdgeHealthPolling, loadEdgeNodeStatus],
-	);
-
-	const openEdgeHealthPopup = useCallback(
-		(camera) => {
-			const savedHostOverride = getEdgeHostOverrideForCamera(camera.camera_id);
-			setEdgePopupCameraId(camera.camera_id);
-			setEdgeHostOverride(savedHostOverride);
-			setEdgeHealthBaseUrl(
-				getEdgeHealthBaseUrl(camera.rtsp_url, { overrideHost: savedHostOverride }),
-			);
-			setEdgeHealthData(null);
-			setEdgeIdentityData(null);
-			setEdgeError("");
-			setEdgeActionBusy(false);
-			clearEdgeHealthPolling();
-			loadEdgeNodeStatus(camera, {
-				preferBaseUrl: getEdgeHealthBaseUrl(camera.rtsp_url, {
-					overrideHost: savedHostOverride,
-				}),
-			}).catch((error) => {
-				setMessage(error.message || "Không thể tải health của edge node.");
-			});
-		},
-		[clearEdgeHealthPolling, loadEdgeNodeStatus],
-	);
-
-	const closeEdgeHealthPopup = useCallback(() => {
-		if (edgeActionBusy) return;
-		clearEdgeHealthPolling();
-		setEdgePopupCameraId(null);
-		setEdgeHealthBaseUrl("");
-		setEdgeHostOverride("");
-		setEdgeHealthData(null);
-		setEdgeIdentityData(null);
-		setEdgeError("");
-		setEdgeLoading(false);
-	}, [clearEdgeHealthPolling, edgeActionBusy]);
-
-	const handleEdgeHostOverrideChange = useCallback(
-		(value) => {
-			setEdgeHostOverride(value);
-			if (!edgePopupCamera) return;
-			saveEdgeHostOverrideForCamera(edgePopupCamera.camera_id, value);
-			setEdgeHealthBaseUrl(
-				getEdgeHealthBaseUrl(edgePopupCamera.rtsp_url, { overrideHost: value }),
-			);
-		},
-		[edgePopupCamera],
-	);
-
-	const requestEdgeToggleStream = useCallback(() => {
-		if (!edgePopupCamera) return;
-		const camera = edgePopupCamera;
-		const nextEnabled = !edgeStreamEnabled;
-		setConfirmDialog({
-			tone: nextEnabled ? "info" : "warning",
-			icon: nextEnabled ? "video" : "camera-off",
-			confirmIcon: nextEnabled ? "video" : "camera-off",
-			title: nextEnabled
-				? `Bật stream cho ${camera.camera_id}?`
-				: `Tắt stream của ${camera.camera_id}?`,
-			description: nextEnabled
-				? "Edge node sẽ khởi chạy lại pipeline để phát RTSP."
-				: "Pipeline RTSP sẽ dừng và giữ trạng thái tắt cho đến khi bật lại.",
-			confirmLabel: nextEnabled ? "Bật stream" : "Tắt stream",
-			cancelLabel: "Hủy",
-			onConfirm: async () => {
-				setConfirmBusy(true);
-				setEdgeActionBusy(true);
-				try {
-					let resolvedBaseUrl = edgeHealthBaseUrl;
-					if (nextEnabled) {
-						const response = await triggerEdgeStreamStart(camera.rtsp_url, {
-							overrideHost: edgeHostOverride,
-							preferBaseUrl: edgeHealthBaseUrl,
-						});
-						if (response?.baseUrl) resolvedBaseUrl = response.baseUrl;
-					} else {
-						const response = await triggerEdgeStreamStop(camera.rtsp_url, {
-							overrideHost: edgeHostOverride,
-							preferBaseUrl: edgeHealthBaseUrl,
-						});
-						if (response?.baseUrl) resolvedBaseUrl = response.baseUrl;
-					}
-					setEdgeHealthBaseUrl(resolvedBaseUrl || "");
-					setConfirmDialog(null);
-					setMessage(
-						nextEnabled
-							? `Đã gửi lệnh bật stream cho ${camera.camera_id}.`
-							: `Đã gửi lệnh tắt stream cho ${camera.camera_id}.`,
-					);
-					await loadEdgeNodeStatus(camera, {
-						preferBaseUrl: resolvedBaseUrl,
-					});
-				} catch (error) {
-					setMessage(error.message || "Không thể đổi trạng thái stream từ xa.");
-				} finally {
-					setConfirmBusy(false);
-					setEdgeActionBusy(false);
-				}
-			},
-		});
-	}, [
-		edgeHealthBaseUrl,
-		edgeHostOverride,
-		edgePopupCamera,
-		edgeStreamEnabled,
-		loadEdgeNodeStatus,
-	]);
-
-	const requestEdgeRestartService = useCallback(() => {
-		if (!edgePopupCamera) return;
-		const camera = edgePopupCamera;
-		setConfirmDialog({
-			tone: "danger",
-			icon: "settings",
-			confirmIcon: "settings",
-			title: `Restart edge node ${camera.camera_id}?`,
-			description:
-				"Service edge_camera_node sẽ restart ngay. Popup sẽ tự kiểm tra kết nối lại sau khi service lên lại.",
-			confirmLabel: "Restart edge node",
-			cancelLabel: "Hủy",
-			onConfirm: async () => {
-				setConfirmBusy(true);
-				setEdgeActionBusy(true);
-				try {
-					const response = await triggerEdgeRestartService(camera.rtsp_url, {
-						overrideHost: edgeHostOverride,
-						preferBaseUrl: edgeHealthBaseUrl,
-					});
-					if (response?.baseUrl) {
-						setEdgeHealthBaseUrl(response.baseUrl);
-					}
-					setConfirmDialog(null);
-					setMessage(`Đã gửi lệnh restart edge node ${camera.camera_id}.`);
-					pollEdgeNodeAfterRestart(camera, 0);
-				} catch (error) {
-					setEdgeActionBusy(false);
-					setMessage(error.message || "Không thể restart edge node từ xa.");
-				} finally {
-					setConfirmBusy(false);
-				}
-			},
-		});
-	}, [edgeHealthBaseUrl, edgeHostOverride, edgePopupCamera, pollEdgeNodeAfterRestart]);
-
 	const closeConfirmDialog = () => {
 		if (saving || confirmBusy) return;
 		setConfirmDialog(null);
@@ -1501,13 +1219,6 @@ export default function ManagementView({
 												? ` · ${camera.location.intersection}`
 												: ""}
 										</div>
-									</button>
-									<button
-										className="camera-card-tools"
-										onClick={() => openEdgeHealthPopup(camera)}
-										title="Edge node health"
-										aria-label={`Xem edge health ${camera.camera_id}`}>
-										<AppIcon name="server" size={16} />
 									</button>
 								</div>
 							</div>
@@ -2299,30 +2010,6 @@ export default function ManagementView({
 						</section>
 					</section>
 				</div>
-			<EdgeCameraHealthModal
-				open={Boolean(edgePopupCamera)}
-				camera={edgePopupCamera}
-				healthBaseUrl={edgeHealthBaseUrl}
-				hostOverride={edgeHostOverride}
-				health={edgeHealthData}
-				identity={edgeIdentityData}
-				streamEnabled={edgeStreamEnabled}
-				loading={edgeLoading}
-				error={edgeError}
-				actionBusy={edgeActionBusy}
-				onClose={closeEdgeHealthPopup}
-				onRefresh={() => {
-					if (!edgePopupCamera) return;
-					loadEdgeNodeStatus(edgePopupCamera, {
-						preferBaseUrl: edgeHealthBaseUrl,
-					}).catch((error) => {
-						setMessage(error.message || "Không thể tải lại health edge node.");
-					});
-				}}
-				onHostOverrideChange={handleEdgeHostOverrideChange}
-				onToggleStream={requestEdgeToggleStream}
-				onRestartService={requestEdgeRestartService}
-			/>
 			<Toast
 				message={message}
 				tone={getToastTone(message)}

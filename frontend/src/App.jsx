@@ -3,6 +3,7 @@ import AppIcon from "./components/AppIcon";
 import MonitoringView from "./views/MonitoringView";
 import AnalyticsView from "./views/AnalyticsView";
 import ManagementView from "./views/ManagementView";
+import EdgeCamerasView from "./views/EdgeCamerasView";
 import { fetchCameras } from "./api";
 
 export default function App() {
@@ -63,6 +64,10 @@ export default function App() {
             <AppIcon name="camera" />
             Quản lý camera
           </button>
+          <button className={view === "edge" ? "nav-tab active" : "nav-tab"} onClick={() => setView("edge")}>
+            <AppIcon name="server" />
+            Edge Cameras
+          </button>
         </div>
       </header>
 
@@ -87,6 +92,7 @@ export default function App() {
             onRefreshCameras={refreshCameras}
           />
         ) : null}
+        {view === "edge" ? <EdgeCamerasView /> : null}
       </main>
     </div>
   );

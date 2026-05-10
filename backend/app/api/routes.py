@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import ValidationError
 
 from app.core.config import CameraLaneConfig
@@ -19,9 +19,10 @@ from app.core.violation_exports import (
 from app.managers.camera_manager import CameraManager
 from app.schemas.camera import CameraConfig
 from app.db.repository import query_violation_counts
+from app.services.edge_discovery import EdgeDiscoveryService
 
 
-def create_api_router(manager: CameraManager) -> APIRouter:
+def create_api_router(manager: CameraManager, edge_discovery: EdgeDiscoveryService) -> APIRouter:
     router = APIRouter()
     # Danh sách MIME/đuôi file nền được backend chấp nhận.
     allowed_upload_content_types = {"image/jpeg": ".jpg", "image/png": ".png"}
@@ -64,6 +65,46 @@ def create_api_router(manager: CameraManager) -> APIRouter:
     def list_cameras():
         # Trả danh sách camera đã cấu hình (không gồm state runtime chi tiết).
         return {"cameras": manager.list_cameras()}
+
+    @router.get("/api/edge-cameras")
+    def list_edge_cameras():
+        return edge_discovery.list_registry()
+
+    @router.post("/api/edge-cameras/rescan")
+    async def rescan_edge_cameras():
+        return await edge_discovery.rescan()
+
+    @router.get("/api/edge-cameras/{camera_id}")
+    def get_edge_camera(camera_id: str):
+        item = edge_discovery.get_camera(camera_id)
+        if item is None:
+            raise HTTPException(status_code=404, detail="Edge camera not found")
+        return item
+
+    async def _proxy_edge_stream_action(camera_id: str, action: str):
+        try:
+            return await edge_discovery.proxy_stream_action(camera_id, action)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Edge camera not found")
+        except ConnectionError:
+            return JSONResponse(
+                status_code=503,
+                content={"message": "edge camera is offline or unreachable"},
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    @router.post("/api/edge-cameras/{camera_id}/stream/start")
+    async def edge_stream_start(camera_id: str):
+        return await _proxy_edge_stream_action(camera_id, "start")
+
+    @router.post("/api/edge-cameras/{camera_id}/stream/stop")
+    async def edge_stream_stop(camera_id: str):
+        return await _proxy_edge_stream_action(camera_id, "stop")
+
+    @router.post("/api/edge-cameras/{camera_id}/stream/restart")
+    async def edge_stream_restart(camera_id: str):
+        return await _proxy_edge_stream_action(camera_id, "restart")
 
     @router.get("/api/cameras/{camera_id}")
     def get_camera(camera_id: str):

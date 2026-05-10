@@ -20,7 +20,13 @@ from .identity import (
     persist_fallback_ip_if_missing,
 )
 from .logging_setup import setup_logging
-from .network import MdnsPublisher, build_rtsp_urls, detect_ipv4, probe_mdns
+from .network import (
+    MdnsPublisher,
+    MdnsServiceMetadata,
+    build_rtsp_urls,
+    detect_ipv4,
+    probe_mdns,
+)
 from .state import NodeState, NodeStatus
 from .stream.fps_probe import FpsProbe
 from .stream.process_supervisor import ProcessSupervisor
@@ -72,6 +78,7 @@ class CameraNodeApp:
             state=self._state,
             logger=self._logger,
             set_stream_enabled_callback=lambda enabled: self._supervisor.set_stream_enabled(enabled),
+            restart_stream_callback=lambda: self._supervisor.request_restart(),
             restart_service_callback=self._request_service_restart,
         )
 
@@ -147,6 +154,14 @@ class CameraNodeApp:
         mdns_status, mdns_detail = self._mdns.publish(
             hostname=self._identity.mdns_hostname,
             ip_address=net.ip_address,
+            api_port=self._config.health_api.port,
+            service_metadata=MdnsServiceMetadata(
+                camera_id=self._identity.camera_id,
+                node_id=self._identity.node_id,
+                mac_address=self._identity.mac_address,
+                rtsp_port=self._identity.rtsp_port,
+                rtsp_path=self._identity.stream_path,
+            ),
         )
         if mdns_status == "OK":
             probed_status, probed_detail = probe_mdns(self._identity.mdns_hostname)

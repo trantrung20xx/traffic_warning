@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes import create_api_router
 from app.api.ws import create_ws_router
 from app.managers.camera_manager import CameraManager
+from app.services.edge_discovery import EdgeDiscoveryService
 
 if sys.platform.startswith("win") and hasattr(asyncio, "WindowsSelectorEventLoopPolicy"):
     # Trên Windows, ProactorEventLoop dễ in stack trace WinError 10054 khi trình duyệt
@@ -73,18 +74,22 @@ def create_app() -> FastAPI:
 
     repo_root = Path(__file__).resolve().parents[2]
     manager = CameraManager(repo_root)
+    edge_discovery = EdgeDiscoveryService()
     app.state.manager = manager
+    app.state.edge_discovery = edge_discovery
 
-    app.include_router(create_api_router(manager))
+    app.include_router(create_api_router(manager, edge_discovery))
     app.include_router(create_ws_router(manager))
 
     @app.on_event("startup")
     async def _startup():
         _install_event_loop_exception_guard()
         await manager.start()
+        await edge_discovery.start()
 
     @app.on_event("shutdown")
     async def _shutdown():
+        await edge_discovery.stop()
         await manager.stop()
     return app
 

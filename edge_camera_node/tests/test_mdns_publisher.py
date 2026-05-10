@@ -4,7 +4,7 @@ import logging
 import threading
 from types import SimpleNamespace
 
-from traffic_camera_node.network import MdnsPublisher
+from traffic_camera_node.network import MdnsPublisher, MdnsServiceMetadata
 
 
 class _DummyProc:
@@ -29,12 +29,13 @@ def test_publish_replaces_existing_process_without_deadlock(monkeypatch) -> None
     logger = logging.getLogger("test-mdns")
     publisher = MdnsPublisher(logger)
     existing = _DummyProc()
-    publisher._process = existing  # type: ignore[attr-defined]
+    publisher._host_process = existing  # type: ignore[attr-defined]
+    publisher._service_process = existing  # type: ignore[attr-defined]
     publisher._published_hostname = "cam-a.local"  # type: ignore[attr-defined]
     publisher._published_ip = "192.168.1.10"  # type: ignore[attr-defined]
 
     def _fake_which(name: str) -> str | None:
-        if name == "avahi-publish":
+        if name in {"avahi-publish", "avahi-publish-service"}:
             return "/usr/bin/avahi-publish"
         return None
 
@@ -47,7 +48,18 @@ def test_publish_replaces_existing_process_without_deadlock(monkeypatch) -> None
     result: dict[str, object] = {}
 
     def _call_publish() -> None:
-        result["value"] = publisher.publish("cam-a.local", "192.168.1.11")
+        result["value"] = publisher.publish(
+            hostname="cam-a.local",
+            ip_address="192.168.1.11",
+            api_port=8088,
+            service_metadata=MdnsServiceMetadata(
+                camera_id="cam_a",
+                node_id="node_a",
+                mac_address="001122334455",
+                rtsp_port=8593,
+                rtsp_path="/cam_a",
+            ),
+        )
 
     thread = threading.Thread(target=_call_publish, daemon=True)
     thread.start()

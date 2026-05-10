@@ -24,8 +24,6 @@ function resolveApiBase() {
 }
 
 const API_BASE = resolveApiBase();
-// Cố định port API edge để đồng bộ toàn hệ thống; tách khỏi dải RTSP 8554-8654.
-const EDGE_HEALTH_API_PORT = 8088;
 
 function apiUrl(path) {
   return `${API_BASE}${path}`;
@@ -66,7 +64,7 @@ async function request(path, options) {
     let detail = `${response.status}`;
     try {
       const body = await response.json();
-      detail = body.detail || JSON.stringify(body);
+      detail = body.detail || body.message || JSON.stringify(body);
     } catch {
       detail = `${response.status}`;
     }
@@ -251,199 +249,34 @@ export function getCameraPreviewUrl(cameraId) {
   return apiUrl(`/api/cameras/${cameraId}/preview`);
 }
 
-function parseRtspHost(rtspUrl) {
-  const value = String(rtspUrl || "").trim();
-  const match = value.match(/^rtsp:\/\/([^\/?#]+)(?:[\/?#]|$)/i);
-  if (!match?.[1]) {
-    throw new Error("RTSP URL không hợp lệ.");
-  }
-
-  const authority = match[1];
-  const withoutCredentials = authority.includes("@") ? authority.split("@").pop() : authority;
-  if (!withoutCredentials) {
-    throw new Error("RTSP URL không hợp lệ.");
-  }
-
-  if (withoutCredentials.startsWith("[")) {
-    const closingIndex = withoutCredentials.indexOf("]");
-    if (closingIndex <= 1) {
-      throw new Error("RTSP URL không hợp lệ.");
-    }
-    return withoutCredentials.slice(1, closingIndex);
-  }
-
-  return withoutCredentials.split(":")[0];
+export async function fetchEdgeCameras() {
+  return await request("/api/edge-cameras");
 }
 
-function normalizeHostForEdge(value) {
-  const raw = String(value || "").trim();
-  if (!raw) return "";
-
-  let host = raw;
-  host = host.replace(/^https?:\/\//i, "");
-  host = host.replace(/^rtsp:\/\//i, "");
-  host = host.replace(/\/.*$/, "");
-
-  if (host.startsWith("[")) {
-    const end = host.indexOf("]");
-    if (end > 0) {
-      return host.slice(1, end).trim();
-    }
-  }
-
-  if (host.includes(":")) {
-    const [first, second] = host.split(":");
-    if (/^\d+$/.test(second || "")) {
-      return first.trim();
-    }
-  }
-
-  return host.trim();
+export async function fetchEdgeCamera(cameraId) {
+  return await request(`/api/edge-cameras/${cameraId}`);
 }
 
-function formatHostForHttpUrl(host) {
-  const value = String(host || "").trim();
-  if (!value) return "";
-  // IPv6 cần đặt trong [] khi ghép vào URL.
-  if (value.includes(":") && !value.startsWith("[") && !value.endsWith("]")) {
-    return `[${value}]`;
-  }
-  return value;
-}
-
-function pushUniqueHost(target, host) {
-  const normalized = normalizeHostForEdge(host);
-  if (!normalized) return;
-  if (!target.includes(normalized)) {
-    target.push(normalized);
-  }
-}
-
-function buildEdgeBaseCandidates(rtspUrl, { overrideHost = "" } = {}) {
-  const hosts = [];
-  pushUniqueHost(hosts, overrideHost);
-
-  const rtspHost = parseRtspHost(rtspUrl);
-  pushUniqueHost(hosts, rtspHost);
-
-  // Một số mạng nội bộ resolve tên ngắn tốt hơn `.local`.
-  if (rtspHost.endsWith(".local")) {
-    pushUniqueHost(hosts, rtspHost.slice(0, -".local".length));
-  }
-
-  // Fallback cuối: thử host đang mở frontend (hữu ích khi reverse proxy chung host).
-  if (typeof window !== "undefined") {
-    pushUniqueHost(hosts, window.location.hostname);
-  }
-
-  return hosts.map((host) => `http://${formatHostForHttpUrl(host)}:${EDGE_HEALTH_API_PORT}`);
-}
-
-async function requestAbsoluteJson(url, options) {
-  const response = await fetch(url, options);
-  if (!response.ok) {
-    let detail = `${response.status}`;
-    try {
-      const body = await response.json();
-      detail = body.detail || JSON.stringify(body);
-    } catch {
-      detail = `${response.status}`;
-    }
-    throw new Error(detail);
-  }
-  if (response.status === 204) return null;
-  return await response.json();
-}
-
-function buildRestartQuery(token) {
-  if (!token) return "";
-  return `?token=${encodeURIComponent(token)}`;
-}
-
-async function requestEdgeAbsoluteWithFallback({
-  rtspUrl,
-  path,
-  method = "GET",
-  token = null,
-  overrideHost = "",
-  preferBaseUrl = "",
-}) {
-  const suffix = `${path}${buildRestartQuery(token)}`;
-  const candidates = buildEdgeBaseCandidates(rtspUrl, { overrideHost });
-  if (preferBaseUrl && !candidates.includes(preferBaseUrl)) {
-    candidates.unshift(preferBaseUrl);
-  }
-
-  if (!candidates.length) {
-    throw new Error("Không thể suy ra host edge từ RTSP URL.");
-  }
-
-  const errors = [];
-  for (const baseUrl of candidates) {
-    const url = `${baseUrl}${suffix}`;
-    try {
-      const payload = await requestAbsoluteJson(url, { method });
-      return { payload, baseUrl };
-    } catch (error) {
-      const detail = error?.message || String(error);
-      errors.push(`${baseUrl} -> ${detail}`);
-    }
-  }
-
-  throw new Error(`Không thể kết nối edge node. Đã thử: ${errors.join(" | ")}`);
-}
-
-export function getEdgeHealthBaseUrl(rtspUrl, { overrideHost = "" } = {}) {
-  return buildEdgeBaseCandidates(rtspUrl, { overrideHost })[0] || "";
-}
-
-export async function fetchEdgeHealth(rtspUrl, options = {}) {
-  return await requestEdgeAbsoluteWithFallback({
-    rtspUrl,
-    path: "/health",
-    overrideHost: options.overrideHost,
-    preferBaseUrl: options.preferBaseUrl,
+export async function rescanEdgeCameras() {
+  return await request("/api/edge-cameras/rescan", {
+    method: "POST",
   });
 }
 
-export async function fetchEdgeIdentity(rtspUrl, options = {}) {
-  return await requestEdgeAbsoluteWithFallback({
-    rtspUrl,
-    path: "/identity",
-    overrideHost: options.overrideHost,
-    preferBaseUrl: options.preferBaseUrl,
+export async function startEdgeCameraStream(cameraId) {
+  return await request(`/api/edge-cameras/${cameraId}/stream/start`, {
+    method: "POST",
   });
 }
 
-export async function triggerEdgeStreamStart(rtspUrl, { token = null, overrideHost = "", preferBaseUrl = "" } = {}) {
-  return await requestEdgeAbsoluteWithFallback({
-    rtspUrl,
-    path: "/stream/start",
-    method: "GET",
-    token,
-    overrideHost,
-    preferBaseUrl,
+export async function stopEdgeCameraStream(cameraId) {
+  return await request(`/api/edge-cameras/${cameraId}/stream/stop`, {
+    method: "POST",
   });
 }
 
-export async function triggerEdgeStreamStop(rtspUrl, { token = null, overrideHost = "", preferBaseUrl = "" } = {}) {
-  return await requestEdgeAbsoluteWithFallback({
-    rtspUrl,
-    path: "/stream/stop",
-    method: "GET",
-    token,
-    overrideHost,
-    preferBaseUrl,
-  });
-}
-
-export async function triggerEdgeRestartService(rtspUrl, { token = null, overrideHost = "", preferBaseUrl = "" } = {}) {
-  return await requestEdgeAbsoluteWithFallback({
-    rtspUrl,
-    path: "/restart-service",
-    method: "GET",
-    token,
-    overrideHost,
-    preferBaseUrl,
+export async function restartEdgeCameraStream(cameraId) {
+  return await request(`/api/edge-cameras/${cameraId}/stream/restart`, {
+    method: "POST",
   });
 }

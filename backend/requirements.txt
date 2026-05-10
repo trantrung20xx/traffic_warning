@@ -7,6 +7,9 @@ starlette
 uvicorn[standard]
 # ASGI server dùng để chạy ứng dụng FastAPI
 
+zeroconf
+# Discovery DNS-SD/mDNS cho edge camera node (_traffic-node._tcp.local.)
+
 opencv-python
 # Thư viện xử lý ảnh và video (đọc frame từ camera, xử lý hình ảnh)
 
