@@ -2,7 +2,7 @@
   "cameras": [
     {
       "camera_id": "cam_01",
-      "rtsp_url": "rtsp://172.20.10.2:8593/cam_2ccf6788f9e5",
+      "rtsp_url": "",
       "camera_type": "roadside",
       "view_direction": "Đông - Bắc",
       "location": {
@@ -13,6 +13,21 @@
         1,
         2,
         3
+      ],
+      "frame_width": 1920,
+      "frame_height": 1080
+    },
+    {
+      "camera_id": "cam_02",
+      "rtsp_url": "rtsp://cam-2ccf6788f9e5.local:8593/cam_2ccf6788f9e5",
+      "camera_type": "roadside",
+      "view_direction": "Nam - Bắc",
+      "location": {
+        "road_name": "QL39",
+        "intersection_name": "Nguyễn Văn Linh"
+      },
+      "monitored_lanes": [
+        1
       ],
       "frame_width": 1920,
       "frame_height": 1080

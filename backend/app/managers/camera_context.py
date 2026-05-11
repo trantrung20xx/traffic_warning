@@ -144,6 +144,8 @@ class CameraContext:
         rtsp_reconnect_delay_s: float = 2.0,
         preview_max_fps: float = 15.0,
         preview_jpeg_quality: int = 75,
+        preview_output_width: int = 1280,
+        preview_output_height: int = 720,
         processing_fps_window_s: float = 1.5,
         processing_prune_interval_ms: int = 700,
         license_plate_worker_max_pending_jobs: int = 64,
@@ -358,6 +360,7 @@ class CameraContext:
         # Hàng đợi timestamp frame đã xử lý dùng cho công thức FPS cửa sổ trượt.
         self._processed_frame_times_s: deque[float] = deque()
         self._processing_fps: Optional[float] = None
+        self._stream_fps: Optional[float] = None
         self._processing_fps_window_s: float = float(processing_fps_window_s)
         # Chu kỳ prune tối thiểu 100ms để cân bằng hiệu năng và độ tươi state.
         self._prune_interval_ms: int = max(int(processing_prune_interval_ms), 100)
@@ -365,16 +368,23 @@ class CameraContext:
 
         # Lưu frame JPEG gần nhất để endpoint preview có thể phát MJPEG cho trình duyệt.
         self._preview_lock = threading.Lock()
+        self._preview_condition = threading.Condition(self._preview_lock)
         self._latest_preview_jpeg: Optional[bytes] = None
+        self._latest_preview_seq: int = 0
         self._last_preview_encode_ms: int = 0
+        self._last_preview_source_ts_ms: int = 0
         self._preview_pending_frame_bgr = None
+        self._preview_pending_frame_ts_ms: int = 0
         self._preview_pending_lock = threading.Lock()
         self._preview_pending_event = threading.Event()
         self._preview_stop_event = threading.Event()
         self._preview_jpeg_quality: int = int(preview_jpeg_quality)
+        self._preview_output_width: int = max(int(preview_output_width or 0), 0)
+        self._preview_output_height: int = max(int(preview_output_height or 0), 0)
         # Khoảng thời gian tối thiểu giữa hai lần encode preview.
         safe_preview_fps = max(float(preview_max_fps), 0.1)
         self._preview_min_interval_ms: int = max(int(round(1000.0 / safe_preview_fps)), 1)
+        self._preview_poll_interval_s: float = max(self._preview_min_interval_ms / 1000.0, 0.01)
         self._preview_worker = threading.Thread(
             target=self._preview_worker_loop,
             name=f"preview-worker-{self.camera_id}",
@@ -465,9 +475,26 @@ class CameraContext:
         }
 
     def get_latest_preview_jpeg(self) -> Optional[bytes]:
-        with self._preview_lock:
+        with self._preview_condition:
             # Trả bytes JPEG mới nhất hoặc None nếu chưa có frame nào được encode.
             return self._latest_preview_jpeg
+
+    def get_latest_preview_snapshot(self) -> tuple[Optional[bytes], int]:
+        with self._preview_condition:
+            return self._latest_preview_jpeg, int(self._latest_preview_seq)
+
+    def wait_for_preview_after(self, *, last_seq: int, timeout_s: float) -> tuple[Optional[bytes], int]:
+        safe_timeout_s = max(float(timeout_s), 0.01)
+        deadline = time.perf_counter() + safe_timeout_s
+        with self._preview_condition:
+            while not self._preview_stop_event.is_set():
+                if self._latest_preview_jpeg is not None and self._latest_preview_seq > int(last_seq):
+                    return self._latest_preview_jpeg, int(self._latest_preview_seq)
+                remaining = deadline - time.perf_counter()
+                if remaining <= 0:
+                    return None, int(last_seq)
+                self._preview_condition.wait(timeout=remaining)
+            return None, int(last_seq)
 
     def request_shutdown(self) -> None:
         """Signal camera resources to close promptly during server shutdown."""
@@ -482,6 +509,8 @@ class CameraContext:
         # Dừng mềm worker nền để shutdown không treo event loop.
         self._preview_stop_event.set()
         self._preview_pending_event.set()
+        with self._preview_condition:
+            self._preview_condition.notify_all()
         with self._license_plate_jobs_cond:
             self._license_plate_worker_stop_event.set()
             self._license_plate_jobs_cond.notify_all()
@@ -495,29 +524,44 @@ class CameraContext:
         if license_plate_worker is not None and license_plate_worker.is_alive():
             license_plate_worker.join(timeout=1.0)
 
-    def _submit_preview_frame(self, frame_bgr) -> None:
+    def _submit_preview_frame(self, frame_bgr, frame_timestamp_utc_ms: int) -> None:
         # Chỉ giữ frame mới nhất; preview không cần xử lý mọi frame như pipeline AI.
         with self._preview_pending_lock:
             self._preview_pending_frame_bgr = frame_bgr
+            self._preview_pending_frame_ts_ms = int(frame_timestamp_utc_ms)
         self._preview_pending_event.set()
 
     def _preview_worker_loop(self) -> None:
         while not self._preview_stop_event.is_set():
-            # Chờ tín hiệu có frame mới; timeout ngắn để kiểm tra cờ dừng định kỳ.
-            if not self._preview_pending_event.wait(timeout=0.25):
-                continue
-            # Clear event trước khi lấy frame để tránh xử lý lặp cùng một tín hiệu.
-            self._preview_pending_event.clear()
+            # Chờ tín hiệu có frame mới; timeout theo nhịp preview để có thể tự pull
+            # trực tiếp từ reader ngay cả khi pipeline AI đang chậm.
+            has_pending = self._preview_pending_event.wait(timeout=self._preview_poll_interval_s)
+            if has_pending:
+                # Clear event trước khi lấy frame để tránh xử lý lặp cùng một tín hiệu.
+                self._preview_pending_event.clear()
             if self._preview_stop_event.is_set():
                 break
-            with self._preview_pending_lock:
-                # Lấy frame mới nhất và xóa pending để các frame cũ tự bị bỏ.
-                frame_bgr = self._preview_pending_frame_bgr
-                self._preview_pending_frame_bgr = None
+            frame_bgr = None
+            frame_timestamp_utc_ms = 0
+            if has_pending:
+                with self._preview_pending_lock:
+                    # Lấy frame mới nhất và xóa pending để các frame cũ tự bị bỏ.
+                    frame_bgr = self._preview_pending_frame_bgr
+                    frame_timestamp_utc_ms = self._preview_pending_frame_ts_ms
+                    self._preview_pending_frame_bgr = None
+                    self._preview_pending_frame_ts_ms = 0
+            if frame_bgr is None:
+                latest = self.rtsp_reader.peek_latest()
+                if latest is not None:
+                    frame_bgr = latest.bgr
+                    frame_timestamp_utc_ms = int(latest.timestamp_utc_ms)
             if frame_bgr is None:
                 continue
             try:
-                self._maybe_update_preview(frame_bgr)
+                self._maybe_update_preview(
+                    frame_bgr,
+                    source_timestamp_utc_ms=frame_timestamp_utc_ms,
+                )
             except Exception:
                 continue
 
@@ -681,24 +725,47 @@ class CameraContext:
             except Exception:
                 continue
 
-    def _maybe_update_preview(self, frame_bgr) -> None:
+    def _maybe_update_preview(self, frame_bgr, *, source_timestamp_utc_ms: int = 0) -> None:
         """Mã hóa JPEG theo nhịp giới hạn để giao diện web xem được ảnh camera trực tiếp."""
+        source_ts = int(source_timestamp_utc_ms or 0)
+        if source_ts > 0 and source_ts == self._last_preview_source_ts_ms:
+            # Không encode lại cùng một frame gốc để tiết kiệm CPU.
+            return
         now = int(time.time() * 1000)
         # Gate theo khoảng thời gian để giữ tốc độ encode ổn định.
         if now - self._last_preview_encode_ms < self._preview_min_interval_ms:
             return
-        self._last_preview_encode_ms = now
+        preview_frame = frame_bgr
+        target_width = self._preview_output_width
+        target_height = self._preview_output_height
+        if target_width > 0 and target_height > 0:
+            src_height, src_width = frame_bgr.shape[:2]
+            if src_width > target_width or src_height > target_height:
+                scale = min(target_width / max(src_width, 1), target_height / max(src_height, 1))
+                next_width = max(int(round(src_width * scale)), 1)
+                next_height = max(int(round(src_height * scale)), 1)
+                if next_width != src_width or next_height != src_height:
+                    preview_frame = cv2.resize(
+                        frame_bgr,
+                        (next_width, next_height),
+                        interpolation=cv2.INTER_AREA,
+                    )
         ok, buf = cv2.imencode(
             ".jpg",
-            frame_bgr,
+            preview_frame,
             [int(cv2.IMWRITE_JPEG_QUALITY), self._preview_jpeg_quality],
         )
         if not ok:
             return
+        self._last_preview_encode_ms = now
+        if source_ts > 0:
+            self._last_preview_source_ts_ms = source_ts
         data = buf.tobytes()
-        with self._preview_lock:
+        with self._preview_condition:
             # Luôn ghi đè ảnh preview cũ bằng ảnh mới nhất.
             self._latest_preview_jpeg = data
+            self._latest_preview_seq += 1
+            self._preview_condition.notify_all()
 
     async def run_forever(self, *, stop_event: asyncio.Event) -> None:
         """Vòng lặp xử lý liên tục cho một camera cho đến khi nhận tín hiệu dừng."""
@@ -712,7 +779,8 @@ class CameraContext:
                     continue
 
                 # Đẩy frame sang worker preview để encode JPEG phục vụ endpoint /preview.
-                self._submit_preview_frame(frame.bgr)
+                self._submit_preview_frame(frame.bgr, frame.timestamp_utc_ms)
+                self._stream_fps = self.rtsp_reader.get_source_fps()
 
                 # ts_dt là timestamp chuẩn UTC dùng đồng nhất cho DB, WebSocket và state prune.
                 ts_dt = datetime.fromtimestamp(frame.timestamp_utc_ms / 1000.0, tz=timezone.utc)
@@ -790,6 +858,7 @@ class CameraContext:
                         camera_id=self.camera_id,
                         timestamp=ts_dt,
                         processing_fps=self._processing_fps,
+                        stream_fps=self._stream_fps,
                         vehicles=vehicles,
                     )
                     self.on_track(track_msg)

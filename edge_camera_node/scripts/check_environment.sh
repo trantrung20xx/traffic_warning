@@ -9,8 +9,8 @@ create_default_settings() {
   cat > "${CONFIG_FILE}" <<'EOF'
 {
   "camera": {
-    "width": 2560,
-    "height": 1440,
+    "width": 1920,
+    "height": 1080,
     "fps": 25
   },
   "image_tuning": {

@@ -24,12 +24,14 @@ ALLOWED_STREAM_SOURCES = {
 }
 # Cố định port Health API để frontend truy cập trực tiếp edge node ổn định.
 EDGE_HEALTH_API_PORT = 8088
+EDGE_STREAM_WIDTH = 1920
+EDGE_STREAM_HEIGHT = 1080
 
 
 @dataclass(frozen=True)
 class CameraConfig:
-    width: int = 2560
-    height: int = 1440
+    width: int = EDGE_STREAM_WIDTH
+    height: int = EDGE_STREAM_HEIGHT
     fps: int = 25
 
 
@@ -183,8 +185,8 @@ def load_config(config_path: Path) -> AppConfig:
     raw_logging = raw.get("logging", {}) if isinstance(raw.get("logging"), dict) else {}
 
     camera = CameraConfig(
-        width=int(raw_camera.get("width", 2560)),
-        height=int(raw_camera.get("height", 1440)),
+        width=int(raw_camera.get("width", EDGE_STREAM_WIDTH)),
+        height=int(raw_camera.get("height", EDGE_STREAM_HEIGHT)),
         fps=int(raw_camera.get("fps", 25)),
     )
 

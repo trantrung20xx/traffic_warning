@@ -14,7 +14,7 @@ def test_minimal_config_loads_with_defaults(tmp_path: Path) -> None:
     config_path.write_text(
         json.dumps(
             {
-                "camera": {"width": 2560, "height": 1440, "fps": 25},
+                "camera": {"width": 1920, "height": 1080, "fps": 25},
                 "image_tuning": {"profile": "normal"},
                 "gpio": {"enabled": True},
             }
@@ -23,8 +23,8 @@ def test_minimal_config_loads_with_defaults(tmp_path: Path) -> None:
     )
 
     cfg = load_config(config_path)
-    assert cfg.camera.width == 2560
-    assert cfg.camera.height == 1440
+    assert cfg.camera.width == 1920
+    assert cfg.camera.height == 1080
     assert cfg.camera.fps == 25
     assert cfg.identity.port_range_start == 8554
     assert cfg.gpio.leds.online == 17
@@ -40,7 +40,7 @@ def test_invalid_profile_raises(tmp_path: Path) -> None:
     config_path.write_text(
         json.dumps(
             {
-                "camera": {"width": 2560, "height": 1440, "fps": 25},
+                "camera": {"width": 1920, "height": 1080, "fps": 25},
                 "image_tuning": {"profile": "impossible_profile"},
             }
         ),
@@ -57,7 +57,7 @@ def test_invalid_stream_pipeline_mode_raises(tmp_path: Path) -> None:
     config_path.write_text(
         json.dumps(
             {
-                "camera": {"width": 2560, "height": 1440, "fps": 25},
+                "camera": {"width": 1920, "height": 1080, "fps": 25},
                 "image_tuning": {"profile": "normal"},
                 "stream": {"pipeline_mode": "broken_mode"},
             }
@@ -75,7 +75,7 @@ def test_invalid_stream_source_raises(tmp_path: Path) -> None:
     config_path.write_text(
         json.dumps(
             {
-                "camera": {"width": 2560, "height": 1440, "fps": 25},
+                "camera": {"width": 1920, "height": 1080, "fps": 25},
                 "image_tuning": {"profile": "normal"},
                 "stream": {"source": "bad_source"},
             }

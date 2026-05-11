@@ -61,3 +61,53 @@ def test_reader_only_new_frame_mode_avoids_duplicate_processing() -> None:
         assert replay is not None
     finally:
         reader.close()
+
+
+def test_reader_peek_latest_does_not_consume_only_new_sequence() -> None:
+    reader = RtspFrameReader(
+        "rtsp://127.0.0.1:1/non-existent",
+        reconnect_delay_s=0.05,
+        frame_width=320,
+        frame_height=180,
+    )
+    try:
+        with reader._latest_lock:
+            reader._latest_frame = Frame(
+                bgr=np.zeros((4, 4, 3), dtype=np.uint8),
+                timestamp_utc_ms=123,
+            )
+            reader._latest_frame_seq += 1
+
+        peeked = reader.peek_latest()
+        consumed = reader.read(only_new=True)
+        consumed_again = reader.read(only_new=True)
+
+        assert peeked is not None
+        assert peeked.timestamp_utc_ms == 123
+        assert consumed is not None
+        assert consumed_again is None
+    finally:
+        reader.close()
+
+
+def test_reader_source_fps_estimation_from_samples(monkeypatch) -> None:
+    reader = RtspFrameReader(
+        "rtsp://127.0.0.1:1/non-existent",
+        reconnect_delay_s=0.05,
+        frame_width=320,
+        frame_height=180,
+    )
+    try:
+        samples = iter([1.0, 1.1, 1.2, 1.3, 1.4])
+        monkeypatch.setattr("app.rtsp.rtsp_stream.time.perf_counter", lambda: next(samples))
+        reader._record_source_frame()
+        reader._record_source_frame()
+        reader._record_source_frame()
+        reader._record_source_frame()
+        reader._record_source_frame()
+        fps = reader.get_source_fps()
+        assert fps is not None
+        assert fps > 8.0
+        assert fps < 12.0
+    finally:
+        reader.close()

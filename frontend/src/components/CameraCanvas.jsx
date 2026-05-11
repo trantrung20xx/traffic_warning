@@ -202,6 +202,8 @@ export default function CameraCanvas({
 	vehicles,
 	trajectoryOverlays = [],
 	processingFps = null,
+	streamFps = null,
+	displayStreamFps = null,
 	overlay = false,
 	selectedLaneId = null,
 	selectedVertexIndex = null,
@@ -384,9 +386,7 @@ export default function CameraCanvas({
 		const editableActiveVertexRadius = displayMetrics.px(
 			EDITABLE_ACTIVE_VERTEX_RADIUS,
 		);
-		const editableVertexStrokeWidth = displayMetrics.px(
-			EDITABLE_VERTEX_STROKE_WIDTH,
-		);
+		const editableVertexStrokeWidth = displayMetrics.px(EDITABLE_VERTEX_STROKE_WIDTH);
 		const editableArrowSize = displayMetrics.px(EDITABLE_ARROW_SIZE);
 		const edgeInsertMarkerRadius = displayMetrics.px(EDGE_INSERT_MARKER_RADIUS);
 
@@ -722,8 +722,20 @@ export default function CameraCanvas({
 			}
 		});
 
-		if (processingFps != null && Number.isFinite(processingFps)) {
-			const fpsLabel = `FPS: ${processingFps.toFixed(1)}`;
+		const shouldShowFps =
+			Number.isFinite(processingFps) ||
+			Number.isFinite(streamFps) ||
+			Number.isFinite(displayStreamFps);
+		if (shouldShowFps) {
+			const aiLabel = Number.isFinite(processingFps)
+				? `AI FPS: ${processingFps.toFixed(1)}`
+				: "AI FPS: -";
+			const sourceStreamLabel = Number.isFinite(streamFps)
+				? `Source FPS: ${streamFps.toFixed(1)}`
+				: "Source FPS: -";
+			const displayStreamLabel = Number.isFinite(displayStreamFps)
+				? `Display FPS: ${displayStreamFps.toFixed(1)}`
+				: "Display FPS: -";
 			const fpsFont = isMonitoringOverlay
 				? displayMetrics.font(MONITOR_OVERLAY.fpsFontPx, "700")
 				: "700 14px sans-serif";
@@ -731,16 +743,32 @@ export default function CameraCanvas({
 				? displayMetrics.px(MONITOR_OVERLAY.fpsMarginPx)
 				: 14;
 			ctx.font = fpsFont;
-			const textWidth = ctx.measureText(fpsLabel).width;
+			const labelGap = isMonitoringOverlay ? displayMetrics.px(4) : 4;
+			const labelHeight = isMonitoringOverlay
+				? displayMetrics.px(MONITOR_OVERLAY.fpsTextBaselinePx)
+				: 15;
+			const textWidth = Math.max(
+				ctx.measureText(aiLabel).width,
+				ctx.measureText(sourceStreamLabel).width,
+				ctx.measureText(displayStreamLabel).width,
+			);
 			const textX = frameWidth - textWidth - fpsMargin;
 			const textY =
 				fpsMargin +
-				(isMonitoringOverlay ? displayMetrics.px(MONITOR_OVERLAY.fpsTextBaselinePx) : 18);
+				(isMonitoringOverlay
+					? displayMetrics.px(MONITOR_OVERLAY.fpsTextBaselinePx)
+					: 18);
 
 			ctx.fillStyle = isMonitoringOverlay
 				? "rgba(0, 214, 143, 0.98)"
 				: "rgba(255,255,255,0.96)";
-			ctx.fillText(fpsLabel, textX, textY);
+			ctx.fillText(aiLabel, textX, textY);
+			ctx.fillText(sourceStreamLabel, textX, textY + labelHeight + labelGap);
+			ctx.fillText(
+				displayStreamLabel,
+				textX,
+				textY + (labelHeight + labelGap) * 2,
+			);
 		}
 
 		if (editable) {
@@ -781,6 +809,8 @@ export default function CameraCanvas({
 		vehicles,
 		trajectoryOverlays,
 		processingFps,
+		streamFps,
+		displayStreamFps,
 		canvasDisplaySize.width,
 		canvasDisplaySize.height,
 	]);

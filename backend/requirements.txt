@@ -10,6 +10,10 @@ uvicorn[standard]
 zeroconf
 # Discovery DNS-SD/mDNS cho edge camera node (_traffic-node._tcp.local.)
 
+ifaddr
+# Liệt kê địa chỉ IPv4 của các network interface chính xác hơn trên Windows/Linux
+# để fallback discovery theo subnet hoạt động ổn định khi mDNS không resolve được.
+
 opencv-python
 # Thư viện xử lý ảnh và video (đọc frame từ camera, xử lý hình ảnh)
 

@@ -49,17 +49,40 @@ function withQuery(path, params) {
 }
 
 async function request(path, options) {
-  const isFormData = options?.body instanceof FormData;
+  const requestOptions = options || {};
+  const { timeoutMs: timeoutRaw, timeoutMessage, ...fetchOptions } = requestOptions;
+  const isFormData = fetchOptions?.body instanceof FormData;
+  const timeoutMs = Number.isFinite(Number(timeoutRaw)) ? Number(timeoutRaw) : 0;
+  const controller = new AbortController();
+  const abortTimer =
+    timeoutMs > 0
+      ? window.setTimeout(() => {
+          controller.abort();
+        }, timeoutMs)
+      : null;
   // FormData để trình duyệt tự set boundary multipart.
-  const response = await fetch(apiUrl(path), {
-    headers: isFormData
-      ? options?.headers || {}
-      : {
-          "Content-Type": "application/json",
-          ...(options?.headers || {}),
-        },
-    ...options,
-  });
+  let response;
+  try {
+    response = await fetch(apiUrl(path), {
+      headers: isFormData
+        ? fetchOptions?.headers || {}
+        : {
+            "Content-Type": "application/json",
+            ...(fetchOptions?.headers || {}),
+          },
+      ...fetchOptions,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new Error(timeoutMessage || "Request timeout");
+    }
+    throw error;
+  } finally {
+    if (abortTimer !== null) {
+      window.clearTimeout(abortTimer);
+    }
+  }
   if (!response.ok) {
     let detail = `${response.status}`;
     try {
@@ -245,38 +268,50 @@ export function connectViolations(cameraId, onMessage) {
   return socket;
 }
 
-export function getCameraPreviewUrl(cameraId) {
-  return apiUrl(`/api/cameras/${cameraId}/preview`);
+export function getCameraPreviewUrl(cameraId, sessionToken = null) {
+  const query = sessionToken ? `?session=${encodeURIComponent(String(sessionToken))}` : "";
+  return apiUrl(`/api/cameras/${cameraId}/preview${query}`);
 }
 
 export async function fetchEdgeCameras() {
-  return await request("/api/edge-cameras");
+  return await request("/api/edge-cameras", {
+    timeoutMs: 6000,
+    timeoutMessage: "Quá thời gian tải danh sách edge camera.",
+  });
 }
 
 export async function fetchEdgeCamera(cameraId) {
-  return await request(`/api/edge-cameras/${cameraId}`);
+  return await request(`/api/edge-cameras/${cameraId}`, {
+    timeoutMs: 5000,
+    timeoutMessage: "Quá thời gian đồng bộ trạng thái edge camera.",
+  });
 }
 
 export async function rescanEdgeCameras() {
   return await request("/api/edge-cameras/rescan", {
     method: "POST",
+    timeoutMs: 10000,
+    timeoutMessage: "Quá thời gian quét lại edge camera.",
   });
 }
 
 export async function startEdgeCameraStream(cameraId) {
   return await request(`/api/edge-cameras/${cameraId}/stream/start`, {
     method: "POST",
+    timeoutMs: 6000,
   });
 }
 
 export async function stopEdgeCameraStream(cameraId) {
   return await request(`/api/edge-cameras/${cameraId}/stream/stop`, {
     method: "POST",
+    timeoutMs: 6000,
   });
 }
 
 export async function restartEdgeCameraStream(cameraId) {
   return await request(`/api/edge-cameras/${cameraId}/stream/restart`, {
     method: "POST",
+    timeoutMs: 7000,
   });
 }

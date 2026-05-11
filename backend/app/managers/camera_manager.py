@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
+import logging
+import socket
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import WebSocket
 from app.core.background_images import (
@@ -22,6 +26,7 @@ from app.core.config import (
     save_lane_config_for_camera,
     validate_no_shared_lanes_across_cameras,
 )
+from app.core.camera_runtime import has_camera_runtime_source
 from app.db.repository import query_dashboard_analytics, query_violation_history
 from app.db.database import create_engine_and_session
 from app.managers.camera_context import CameraContext
@@ -35,6 +40,7 @@ class CameraManager:
     """Quản lý danh sách camera, context runtime và các kênh realtime toàn hệ thống."""
 
     def __init__(self, repo_root: Path):
+        self._logger = logging.getLogger(__name__)
         # Root thư mục dự án để resolve toàn bộ path config/evidence.
         self.repo_root = repo_root
         # Load settings typed ngay khi khởi tạo manager.
@@ -60,6 +66,11 @@ class CameraManager:
         self._violation_listeners: set[asyncio.Queue[ViolationEvent | None]] = set()
         self._track_websockets: set[WebSocket] = set()
         self._violation_websockets: set[WebSocket] = set()
+        self._edge_discovery: Any = None
+
+    def bind_edge_discovery(self, edge_discovery: Any) -> None:
+        # Injection nhẹ để runtime có thể lấy fallback IP cho RTSP .local khi cần.
+        self._edge_discovery = edge_discovery
 
     @property
     def session_factory(self):
@@ -317,6 +328,24 @@ class CameraManager:
             return None
         return ctx.get_latest_preview_jpeg()
 
+    def get_camera_preview_snapshot(self, camera_id: str) -> tuple[Optional[bytes], int]:
+        ctx = self._contexts.get(camera_id)
+        if ctx is None:
+            return None, 0
+        return ctx.get_latest_preview_snapshot()
+
+    def wait_camera_preview_after(
+        self,
+        *,
+        camera_id: str,
+        last_seq: int,
+        timeout_s: float,
+    ) -> tuple[Optional[bytes], int]:
+        ctx = self._contexts.get(camera_id)
+        if ctx is None:
+            return None, int(last_seq)
+        return ctx.wait_for_preview_after(last_seq=int(last_seq), timeout_s=float(timeout_s))
+
     def get_violation_evidence_path(self, relative_path: str) -> Optional[Path]:
         return resolve_evidence_image_path(self.repo_root, relative_path)
 
@@ -368,15 +397,54 @@ class CameraManager:
             pass
         self._running = False
 
+    def refresh_runtime_sources_from_discovery(self, *, camera_ids: set[str] | None = None) -> list[str]:
+        """
+        Reload các context đang chạy nếu URL runtime có thể được cải thiện nhờ edge discovery.
+        Trường hợp chính: host `.local` không resolve được trên máy backend, nhưng discovery có IP fallback.
+        """
+        if not self._running:
+            return []
+
+        selected_ids = {camera_id for camera_id in (camera_ids or set()) if camera_id}
+        reloaded: list[str] = []
+        for cam in self.cameras:
+            if selected_ids and cam.camera_id not in selected_ids:
+                continue
+            ctx = self._contexts.get(cam.camera_id)
+            if ctx is None:
+                continue
+            runtime_rtsp_url = self._resolve_runtime_rtsp_url(
+                camera_id=cam.camera_id,
+                rtsp_url=cam.rtsp_url,
+            )
+            current_rtsp_url = str(ctx.camera_config.rtsp_url or "").strip()
+            if runtime_rtsp_url and runtime_rtsp_url != current_rtsp_url:
+                self._logger.info(
+                    "Reload camera %s runtime source: %s -> %s",
+                    cam.camera_id,
+                    current_rtsp_url,
+                    runtime_rtsp_url,
+                )
+                self._reload_context(cam.camera_id)
+                reloaded.append(cam.camera_id)
+        return reloaded
+
     def _build_context(self, camera_id: str) -> CameraContext:
         # Context lấy camera config + lane config hiện hành để dựng pipeline runtime.
         cam = next(item for item in self.cameras if item.camera_id == camera_id)
+        runtime_rtsp_url = self._resolve_runtime_rtsp_url(
+            camera_id=cam.camera_id,
+            rtsp_url=cam.rtsp_url,
+        )
+        runtime_camera = cam
+        if runtime_rtsp_url != cam.rtsp_url:
+            runtime_camera = cam.model_copy(update={"rtsp_url": runtime_rtsp_url})
         lane_cfg = load_lane_config_for_camera(self.repo_root, cam.camera_id)
         lane_cfg_pixels = denormalize_lane_config(lane_cfg)
         # Context nhận full runtime config đã map từ settings + lane config đã denormalize.
         return CameraContext(
             repo_root=self.repo_root,
-            camera_config=cam,
+            camera_config=runtime_camera,
             lane_config=lane_cfg_pixels,
             db_session_factory=self._SessionLocal,
             on_track=self._on_track,
@@ -473,6 +541,8 @@ class CameraManager:
             rtsp_reconnect_delay_s=self.cfg.rtsp_reconnect_delay_s,
             preview_max_fps=self.cfg.preview_max_fps,
             preview_jpeg_quality=self.cfg.preview_jpeg_quality,
+            preview_output_width=self.cfg.preview_output_width,
+            preview_output_height=self.cfg.preview_output_height,
             processing_fps_window_s=self.cfg.processing_fps_window_s,
             processing_prune_interval_ms=self.cfg.processing_prune_interval_ms,
             license_plate_worker_max_pending_jobs=self.cfg.license_plate_worker_max_pending_jobs,
@@ -511,7 +581,113 @@ class CameraManager:
         # Payload UI typed trả thẳng từ settings hiện hành.
         return self.cfg.ui.model_dump(mode="json")
 
+    def _resolve_runtime_rtsp_url(self, *, camera_id: str, rtsp_url: str) -> str:
+        raw_url = str(rtsp_url or "").strip()
+        if not raw_url:
+            return raw_url
+
+        try:
+            parsed = urlsplit(raw_url)
+        except Exception:
+            return raw_url
+        if parsed.scheme.lower() not in {"rtsp", "rtsps"}:
+            return raw_url
+        if not parsed.hostname:
+            return raw_url
+
+        host = str(parsed.hostname).strip().lower().rstrip(".")
+        if not host.endswith(".local"):
+            return raw_url
+
+        try:
+            socket.gethostbyname(host)
+            return raw_url
+        except OSError:
+            pass
+
+        fallback_ip = self._find_rtsp_host_fallback_ip(
+            camera_id=camera_id,
+            unresolved_host=host,
+            stream_path=parsed.path or "",
+        )
+        if not fallback_ip:
+            return raw_url
+
+        netloc = ""
+        if parsed.username:
+            netloc += parsed.username
+            if parsed.password:
+                netloc += f":{parsed.password}"
+            netloc += "@"
+        netloc += fallback_ip
+        if parsed.port:
+            netloc += f":{parsed.port}"
+        resolved_url = urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
+        self._logger.warning(
+            "Camera %s RTSP host %s is not resolvable on this machine. Using fallback %s.",
+            camera_id,
+            host,
+            fallback_ip,
+        )
+        return resolved_url
+
+    def _find_rtsp_host_fallback_ip(
+        self,
+        *,
+        camera_id: str,
+        unresolved_host: str,
+        stream_path: str,
+    ) -> str | None:
+        discovery = self._edge_discovery
+        if discovery is None:
+            return None
+
+        try:
+            registry = discovery.list_registry()
+        except Exception:
+            return None
+        if not registry:
+            return None
+
+        target_path = str(stream_path or "").strip()
+        for item in registry:
+            item_camera_id = str(item.get("camera_id") or "")
+            item_host = str(item.get("host") or "").strip().lower().rstrip(".")
+            item_mdns = str(item.get("mdns_host") or "").strip().lower().rstrip(".")
+            item_stream = str(item.get("stream_path") or "").strip()
+            ip_candidate = str(item.get("ip_address") or "").strip()
+            if not ip_candidate and self._is_ipv4_address(item_host):
+                ip_candidate = item_host
+            if not self._is_ipv4_address(ip_candidate):
+                continue
+
+            if item_mdns == unresolved_host:
+                return ip_candidate
+            if item_host == unresolved_host:
+                return ip_candidate
+            if item_camera_id and item_camera_id == camera_id:
+                return ip_candidate
+            if target_path and item_stream and item_stream == target_path:
+                return ip_candidate
+        return None
+
+    @staticmethod
+    def _is_ipv4_address(value: str) -> bool:
+        try:
+            return isinstance(ipaddress.ip_address(value), ipaddress.IPv4Address)
+        except ValueError:
+            return False
+
     def _start_context(self, camera_id: str) -> None:
+        cam = next((item for item in self.cameras if item.camera_id == camera_id), None)
+        if cam is None:
+            raise KeyError(camera_id)
+        if not has_camera_runtime_source(cam):
+            self._logger.warning(
+                "Skipping camera %s runtime startup because rtsp_url is empty.",
+                camera_id,
+            )
+            return
         ctx = self._build_context(camera_id)
         self._contexts[camera_id] = ctx
         if self._running or not self._stop_event.is_set():

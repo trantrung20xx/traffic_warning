@@ -17,7 +17,7 @@ def _write_minimal_config(path: Path) -> None:
     path.write_text(
         json.dumps(
             {
-                "camera": {"width": 2560, "height": 1440, "fps": 25},
+                "camera": {"width": 1920, "height": 1080, "fps": 25},
                 "image_tuning": {"profile": "normal"},
                 "gpio": {"enabled": True},
             }

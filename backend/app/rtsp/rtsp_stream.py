@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -86,6 +87,10 @@ class RtspFrameReader:
         # Seq tăng mỗi frame để read(only_new=True) biết frame đã đổi chưa.
         self._latest_frame_seq: int = 0
         self._last_delivered_seq: int = 0
+        # FPS đọc thực tế của nguồn stream/video để UI phân biệt với AI FPS.
+        self._source_fps_lock = threading.Lock()
+        self._source_frame_times_s: deque[float] = deque()
+        self._source_fps: Optional[float] = None
         # Nhịp pacing chỉ áp dụng cho source là file video local.
         self._file_frame_interval_s: Optional[float] = None
         self._file_next_deadline_s: Optional[float] = None
@@ -202,8 +207,31 @@ class RtspFrameReader:
                 # Luôn ghi đè frame mới nhất, không tích backlog.
                 self._latest_frame = snapshot
                 self._latest_frame_seq += 1
+            self._record_source_frame()
             if not self._pace_file_playback_if_needed():
                 break
+
+    def _record_source_frame(self) -> None:
+        now_s = time.perf_counter()
+        with self._source_fps_lock:
+            self._source_frame_times_s.append(now_s)
+            cutoff_s = now_s - 1.5
+            while self._source_frame_times_s and self._source_frame_times_s[0] < cutoff_s:
+                self._source_frame_times_s.popleft()
+
+            if len(self._source_frame_times_s) >= 2:
+                duration_s = self._source_frame_times_s[-1] - self._source_frame_times_s[0]
+                self._source_fps = (
+                    (len(self._source_frame_times_s) - 1) / duration_s if duration_s > 0 else None
+                )
+            else:
+                self._source_fps = None
+
+    def get_source_fps(self) -> Optional[float]:
+        with self._source_fps_lock:
+            if self._source_fps is None:
+                return None
+            return float(self._source_fps)
 
     def read(self, *, only_new: bool = True) -> Optional[Frame]:
         """Đọc frame mới nhất đã được thread nền lấy về; không block vòng lặp async."""
@@ -215,6 +243,17 @@ class RtspFrameReader:
         if only_new and latest_seq == self._last_delivered_seq:
             return None
         self._last_delivered_seq = latest_seq
+        return Frame(bgr=latest.bgr.copy(), timestamp_utc_ms=latest.timestamp_utc_ms)
+
+    def peek_latest(self) -> Optional[Frame]:
+        """
+        Trả snapshot frame mới nhất nhưng không động vào cờ `only_new`.
+        Dùng cho luồng preview để không ảnh hưởng nhịp đọc của pipeline AI.
+        """
+        with self._latest_lock:
+            latest = self._latest_frame
+        if latest is None:
+            return None
         return Frame(bgr=latest.bgr.copy(), timestamp_utc_ms=latest.timestamp_utc_ms)
 
     def close(self) -> None:

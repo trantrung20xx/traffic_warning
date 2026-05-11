@@ -156,15 +156,17 @@
 	},
 	"performance": {
 		"preview": {
-			"max_fps": 24.0,
-			"jpeg_quality": 75
+			"max_fps": 60.0,
+			"jpeg_quality": 70,
+			"output_width": 1920,
+			"output_height": 1080
 		},
 		"processing": {
 			"fps_window_s": 1.5
 		}
 	},
 	"websocket": {
-		"track_push_interval_ms": 250,
+		"track_push_interval_ms": 150,
 		"listener_queue_maxsize": 200
 	},
 	"ui": {

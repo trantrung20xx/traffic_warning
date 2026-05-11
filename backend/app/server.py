@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import sys
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,8 @@ if sys.platform.startswith("win") and hasattr(asyncio, "WindowsSelectorEventLoop
     # Trên Windows, ProactorEventLoop dễ in stack trace WinError 10054 khi trình duyệt
     # đóng tab hoặc ngắt websocket đột ngột. Selector policy ổn định hơn cho tải FastAPI/WebSocket này.
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+logger = logging.getLogger(__name__)
 
 
 def _is_ignorable_windows_reset(context: dict[str, Any]) -> bool:
@@ -75,6 +78,7 @@ def create_app() -> FastAPI:
     repo_root = Path(__file__).resolve().parents[2]
     manager = CameraManager(repo_root)
     edge_discovery = EdgeDiscoveryService()
+    manager.bind_edge_discovery(edge_discovery)
     app.state.manager = manager
     app.state.edge_discovery = edge_discovery
 
@@ -84,8 +88,20 @@ def create_app() -> FastAPI:
     @app.on_event("startup")
     async def _startup():
         _install_event_loop_exception_guard()
-        await manager.start()
         await edge_discovery.start()
+        rows: list[dict[str, Any]] = []
+        try:
+            # Warm registry sớm để runtime camera có thể dùng fallback IP thay cho host .local
+            # trên các môi trường không resolve được mDNS (đặc biệt Windows).
+            rows = await edge_discovery.rescan()
+        except Exception as exc:
+            # Discovery lỗi không được chặn pipeline AI core.
+            logger.warning("Edge discovery rescan during startup failed: %s", exc)
+        await manager.start()
+        if rows:
+            manager.refresh_runtime_sources_from_discovery(
+                camera_ids={str(row.get("camera_id") or "") for row in rows}
+            )
 
     @app.on_event("shutdown")
     async def _shutdown():

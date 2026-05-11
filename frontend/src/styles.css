@@ -1235,6 +1235,13 @@ select {
   gap: 8px;
 }
 
+.edge-camera-node-status {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.2;
+}
+
 .confirm-dialog-header {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);

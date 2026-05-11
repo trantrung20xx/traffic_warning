@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import AppIcon from "../components/AppIcon";
 import {
+  fetchEdgeCamera,
   fetchEdgeCameras,
   restartEdgeCameraStream,
   rescanEdgeCameras,
@@ -22,28 +23,54 @@ function getStatusBadgeClass(status) {
   return "badge subtle";
 }
 
+function normalizeStreamState(row) {
+  if (row?.stream_running === true) return "running";
+  if (row?.stream_enabled === true) return "enabled";
+  if (row?.stream_enabled === false) return "stopped";
+  return "unknown";
+}
+
+function isStreamStarted(row) {
+  const state = normalizeStreamState(row);
+  return state === "running" || state === "enabled";
+}
+
 export default function EdgeCamerasView() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [busyAction, setBusyAction] = useState("");
 
-  const loadRows = useCallback(async () => {
-    setLoading(true);
-    setError("");
+  const loadRows = useCallback(async ({ silent = false } = {}) => {
+    if (!silent) {
+      setLoading(true);
+      setError("");
+    }
     try {
       const data = await fetchEdgeCameras();
       setRows(Array.isArray(data) ? data : []);
     } catch (loadError) {
-      setError(loadError?.message || "Không thể tải danh sách edge camera.");
-      setRows([]);
+      if (!silent) {
+        setError(loadError?.message || "Không thể tải danh sách edge camera.");
+        setRows([]);
+      }
     } finally {
-      setLoading(false);
+      if (!silent) {
+        setLoading(false);
+      }
     }
   }, []);
 
   useEffect(() => {
     loadRows();
+  }, [loadRows]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      // Poll trạng thái ngắn chu kỳ để khi Pi tắt/mất kết nối, UI đổi offline sớm.
+      loadRows({ silent: true });
+    }, 2500);
+    return () => window.clearInterval(timer);
   }, [loadRows]);
 
   const hasRows = rows.length > 0;
@@ -66,15 +93,37 @@ export default function EdgeCamerasView() {
   }, [loadRows]);
 
   const handleAction = useCallback(
-    async (cameraId, action) => {
-      const key = `${cameraId}:${action}`;
+    async (row, action) => {
+      const cameraId = String(row?.camera_id || "");
+      if (!cameraId) return;
+      const key = action === "restart" ? `${cameraId}:restart` : `${cameraId}:toggle`;
       setBusyAction(key);
       setError("");
       try {
-        if (action === "start") await startEdgeCameraStream(cameraId);
-        if (action === "stop") await stopEdgeCameraStream(cameraId);
-        if (action === "restart") await restartEdgeCameraStream(cameraId);
-        await loadRows();
+        let response = null;
+        if (action === "start") response = await startEdgeCameraStream(cameraId);
+        if (action === "stop") response = await stopEdgeCameraStream(cameraId);
+        if (action === "restart") response = await restartEdgeCameraStream(cameraId);
+
+        const cameraPayload = response?.camera;
+        if (cameraPayload && cameraPayload.camera_id) {
+          setRows((prevRows) =>
+            prevRows.map((item) => (String(item.camera_id || "") === cameraId ? { ...item, ...cameraPayload } : item)),
+          );
+        } else {
+          try {
+            const latest = await fetchEdgeCamera(cameraId);
+            if (latest && latest.camera_id) {
+              setRows((prevRows) =>
+                prevRows.map((item) => (String(item.camera_id || "") === cameraId ? { ...item, ...latest } : item)),
+              );
+            }
+          } catch {
+            // Nếu sync từng camera lỗi thì vẫn fallback reload toàn bộ danh sách.
+          }
+        }
+
+        await loadRows({ silent: true });
       } catch (actionError) {
         setError(actionError?.message || "Không thể gửi lệnh điều khiển stream.");
       } finally {
@@ -123,6 +172,7 @@ export default function EdgeCamerasView() {
                   <th>api_port</th>
                   <th>rtsp_url</th>
                   <th>status</th>
+                  <th>stream</th>
                   <th>last_seen</th>
                   <th>Actions</th>
                 </tr>
@@ -136,24 +186,24 @@ export default function EdgeCamerasView() {
                     <td className="edge-camera-rtsp-cell">{row.rtsp_url || "-"}</td>
                     <td>
                       <span className={getStatusBadgeClass(row.status)}>{row.status || "unknown"}</span>
+                      {row.node_status ? <div className="edge-camera-node-status">{String(row.node_status)}</div> : null}
                     </td>
+                    <td>{normalizeStreamState(row)}</td>
                     <td>{formatLastSeen(row.last_seen)}</td>
                     <td className="edge-camera-actions">
                       <button
-                        className="button secondary compact-button"
-                        onClick={() => handleAction(row.camera_id, "start")}
-                        disabled={busyAction === `${row.camera_id}:start`}>
-                        Start Stream
-                      </button>
-                      <button
-                        className="button warning-action compact-button"
-                        onClick={() => handleAction(row.camera_id, "stop")}
-                        disabled={busyAction === `${row.camera_id}:stop`}>
-                        Stop Stream
+                        className={`button compact-button ${isStreamStarted(row) ? "warning-action" : "secondary"}`}
+                        onClick={() => handleAction(row, isStreamStarted(row) ? "stop" : "start")}
+                        disabled={busyAction === `${row.camera_id}:toggle` || busyAction === `${row.camera_id}:restart`}>
+                        {busyAction === `${row.camera_id}:toggle`
+                          ? "Đang gửi..."
+                          : isStreamStarted(row)
+                            ? "Stop Stream"
+                            : "Start Stream"}
                       </button>
                       <button
                         className="button danger compact-button"
-                        onClick={() => handleAction(row.camera_id, "restart")}
+                        onClick={() => handleAction(row, "restart")}
                         disabled={busyAction === `${row.camera_id}:restart`}>
                         Restart Stream
                       </button>
@@ -168,4 +218,3 @@ export default function EdgeCamerasView() {
     </div>
   );
 }
-

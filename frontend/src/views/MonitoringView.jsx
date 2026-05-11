@@ -185,6 +185,8 @@ export default function MonitoringView({
 	const [vehicles, setVehicles] = useState([]);
 	const [violations, setViolations] = useState([]);
 	const [processingFps, setProcessingFps] = useState(null);
+	const [streamFps, setStreamFps] = useState(null);
+	const [displayStreamFps, setDisplayStreamFps] = useState(null);
 	const [selectedViolation, setSelectedViolation] = useState(null);
 	const [showTrajectoryOverlay, setShowTrajectoryOverlay] = useState(true);
 	const [trajectoryLimit, setTrajectoryLimit] = useState(
@@ -195,7 +197,10 @@ export default function MonitoringView({
 	const nextVehicleOrderRef = useRef(0);
 	const violatingVehicleIdsRef = useRef(new Map());
 	const lastTrackUpdateRef = useRef(0);
+	const lastPreviewFrameAtRef = useRef(0);
+	const previewFpsWindowRef = useRef({ startedAt: 0, frameCount: 0 });
 	const liveTrajectoriesRef = useRef(new Map());
+	const [previewSessionToken, setPreviewSessionToken] = useState(0);
 	const showTrajectoryOverlayRef = useRef(true);
 	const trajectoryLimitRef = useRef(
 		DEFAULT_MONITORING_UI_CONFIG.trajectory.default_limit,
@@ -228,6 +233,48 @@ export default function MonitoringView({
 	}, [showTrajectoryOverlay]);
 
 	useEffect(() => {
+		setPreviewSessionToken((value) => value + 1);
+		lastPreviewFrameAtRef.current = 0;
+		previewFpsWindowRef.current = { startedAt: 0, frameCount: 0 };
+		setDisplayStreamFps(null);
+	}, [selectedCameraId]);
+
+	const previewUrl = useMemo(() => {
+		if (!selectedCameraId) return "";
+		return getCameraPreviewUrl(
+			selectedCameraId,
+			`${selectedCameraId}-${previewSessionToken}`,
+		);
+	}, [previewSessionToken, selectedCameraId]);
+
+	const handlePreviewFrameLoad = () => {
+		const now = Date.now();
+		lastPreviewFrameAtRef.current = now;
+		const windowState = previewFpsWindowRef.current;
+		if (windowState.startedAt <= 0) {
+			previewFpsWindowRef.current = {
+				startedAt: now,
+				frameCount: 1,
+			};
+			return;
+		}
+		const elapsedMs = now - windowState.startedAt;
+		const nextFrameCount = windowState.frameCount + 1;
+		if (elapsedMs >= 1000) {
+			setDisplayStreamFps((nextFrameCount * 1000) / Math.max(elapsedMs, 1));
+			previewFpsWindowRef.current = {
+				startedAt: now,
+				frameCount: 0,
+			};
+			return;
+		}
+		previewFpsWindowRef.current = {
+			startedAt: windowState.startedAt,
+			frameCount: nextFrameCount,
+		};
+	};
+
+	useEffect(() => {
 		if (!selectedCameraId) {
 			setDetail(null);
 			setSelectedViolation(null);
@@ -249,6 +296,8 @@ export default function MonitoringView({
 		setVehicles([]);
 		setViolations([]);
 		setProcessingFps(null);
+		setStreamFps(null);
+		setDisplayStreamFps(null);
 		setTrajectoryRows([]);
 		setSelectedViolation(null);
 		vehicleSeenOrderRef.current = new Map();
@@ -334,6 +383,7 @@ export default function MonitoringView({
 		if (!selectedCameraId) return undefined;
 		const violationUi = monitoringUiConfig.violation;
 		const trackWs = connectTracks(selectedCameraId, (message) => {
+			if (message?.camera_id !== selectedCameraId) return;
 			lastTrackUpdateRef.current = Date.now();
 			const now = Date.now();
 			violatingVehicleIdsRef.current.forEach((expiresAt, vehicleId) => {
@@ -354,8 +404,10 @@ export default function MonitoringView({
 			setProcessingFps(
 				Number.isFinite(message.processing_fps) ? message.processing_fps : null,
 			);
+			setStreamFps(Number.isFinite(message.stream_fps) ? message.stream_fps : null);
 		});
 		const violationWs = connectViolations(selectedCameraId, (event) => {
+			if (event?.camera_id !== selectedCameraId) return;
 			// Đánh dấu "xe đang vi phạm" trong một khoảng thời gian highlight ngắn.
 			violatingVehicleIdsRef.current.set(
 				event.vehicle_id,
@@ -377,6 +429,14 @@ export default function MonitoringView({
 			if (lastUpdate && Date.now() - lastUpdate > processingFpsUi.stale_after_ms) {
 				// Nếu không còn track mới thì xem FPS là stale.
 				setProcessingFps(null);
+				setStreamFps(null);
+			}
+			const lastPreviewFrameAt = lastPreviewFrameAtRef.current;
+			if (
+				lastPreviewFrameAt &&
+				Date.now() - lastPreviewFrameAt > processingFpsUi.stale_after_ms
+			) {
+				setDisplayStreamFps(null);
 			}
 		}, processingFpsUi.poll_interval_ms);
 		return () => window.clearInterval(timer);
@@ -532,8 +592,10 @@ export default function MonitoringView({
 							<div className="video-stage">
 								<img
 									className="video-preview"
+									key={previewUrl || selectedCameraId}
 									alt="Xem trước camera"
-									src={getCameraPreviewUrl(selectedCameraId)}
+									src={previewUrl}
+									onLoad={handlePreviewFrameLoad}
 								/>
 								<CameraCanvas
 									overlay
@@ -545,6 +607,8 @@ export default function MonitoringView({
 										showTrajectoryOverlay ? trajectoryRows : []
 									}
 									processingFps={processingFps}
+									streamFps={streamFps}
+									displayStreamFps={displayStreamFps}
 								/>
 							</div>
 						</>

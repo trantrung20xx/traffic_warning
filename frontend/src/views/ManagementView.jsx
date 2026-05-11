@@ -126,7 +126,9 @@ function getToastTone(message) {
 	if (
 		normalized.includes("không thể") ||
 		normalized.includes("lỗi") ||
-		normalized.includes("chưa ")
+		normalized.includes("chưa ") ||
+		normalized.includes("phải ") ||
+		normalized.includes("không lưu")
 	) {
 		return "warning";
 	}
@@ -1083,7 +1085,12 @@ export default function ManagementView({
 		try {
 			const validation = validatePolygonDraft(draft);
 			if (validation.errors.length > 0) {
-				setLaneMessage(validation.errors[0]);
+				const validationMessage =
+					validation.errors.length > 1
+						? `${validation.errors[0]} Còn ${validation.errors.length - 1} lỗi khác cần xử lý trước khi lưu.`
+						: validation.errors[0];
+				setLaneMessage(validationMessage);
+				setMessage(validationMessage);
 				return;
 			}
 			const payload = buildPayload(draft);

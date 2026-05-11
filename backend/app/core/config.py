@@ -636,6 +636,8 @@ class AppConfig(BaseModel):
     rtsp_reconnect_delay_s: float = 2.0
     preview_max_fps: float = 15.0
     preview_jpeg_quality: int = 75
+    preview_output_width: int = 1280
+    preview_output_height: int = 720
     processing_fps_window_s: float = 1.5
     processing_prune_interval_ms: int = 700
     license_plate_worker_max_pending_jobs: int = 64
@@ -1122,6 +1124,8 @@ def load_app_config(repo_root: Path) -> AppConfig:
         rtsp_reconnect_delay_s=float(_setting(settings, ("camera", "stream", "rtsp_reconnect_delay_s"), 2.0)),
         preview_max_fps=float(_setting(settings, ("performance", "preview", "max_fps"), 15.0)),
         preview_jpeg_quality=int(_setting(settings, ("performance", "preview", "jpeg_quality"), 75)),
+        preview_output_width=int(_setting(settings, ("performance", "preview", "output_width"), 1280)),
+        preview_output_height=int(_setting(settings, ("performance", "preview", "output_height"), 720)),
         processing_fps_window_s=float(_setting(settings, ("performance", "processing", "fps_window_s"), 1.5)),
         processing_prune_interval_ms=int(
             _setting(settings, ("performance", "processing", "prune_interval_ms"), 700)

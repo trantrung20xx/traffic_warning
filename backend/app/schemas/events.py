@@ -31,6 +31,7 @@ class TrackMessage(BaseModel):
     camera_id: str
     timestamp: datetime
     processing_fps: Optional[float] = None
+    stream_fps: Optional[float] = None
     vehicles: list[TrackVehicle]
 
 

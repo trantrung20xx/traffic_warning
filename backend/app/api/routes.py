@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from io import BytesIO
 from pathlib import Path
 from typing import Optional
@@ -19,10 +20,11 @@ from app.core.violation_exports import (
 from app.managers.camera_manager import CameraManager
 from app.schemas.camera import CameraConfig
 from app.db.repository import query_violation_counts
-from app.services.edge_discovery import EdgeDiscoveryService
+from app.services.edge_discovery import EdgeDiscoveryService, EdgeStreamActionError
 
 
 def create_api_router(manager: CameraManager, edge_discovery: EdgeDiscoveryService) -> APIRouter:
+    logger = logging.getLogger(__name__)
     router = APIRouter()
     # Danh sách MIME/đuôi file nền được backend chấp nhận.
     allowed_upload_content_types = {"image/jpeg": ".jpg", "image/png": ".png"}
@@ -67,15 +69,56 @@ def create_api_router(manager: CameraManager, edge_discovery: EdgeDiscoveryServi
         return {"cameras": manager.list_cameras()}
 
     @router.get("/api/edge-cameras")
-    def list_edge_cameras():
-        return edge_discovery.list_registry()
+    async def list_edge_cameras():
+        try:
+            await asyncio.wait_for(edge_discovery.refresh_status(), timeout=4.0)
+        except asyncio.TimeoutError:
+            logger.warning("Edge status refresh timed out while listing edge cameras.")
+        except Exception as exc:
+            logger.warning("Edge status refresh failed while listing edge cameras: %s", exc)
+        rows = edge_discovery.list_registry()
+        if rows:
+            manager.refresh_runtime_sources_from_discovery(
+                camera_ids={str(row.get("camera_id") or "") for row in rows}
+            )
+        return rows
 
     @router.post("/api/edge-cameras/rescan")
     async def rescan_edge_cameras():
-        return await edge_discovery.rescan()
+        try:
+            rows = await asyncio.wait_for(edge_discovery.rescan(), timeout=8.0)
+        except asyncio.TimeoutError:
+            logger.warning("Edge rescan timed out.")
+            rows = edge_discovery.list_registry()
+        except Exception as exc:
+            logger.warning("Edge rescan failed: %s", exc)
+            rows = edge_discovery.list_registry()
+        try:
+            rows = await asyncio.wait_for(edge_discovery.refresh_status(), timeout=4.0)
+        except asyncio.TimeoutError:
+            logger.warning("Edge status refresh timed out right after rescan.")
+            rows = edge_discovery.list_registry()
+        except Exception as exc:
+            logger.warning("Edge status refresh failed right after rescan: %s", exc)
+            rows = edge_discovery.list_registry()
+        if rows:
+            manager.refresh_runtime_sources_from_discovery(
+                camera_ids={str(row.get("camera_id") or "") for row in rows}
+            )
+        return rows
+
+    @router.get("/api/edge-cameras/debug")
+    def debug_edge_cameras():
+        return edge_discovery.debug_snapshot()
 
     @router.get("/api/edge-cameras/{camera_id}")
-    def get_edge_camera(camera_id: str):
+    async def get_edge_camera(camera_id: str):
+        try:
+            await asyncio.wait_for(edge_discovery.refresh_status(camera_id=camera_id), timeout=3.0)
+        except asyncio.TimeoutError:
+            logger.warning("Edge status refresh timed out for camera_id=%s", camera_id)
+        except Exception as exc:
+            logger.warning("Edge status refresh failed for camera_id=%s: %s", camera_id, exc)
         item = edge_discovery.get_camera(camera_id)
         if item is None:
             raise HTTPException(status_code=404, detail="Edge camera not found")
@@ -86,6 +129,11 @@ def create_api_router(manager: CameraManager, edge_discovery: EdgeDiscoveryServi
             return await edge_discovery.proxy_stream_action(camera_id, action)
         except KeyError:
             raise HTTPException(status_code=404, detail="Edge camera not found")
+        except EdgeStreamActionError as exc:
+            return JSONResponse(
+                status_code=max(400, min(int(exc.status_code), 599)),
+                content={"message": exc.message},
+            )
         except ConnectionError:
             return JSONResponse(
                 status_code=503,
@@ -210,22 +258,52 @@ def create_api_router(manager: CameraManager, edge_discovery: EdgeDiscoveryServi
         Phát MJPEG cho thẻ `<img src="...">` trên trình duyệt.
         Suy luận AI vẫn chỉ chạy trong vòng lặp xử lý chính; endpoint này chỉ phát ảnh JPEG đã mã hóa sẵn.
         """
+        try:
+            manager.get_camera_detail(camera_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Camera not found")
 
         async def frames():
             # Boundary chuẩn của multipart/x-mixed-replace cho MJPEG stream.
             boundary = b"--frame"
-            # Dùng cùng nhịp preview_fps cấu hình để tránh spam network.
             preview_fps = max(float(manager.cfg.preview_max_fps), 0.1)
+            wait_timeout_s = max(1.0 / preview_fps, 0.02)
+            last_seq = 0
             while True:
-                # Chỉ stream JPEG đã encode sẵn từ context, không chạy lại inference tại endpoint.
-                jpg = manager.get_camera_preview_jpeg(camera_id)
+                if last_seq <= 0:
+                    seed_jpg, seed_seq = manager.get_camera_preview_snapshot(camera_id)
+                    if seed_jpg is not None and seed_seq > 0:
+                        last_seq = int(seed_seq)
+                        yield (
+                            boundary
+                            + b"\r\nContent-Type: image/jpeg\r\n\r\n"
+                            + seed_jpg
+                            + b"\r\n"
+                        )
+                        continue
+
+                jpg, seq = await asyncio.to_thread(
+                    manager.wait_camera_preview_after,
+                    camera_id=camera_id,
+                    last_seq=last_seq,
+                    timeout_s=wait_timeout_s,
+                )
+                if jpg is None or seq <= last_seq:
+                    # Không có frame mới trong timeout hiện tại.
+                    await asyncio.sleep(0)
+                    continue
+                last_seq = int(seq)
                 if jpg:
                     yield boundary + b"\r\nContent-Type: image/jpeg\r\n\r\n" + jpg + b"\r\n"
-                await asyncio.sleep(1.0 / preview_fps)
 
         return StreamingResponse(
             frames(),
             media_type="multipart/x-mixed-replace; boundary=frame",
+            headers={
+                # Tránh browser/proxy tái sử dụng frame cũ khi đổi camera.
+                "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+                "Pragma": "no-cache",
+            },
         )
 
     @router.get("/api/violations/evidence/{evidence_path:path}")
