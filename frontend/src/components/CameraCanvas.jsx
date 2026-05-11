@@ -203,7 +203,6 @@ export default function CameraCanvas({
 	trajectoryOverlays = [],
 	processingFps = null,
 	streamFps = null,
-	displayStreamFps = null,
 	overlay = false,
 	selectedLaneId = null,
 	selectedVertexIndex = null,
@@ -724,8 +723,7 @@ export default function CameraCanvas({
 
 		const shouldShowFps =
 			Number.isFinite(processingFps) ||
-			Number.isFinite(streamFps) ||
-			Number.isFinite(displayStreamFps);
+			Number.isFinite(streamFps);
 		if (shouldShowFps) {
 			const aiLabel = Number.isFinite(processingFps)
 				? `AI FPS: ${processingFps.toFixed(1)}`
@@ -733,9 +731,6 @@ export default function CameraCanvas({
 			const sourceStreamLabel = Number.isFinite(streamFps)
 				? `Source FPS: ${streamFps.toFixed(1)}`
 				: "Source FPS: -";
-			const displayStreamLabel = Number.isFinite(displayStreamFps)
-				? `Display FPS: ${displayStreamFps.toFixed(1)}`
-				: "Display FPS: -";
 			const fpsFont = isMonitoringOverlay
 				? displayMetrics.font(MONITOR_OVERLAY.fpsFontPx, "700")
 				: "700 14px sans-serif";
@@ -750,7 +745,6 @@ export default function CameraCanvas({
 			const textWidth = Math.max(
 				ctx.measureText(aiLabel).width,
 				ctx.measureText(sourceStreamLabel).width,
-				ctx.measureText(displayStreamLabel).width,
 			);
 			const textX = frameWidth - textWidth - fpsMargin;
 			const textY =
@@ -764,11 +758,6 @@ export default function CameraCanvas({
 				: "rgba(255,255,255,0.96)";
 			ctx.fillText(aiLabel, textX, textY);
 			ctx.fillText(sourceStreamLabel, textX, textY + labelHeight + labelGap);
-			ctx.fillText(
-				displayStreamLabel,
-				textX,
-				textY + (labelHeight + labelGap) * 2,
-			);
 		}
 
 		if (editable) {
@@ -810,7 +799,6 @@ export default function CameraCanvas({
 		trajectoryOverlays,
 		processingFps,
 		streamFps,
-		displayStreamFps,
 		canvasDisplaySize.width,
 		canvasDisplaySize.height,
 	]);

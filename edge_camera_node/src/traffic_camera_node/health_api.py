@@ -85,7 +85,15 @@ class HealthAPIServer:
                         status=HTTPStatus.CONFLICT,
                     )
                     return False
-                self._send_json({"status": "accepted", "stream_enabled": True})
+                snapshot = owner._state.snapshot()
+                self._send_json(
+                    {
+                        "status": "accepted",
+                        "stream_enabled": True,
+                        "stream_running": snapshot.stream_running,
+                        "fps_estimate": snapshot.fps_estimate,
+                    }
+                )
                 return True
 
             def _handle_stream_stop(self, query_string: str) -> bool:
@@ -99,7 +107,15 @@ class HealthAPIServer:
                         status=HTTPStatus.CONFLICT,
                     )
                     return False
-                self._send_json({"status": "accepted", "stream_enabled": False})
+                snapshot = owner._state.snapshot()
+                self._send_json(
+                    {
+                        "status": "accepted",
+                        "stream_enabled": False,
+                        "stream_running": snapshot.stream_running,
+                        "fps_estimate": snapshot.fps_estimate,
+                    }
+                )
                 return True
 
             def _handle_stream_restart(self, query_string: str) -> bool:
@@ -113,7 +129,16 @@ class HealthAPIServer:
                         status=HTTPStatus.CONFLICT,
                     )
                     return False
-                self._send_json({"status": "accepted", "stream_restart_requested": True})
+                snapshot = owner._state.snapshot()
+                self._send_json(
+                    {
+                        "status": "accepted",
+                        "stream_restart_requested": True,
+                        "stream_enabled": snapshot.stream_enabled,
+                        "stream_running": snapshot.stream_running,
+                        "fps_estimate": snapshot.fps_estimate,
+                    }
+                )
                 return True
 
             def do_OPTIONS(self) -> None:  # noqa: N802

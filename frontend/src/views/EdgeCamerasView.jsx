@@ -25,14 +25,17 @@ function getStatusBadgeClass(status) {
 
 function normalizeStreamState(row) {
   if (row?.stream_running === true) return "running";
-  if (row?.stream_enabled === true) return "enabled";
+  if (row?.stream_enabled === true) return "starting";
   if (row?.stream_enabled === false) return "stopped";
   return "unknown";
 }
 
 function isStreamStarted(row) {
-  const state = normalizeStreamState(row);
-  return state === "running" || state === "enabled";
+  return row?.stream_running === true;
+}
+
+function isEdgeOnline(row) {
+  return String(row?.status || "").toLowerCase() === "online";
 }
 
 export default function EdgeCamerasView() {
@@ -194,7 +197,11 @@ export default function EdgeCamerasView() {
                       <button
                         className={`button compact-button ${isStreamStarted(row) ? "warning-action" : "secondary"}`}
                         onClick={() => handleAction(row, isStreamStarted(row) ? "stop" : "start")}
-                        disabled={busyAction === `${row.camera_id}:toggle` || busyAction === `${row.camera_id}:restart`}>
+                        disabled={
+                          !isEdgeOnline(row) ||
+                          busyAction === `${row.camera_id}:toggle` ||
+                          busyAction === `${row.camera_id}:restart`
+                        }>
                         {busyAction === `${row.camera_id}:toggle`
                           ? "Đang gửi..."
                           : isStreamStarted(row)
@@ -204,7 +211,7 @@ export default function EdgeCamerasView() {
                       <button
                         className="button danger compact-button"
                         onClick={() => handleAction(row, "restart")}
-                        disabled={busyAction === `${row.camera_id}:restart`}>
+                        disabled={!isEdgeOnline(row) || busyAction === `${row.camera_id}:restart`}>
                         Restart Stream
                       </button>
                     </td>

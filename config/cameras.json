@@ -2,7 +2,7 @@
   "cameras": [
     {
       "camera_id": "cam_01",
-      "rtsp_url": "",
+      "rtsp_url": "D:\\Workspace\\DATN\\traffic_video_data\\4k\\4K Road traffic video for object detection and tracking - free download now!.mp4",
       "camera_type": "roadside",
       "view_direction": "Đông - Bắc",
       "location": {

@@ -263,6 +263,7 @@ class EdgeDiscoveryService:
                 reached_port=reached_port,
             )
             self._apply_stream_action_hint(camera_id=camera_id, action_name=action_name, edge_payload=payload)
+            await self._wait_for_stream_action_state(camera_id=camera_id, action_name=action_name)
             latest = self.get_camera(camera_id)
             return {
                 "ok": True,
@@ -276,6 +277,46 @@ class EdgeDiscoveryService:
         if last_error is not None:
             raise ConnectionError("edge camera is offline or unreachable") from last_error
         raise ConnectionError("edge camera is offline or unreachable")
+
+    async def _wait_for_stream_action_state(self, *, camera_id: str, action_name: str) -> None:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + (4.5 if action_name in {"start", "restart"} else 3.0)
+
+        while True:
+            item = self.get_camera(camera_id)
+            if not item:
+                return
+
+            try:
+                reachable = await asyncio.to_thread(self._probe_health_reachable, item)
+            except Exception as exc:
+                self._logger.warning(
+                    "Failed to probe edge stream state after %s for %s: %s",
+                    action_name,
+                    camera_id,
+                    exc,
+                )
+                reachable = None
+            if reachable is not None:
+                reached_host, reached_port, health_payload = reachable
+                self._mark_camera_online(
+                    camera_id,
+                    reached_host=reached_host,
+                    reached_port=reached_port,
+                    health_payload=health_payload,
+                )
+                item = self.get_camera(camera_id) or item
+
+            stream_running = item.get("stream_running") is True
+            stream_enabled = item.get("stream_enabled") is True
+            if action_name == "stop" and not stream_running and not stream_enabled:
+                return
+            if action_name in {"start", "restart"} and stream_running:
+                return
+
+            if loop.time() >= deadline:
+                return
+            await asyncio.sleep(0.35)
 
     def _apply_stream_action_hint(
         self,
@@ -302,8 +343,11 @@ class EdgeDiscoveryService:
                     updated["stream_enabled"] = bool(edge_payload.get("stream_enabled"))
                 if "stream_running" in edge_payload:
                     updated["stream_running"] = bool(edge_payload.get("stream_running"))
-                if "status" in edge_payload:
-                    updated["node_status"] = str(edge_payload.get("status") or updated.get("node_status") or "")
+                if "fps_estimate" in edge_payload:
+                    try:
+                        updated["edge_fps"] = float(edge_payload.get("fps_estimate"))
+                    except (TypeError, ValueError):
+                        pass
 
             self._registry[camera_id] = updated
 

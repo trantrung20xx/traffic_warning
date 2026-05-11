@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -48,6 +49,9 @@ class CameraSourceKind(str, Enum):
 
 
 VIDEO_CAPTURE_CAPABILITIES = (0x00000001, 0x00001000)
+V4L2_FPS_PATTERN = re.compile(r"\((?P<fps>\d+(?:\.\d+)?)\s+fps\)")
+V4L2_FORMAT_PATTERN = re.compile(r"\[\d+\]:\s+'(?P<format>[^']+)'")
+V4L2_SIZE_PATTERN = re.compile(r"Size:\s+Discrete\s+(?P<width>\d+)x(?P<height>\d+)")
 
 
 def _image_tuning_args(profile: str) -> list[str]:
@@ -100,6 +104,7 @@ class RtspPipeline:
         # Xác định loại nguồn camera theo cấu hình và tình trạng thực tế.
         self._source_kind = self._resolve_source_kind()
         self._active_usb_device: str | None = None
+        self._active_usb_input_format: str | None = None
 
     def _resolve_binary(self, configured_binary: str) -> str:
         found = shutil.which(configured_binary)
@@ -332,6 +337,7 @@ class RtspPipeline:
         camera = self._config.camera
         stream = self._config.stream
         usb_device = self._resolve_usb_device_path()
+        input_format = self._resolve_usb_input_format(usb_device)
         stream_name = self._identity.stream_path.lstrip("/")
         target_rtsp = f"rtsp://127.0.0.1:{self._port}/{stream_name}"
 
@@ -348,8 +354,8 @@ class RtspPipeline:
             f"{camera.width}x{camera.height}",
         ]
 
-        if stream.usb_input_format and stream.usb_input_format != "auto":
-            cmd.extend(["-input_format", stream.usb_input_format])
+        if input_format:
+            cmd.extend(["-input_format", input_format])
 
         cmd.extend(
             [
@@ -378,6 +384,97 @@ class RtspPipeline:
             ]
         )
         return cmd
+
+    def _resolve_usb_input_format(self, usb_device: str) -> str:
+        configured = str(self._config.stream.usb_input_format or "").strip().lower()
+        if configured and configured != "auto":
+            return configured
+
+        camera = self._config.camera
+        listing = self._query_v4l2_formats(usb_device)
+        selected = ""
+        if listing:
+            if self._v4l2_supports_format(
+                listing,
+                pixel_format="MJPG",
+                width=camera.width,
+                height=camera.height,
+                fps=camera.fps,
+            ):
+                selected = "mjpeg"
+            elif self._v4l2_supports_format(
+                listing,
+                pixel_format="YUYV",
+                width=camera.width,
+                height=camera.height,
+                fps=camera.fps,
+            ):
+                selected = "yuyv422"
+
+        if selected and selected != self._active_usb_input_format:
+            self._active_usb_input_format = selected
+            self._logger.info(
+                "Using USB input format: %s for %sx%s@%sfps",
+                selected,
+                camera.width,
+                camera.height,
+                camera.fps,
+            )
+        return selected
+
+    def _query_v4l2_formats(self, usb_device: str) -> str:
+        v4l2_ctl = shutil.which("v4l2-ctl")
+        if not v4l2_ctl:
+            return ""
+        try:
+            result = subprocess.run(
+                [v4l2_ctl, "--device", usb_device, "--list-formats-ext"],
+                capture_output=True,
+                text=True,
+                timeout=3,
+                check=False,
+            )
+        except Exception as exc:
+            self._logger.debug("Unable to query V4L2 formats for %s: %s", usb_device, exc)
+            return ""
+        if result.returncode != 0:
+            self._logger.debug("v4l2-ctl format query failed for %s: %s", usb_device, result.stderr.strip())
+            return ""
+        return result.stdout
+
+    def _v4l2_supports_format(
+        self,
+        listing: str,
+        *,
+        pixel_format: str,
+        width: int,
+        height: int,
+        fps: int,
+    ) -> bool:
+        current_format = ""
+        current_size_matches = False
+        for line in listing.splitlines():
+            format_match = V4L2_FORMAT_PATTERN.search(line)
+            if format_match:
+                current_format = format_match.group("format")
+                current_size_matches = False
+                continue
+
+            size_match = V4L2_SIZE_PATTERN.search(line)
+            if size_match:
+                current_size_matches = (
+                    current_format == pixel_format
+                    and int(size_match.group("width")) == int(width)
+                    and int(size_match.group("height")) == int(height)
+                )
+                continue
+
+            if current_format != pixel_format or not current_size_matches:
+                continue
+            fps_match = V4L2_FPS_PATTERN.search(line)
+            if fps_match and float(fps_match.group("fps")) >= float(fps) - 0.5:
+                return True
+        return False
 
     def _build_source_command(self, mode: PipelineMode) -> list[str]:
         if self._source_kind == CameraSourceKind.RPI_CSI:

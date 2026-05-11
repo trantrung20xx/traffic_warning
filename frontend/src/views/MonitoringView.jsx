@@ -186,7 +186,6 @@ export default function MonitoringView({
 	const [violations, setViolations] = useState([]);
 	const [processingFps, setProcessingFps] = useState(null);
 	const [streamFps, setStreamFps] = useState(null);
-	const [displayStreamFps, setDisplayStreamFps] = useState(null);
 	const [selectedViolation, setSelectedViolation] = useState(null);
 	const [showTrajectoryOverlay, setShowTrajectoryOverlay] = useState(true);
 	const [trajectoryLimit, setTrajectoryLimit] = useState(
@@ -197,8 +196,6 @@ export default function MonitoringView({
 	const nextVehicleOrderRef = useRef(0);
 	const violatingVehicleIdsRef = useRef(new Map());
 	const lastTrackUpdateRef = useRef(0);
-	const lastPreviewFrameAtRef = useRef(0);
-	const previewFpsWindowRef = useRef({ startedAt: 0, frameCount: 0 });
 	const liveTrajectoriesRef = useRef(new Map());
 	const [previewSessionToken, setPreviewSessionToken] = useState(0);
 	const showTrajectoryOverlayRef = useRef(true);
@@ -234,9 +231,6 @@ export default function MonitoringView({
 
 	useEffect(() => {
 		setPreviewSessionToken((value) => value + 1);
-		lastPreviewFrameAtRef.current = 0;
-		previewFpsWindowRef.current = { startedAt: 0, frameCount: 0 };
-		setDisplayStreamFps(null);
 	}, [selectedCameraId]);
 
 	const previewUrl = useMemo(() => {
@@ -246,33 +240,6 @@ export default function MonitoringView({
 			`${selectedCameraId}-${previewSessionToken}`,
 		);
 	}, [previewSessionToken, selectedCameraId]);
-
-	const handlePreviewFrameLoad = () => {
-		const now = Date.now();
-		lastPreviewFrameAtRef.current = now;
-		const windowState = previewFpsWindowRef.current;
-		if (windowState.startedAt <= 0) {
-			previewFpsWindowRef.current = {
-				startedAt: now,
-				frameCount: 1,
-			};
-			return;
-		}
-		const elapsedMs = now - windowState.startedAt;
-		const nextFrameCount = windowState.frameCount + 1;
-		if (elapsedMs >= 1000) {
-			setDisplayStreamFps((nextFrameCount * 1000) / Math.max(elapsedMs, 1));
-			previewFpsWindowRef.current = {
-				startedAt: now,
-				frameCount: 0,
-			};
-			return;
-		}
-		previewFpsWindowRef.current = {
-			startedAt: windowState.startedAt,
-			frameCount: nextFrameCount,
-		};
-	};
 
 	useEffect(() => {
 		if (!selectedCameraId) {
@@ -431,13 +398,6 @@ export default function MonitoringView({
 				setProcessingFps(null);
 				setStreamFps(null);
 			}
-			const lastPreviewFrameAt = lastPreviewFrameAtRef.current;
-			if (
-				lastPreviewFrameAt &&
-				Date.now() - lastPreviewFrameAt > processingFpsUi.stale_after_ms
-			) {
-				setDisplayStreamFps(null);
-			}
 		}, processingFpsUi.poll_interval_ms);
 		return () => window.clearInterval(timer);
 	}, [monitoringUiConfig.processing_fps, selectedCameraId]);
@@ -595,7 +555,6 @@ export default function MonitoringView({
 									key={previewUrl || selectedCameraId}
 									alt="Xem trước camera"
 									src={previewUrl}
-									onLoad={handlePreviewFrameLoad}
 								/>
 								<CameraCanvas
 									overlay
@@ -608,7 +567,6 @@ export default function MonitoringView({
 									}
 									processingFps={processingFps}
 									streamFps={streamFps}
-									displayStreamFps={displayStreamFps}
 								/>
 							</div>
 						</>

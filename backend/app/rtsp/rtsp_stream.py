@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 import threading
 import time
 from collections import deque
@@ -12,6 +13,7 @@ import numpy as np
 
 
 NETWORK_SOURCE_PREFIXES = ("rtsp://", "rtsps://", "http://", "https://")
+RTSP_SOURCE_PREFIXES = ("rtsp://", "rtsps://")
 
 
 @dataclass(frozen=True)
@@ -83,6 +85,7 @@ class RtspFrameReader:
         self._cap_lock = threading.Lock()
         self._latest_lock = threading.Lock()
         self._cap: Optional[cv2.VideoCapture] = None
+        self._ffmpeg_proc: Optional[subprocess.Popen] = None
         self._latest_frame: Optional[Frame] = None
         # Seq tăng mỗi frame để read(only_new=True) biết frame đã đổi chưa.
         self._latest_frame_seq: int = 0
@@ -94,6 +97,9 @@ class RtspFrameReader:
         # Nhịp pacing chỉ áp dụng cho source là file video local.
         self._file_frame_interval_s: Optional[float] = None
         self._file_next_deadline_s: Optional[float] = None
+        self._source_is_rtsp = self.rtsp_url.lower().startswith(RTSP_SOURCE_PREFIXES)
+        self._use_ffmpeg_pipe = self._source_is_rtsp and bool(self.frame_width and self.frame_height)
+        self._ffmpeg_frame_size = int(self.frame_width or 0) * int(self.frame_height or 0) * 3
         self._stop_event = threading.Event()
         self._reader_thread = threading.Thread(
             target=self._reader_loop,
@@ -108,6 +114,13 @@ class RtspFrameReader:
                 self._cap.release()
             except Exception:
                 pass
+            self._cap = None
+        if self._ffmpeg_proc is not None:
+            self._terminate_ffmpeg(self._ffmpeg_proc)
+            self._ffmpeg_proc = None
+        if self._use_ffmpeg_pipe:
+            self._ffmpeg_proc = self._start_ffmpeg_pipe()
+            return
         # Mở lại VideoCapture mỗi lần reconnect.
         self._cap = cv2.VideoCapture(self.rtsp_url)
         cap = self._cap
@@ -135,6 +148,61 @@ class RtspFrameReader:
             else:
                 self._file_frame_interval_s = None
                 self._file_next_deadline_s = None
+
+    def _start_ffmpeg_pipe(self) -> subprocess.Popen:
+        command = [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-rtsp_transport",
+            "tcp",
+            "-rw_timeout",
+            "2000000",
+            "-i",
+            self.rtsp_url,
+            "-an",
+            "-sn",
+            "-dn",
+            "-vf",
+            f"scale={int(self.frame_width)}:{int(self.frame_height)}",
+            "-pix_fmt",
+            "bgr24",
+            "-f",
+            "rawvideo",
+            "pipe:1",
+        ]
+        return subprocess.Popen(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            bufsize=self._ffmpeg_frame_size,
+        )
+
+    def _read_ffmpeg_frame(self) -> Optional[np.ndarray]:
+        proc = self._ffmpeg_proc
+        if proc is None or proc.stdout is None or proc.poll() is not None:
+            return None
+        raw = proc.stdout.read(self._ffmpeg_frame_size)
+        if len(raw) != self._ffmpeg_frame_size:
+            return None
+        return np.frombuffer(raw, dtype=np.uint8).reshape(
+            (int(self.frame_height), int(self.frame_width), 3)
+        ).copy()
+
+    def _terminate_ffmpeg(self, proc: subprocess.Popen) -> None:
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=1.0)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+        try:
+            if proc.stdout:
+                proc.stdout.close()
+        except Exception:
+            pass
 
     def _configure_file_playback_pacing(self, cap: cv2.VideoCapture) -> None:
         fps = 0.0
