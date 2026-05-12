@@ -104,7 +104,12 @@ class RtspFrameReader:
             except Exception:
                 pass
         # Mở lại VideoCapture mỗi lần reconnect.
-        self._cap = cv2.VideoCapture(self.rtsp_url)
+        if self._source_is_local_file:
+            # Với file local, mở đơn giản để tận dụng caching của OS nếu có.
+            self._cap = cv2.VideoCapture(self.rtsp_url)
+        else:
+            # Với stream mạng, thêm flag để mở nhanh hơn nếu có thể.
+            self._cap = cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG)
         cap = self._cap
         if cap is not None:
             try:

@@ -2,7 +2,7 @@
   "cameras": [
     {
       "camera_id": "cam_01",
-      "rtsp_url": "D:\\Workspace\\DATN\\traffic_video_data\\4k\\4K Road traffic video for object detection and tracking - free download now!.mp4",
+      "rtsp_url": "rtsp://cam-2ccf6788f9e6.local:8554/cam",
       "camera_type": "roadside",
       "location": {
         "road_name": ""
