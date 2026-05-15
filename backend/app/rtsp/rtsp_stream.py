@@ -157,7 +157,7 @@ class RtspFrameReader:
             "error",
             "-rtsp_transport",
             "tcp",
-            "-rw_timeout",
+            "-timeout",
             "2000000",
             "-i",
             self.rtsp_url,
