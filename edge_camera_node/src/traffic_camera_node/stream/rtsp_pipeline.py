@@ -52,6 +52,19 @@ VIDEO_CAPTURE_CAPABILITIES = (0x00000001, 0x00001000)
 V4L2_FPS_PATTERN = re.compile(r"\((?P<fps>\d+(?:\.\d+)?)\s+fps\)")
 V4L2_FORMAT_PATTERN = re.compile(r"\[\d+\]:\s+'(?P<format>[^']+)'")
 V4L2_SIZE_PATTERN = re.compile(r"Size:\s+Discrete\s+(?P<width>\d+)x(?P<height>\d+)")
+V4L2_TO_FFMPEG_INPUT_FORMAT = {
+    "MJPG": "mjpeg",
+    "YUYV": "yuyv422",
+}
+FFMPEG_TO_V4L2_INPUT_FORMAT = {value: key for key, value in V4L2_TO_FFMPEG_INPUT_FORMAT.items()}
+
+
+@dataclass(frozen=True)
+class UsbCaptureMode:
+    width: int
+    height: int
+    fps: float
+    input_format: str
 
 
 def _image_tuning_args(profile: str) -> list[str]:
@@ -334,10 +347,9 @@ class RtspPipeline:
     def _build_usb_source_command(self, mode: PipelineMode) -> list[str]:
         # USB webcam: ffmpeg đọc V4L2 và publish RTSP trực tiếp vào MediaMTX.
         del mode
-        camera = self._config.camera
         stream = self._config.stream
         usb_device = self._resolve_usb_device_path()
-        input_format = self._resolve_usb_input_format(usb_device)
+        capture_mode = self._resolve_usb_capture_mode(usb_device)
         stream_name = self._identity.stream_path.lstrip("/")
         target_rtsp = f"rtsp://127.0.0.1:{self._port}/{stream_name}"
 
@@ -349,13 +361,13 @@ class RtspPipeline:
             "-f",
             "v4l2",
             "-framerate",
-            str(camera.fps),
+            self._format_fps_value(capture_mode.fps),
             "-video_size",
-            f"{camera.width}x{camera.height}",
+            f"{capture_mode.width}x{capture_mode.height}",
         ]
 
-        if input_format:
-            cmd.extend(["-input_format", input_format])
+        if capture_mode.input_format:
+            cmd.extend(["-input_format", capture_mode.input_format])
 
         cmd.extend(
             [
@@ -373,7 +385,7 @@ class RtspPipeline:
                 "-b:v",
                 str(stream.bitrate),
                 "-g",
-                str(max(10, camera.fps)),
+                str(max(10, int(round(capture_mode.fps)))),
                 "-x264-params",
                 "repeat-headers=1",
                 "-f",
@@ -385,42 +397,161 @@ class RtspPipeline:
         )
         return cmd
 
-    def _resolve_usb_input_format(self, usb_device: str) -> str:
-        configured = str(self._config.stream.usb_input_format or "").strip().lower()
-        if configured and configured != "auto":
-            return configured
+    @staticmethod
+    def _format_fps_value(fps: float) -> str:
+        rounded = round(float(fps), 3)
+        if abs(rounded - round(rounded)) < 1e-6:
+            return str(int(round(rounded)))
+        return f"{rounded:g}"
 
+    def _resolve_usb_capture_mode(self, usb_device: str) -> UsbCaptureMode:
         camera = self._config.camera
-        listing = self._query_v4l2_formats(usb_device)
-        selected = ""
-        if listing:
-            if self._v4l2_supports_format(
-                listing,
-                pixel_format="MJPG",
-                width=camera.width,
-                height=camera.height,
-                fps=camera.fps,
-            ):
-                selected = "mjpeg"
-            elif self._v4l2_supports_format(
-                listing,
-                pixel_format="YUYV",
-                width=camera.width,
-                height=camera.height,
-                fps=camera.fps,
-            ):
-                selected = "yuyv422"
+        configured_input = str(self._config.stream.usb_input_format or "").strip().lower()
+        if configured_input == "auto":
+            configured_input = ""
 
-        if selected and selected != self._active_usb_input_format:
-            self._active_usb_input_format = selected
-            self._logger.info(
-                "Using USB input format: %s for %sx%s@%sfps",
-                selected,
+        requested_fps = float(camera.fps)
+        requested = UsbCaptureMode(
+            width=int(camera.width),
+            height=int(camera.height),
+            fps=requested_fps,
+            input_format=configured_input,
+        )
+
+        listing = self._query_v4l2_formats(usb_device)
+        if not listing:
+            return requested
+
+        modes = self._parse_v4l2_modes(listing)
+        if not modes:
+            return requested
+
+        preferred_formats: tuple[str, ...] = ("MJPG", "YUYV")
+        configured_v4l2 = FFMPEG_TO_V4L2_INPUT_FORMAT.get(configured_input)
+        if configured_input and configured_v4l2:
+            preferred_formats = (configured_v4l2,)
+        elif configured_input and not configured_v4l2:
+            self._logger.warning(
+                "Unsupported configured usb_input_format=%s; auto-selecting supported format.",
+                configured_input,
+            )
+
+        selected_format, selected_width, selected_height, selected_fps = self._select_usb_mode(
+            modes=modes,
+            requested_width=int(camera.width),
+            requested_height=int(camera.height),
+            requested_fps=float(camera.fps),
+            preferred_formats=preferred_formats,
+        )
+
+        selected_input = V4L2_TO_FFMPEG_INPUT_FORMAT.get(selected_format, "")
+        if configured_input and configured_v4l2 and configured_v4l2 != selected_format:
+            self._logger.warning(
+                "Configured USB input format %s is not available at %sx%s@%sfps; using %s.",
+                configured_input,
+                selected_width,
+                selected_height,
+                self._format_fps_value(selected_fps),
+                selected_input or selected_format,
+            )
+
+        if (
+            selected_width != int(camera.width)
+            or selected_height != int(camera.height)
+            or abs(selected_fps - float(camera.fps)) > 0.5
+        ):
+            self._logger.warning(
+                "Requested USB mode %sx%s@%sfps is unsupported on %s; using %sx%s@%sfps.",
                 camera.width,
                 camera.height,
                 camera.fps,
+                usb_device,
+                selected_width,
+                selected_height,
+                self._format_fps_value(selected_fps),
             )
-        return selected
+
+        if selected_input and selected_input != self._active_usb_input_format:
+            self._active_usb_input_format = selected_input
+            self._logger.info(
+                "Using USB input format: %s for %sx%s@%sfps",
+                selected_input,
+                selected_width,
+                selected_height,
+                self._format_fps_value(selected_fps),
+            )
+
+        return UsbCaptureMode(
+            width=selected_width,
+            height=selected_height,
+            fps=selected_fps,
+            input_format=selected_input,
+        )
+
+    @staticmethod
+    def _parse_v4l2_modes(listing: str) -> list[tuple[str, int, int, float]]:
+        modes: list[tuple[str, int, int, float]] = []
+        current_format = ""
+        current_width: int | None = None
+        current_height: int | None = None
+
+        for line in listing.splitlines():
+            format_match = V4L2_FORMAT_PATTERN.search(line)
+            if format_match:
+                current_format = format_match.group("format")
+                current_width = None
+                current_height = None
+                continue
+
+            size_match = V4L2_SIZE_PATTERN.search(line)
+            if size_match:
+                current_width = int(size_match.group("width"))
+                current_height = int(size_match.group("height"))
+                continue
+
+            if not current_format or current_width is None or current_height is None:
+                continue
+
+            fps_match = V4L2_FPS_PATTERN.search(line)
+            if not fps_match:
+                continue
+            modes.append(
+                (
+                    current_format,
+                    current_width,
+                    current_height,
+                    float(fps_match.group("fps")),
+                )
+            )
+
+        return modes
+
+    @staticmethod
+    def _select_usb_mode(
+        *,
+        modes: list[tuple[str, int, int, float]],
+        requested_width: int,
+        requested_height: int,
+        requested_fps: float,
+        preferred_formats: tuple[str, ...],
+    ) -> tuple[str, int, int, float]:
+        candidates = [mode for mode in modes if mode[0] in preferred_formats] if preferred_formats else []
+        if not candidates:
+            candidates = modes
+
+        def _score(mode: tuple[str, int, int, float]) -> tuple[float, float, float, float]:
+            _, width, height, fps = mode
+            size_delta = abs(float(width) - float(requested_width)) + abs(float(height) - float(requested_height))
+            fps_delta = abs(float(fps) - float(requested_fps))
+            # Ưu tiên gần cấu hình mong muốn; nếu bằng nhau thì giữ mode lớn hơn/fps cao hơn.
+            return (
+                size_delta,
+                fps_delta,
+                -float(width * height),
+                -float(fps),
+            )
+
+        return min(candidates, key=_score)
 
     def _query_v4l2_formats(self, usb_device: str) -> str:
         v4l2_ctl = shutil.which("v4l2-ctl")
@@ -441,40 +572,6 @@ class RtspPipeline:
             self._logger.debug("v4l2-ctl format query failed for %s: %s", usb_device, result.stderr.strip())
             return ""
         return result.stdout
-
-    def _v4l2_supports_format(
-        self,
-        listing: str,
-        *,
-        pixel_format: str,
-        width: int,
-        height: int,
-        fps: int,
-    ) -> bool:
-        current_format = ""
-        current_size_matches = False
-        for line in listing.splitlines():
-            format_match = V4L2_FORMAT_PATTERN.search(line)
-            if format_match:
-                current_format = format_match.group("format")
-                current_size_matches = False
-                continue
-
-            size_match = V4L2_SIZE_PATTERN.search(line)
-            if size_match:
-                current_size_matches = (
-                    current_format == pixel_format
-                    and int(size_match.group("width")) == int(width)
-                    and int(size_match.group("height")) == int(height)
-                )
-                continue
-
-            if current_format != pixel_format or not current_size_matches:
-                continue
-            fps_match = V4L2_FPS_PATTERN.search(line)
-            if fps_match and float(fps_match.group("fps")) >= float(fps) - 0.5:
-                return True
-        return False
 
     def _build_source_command(self, mode: PipelineMode) -> list[str]:
         if self._source_kind == CameraSourceKind.RPI_CSI:

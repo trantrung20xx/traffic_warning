@@ -183,7 +183,9 @@ class ProcessSupervisor:
                 self._state.set_warning(detail)
                 self._try_restart_with_limits(detail)
             elif health.running:
-                rtsp_url = self._state.snapshot().primary_rtsp_url
+                # Probe theo loopback nội bộ để đánh giá đúng pipeline local,
+                # tránh phụ thuộc phân giải mDNS ở tầng hệ điều hành.
+                rtsp_url = self._local_probe_rtsp_url()
                 fps = self._fps_probe.estimate(rtsp_url, stream_running=True)
                 self._state.set_fps_estimate(fps)
                 if fps <= 0.1:
@@ -211,6 +213,11 @@ class ProcessSupervisor:
             # Chờ tối đa 2 giây, nhưng lệnh Start/Stop/Restart sẽ đánh thức ngay.
             self._control_event.wait(2)
             self._control_event.clear()
+
+    def _local_probe_rtsp_url(self) -> str:
+        identity = self._state.identity
+        stream_path = identity.stream_path.lstrip("/")
+        return f"rtsp://127.0.0.1:{identity.rtsp_port}/{stream_path}"
 
     def _try_restart_with_limits(
         self,

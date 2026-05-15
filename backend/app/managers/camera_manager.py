@@ -611,6 +611,11 @@ class CameraManager:
             stream_path=parsed.path or "",
         )
         if not fallback_ip:
+            self._logger.warning(
+                "Camera %s RTSP host %s is not resolvable and no edge fallback IP matched.",
+                camera_id,
+                host,
+            )
             return raw_url
 
         netloc = ""
@@ -650,11 +655,16 @@ class CameraManager:
             return None
 
         target_path = str(stream_path or "").strip()
+        normalized_target_path = target_path.strip("/").lower()
+        unresolved_host_root = unresolved_host.split(".", 1)[0]
         for item in registry:
             item_camera_id = str(item.get("camera_id") or "")
             item_host = str(item.get("host") or "").strip().lower().rstrip(".")
             item_mdns = str(item.get("mdns_host") or "").strip().lower().rstrip(".")
             item_stream = str(item.get("stream_path") or "").strip()
+            normalized_item_stream = item_stream.strip("/").lower()
+            item_host_root = item_host.split(".", 1)[0]
+            item_mdns_root = item_mdns.split(".", 1)[0]
             ip_candidate = str(item.get("ip_address") or "").strip()
             if not ip_candidate and self._is_ipv4_address(item_host):
                 ip_candidate = item_host
@@ -665,9 +675,20 @@ class CameraManager:
                 return ip_candidate
             if item_host == unresolved_host:
                 return ip_candidate
+            if unresolved_host_root and (
+                item_host_root == unresolved_host_root
+                or item_mdns_root == unresolved_host_root
+            ):
+                return ip_candidate
             if item_camera_id and item_camera_id == camera_id:
                 return ip_candidate
             if target_path and item_stream and item_stream == target_path:
+                return ip_candidate
+            if normalized_target_path and normalized_item_stream and (
+                normalized_item_stream == normalized_target_path
+                or normalized_item_stream.endswith(normalized_target_path)
+                or normalized_target_path.endswith(normalized_item_stream)
+            ):
                 return ip_candidate
         return None
 

@@ -19,7 +19,7 @@
     },
     {
       "camera_id": "cam_02",
-      "rtsp_url": "rtsp://cam-2ccf6788f9e5.local:8593/cam_2ccf6788f9e5",
+      "rtsp_url": "rtsp://172.20.10.2:8593/cam_2ccf6788f9e5",
       "camera_type": "roadside",
       "view_direction": "Nam - Bắc",
       "location": {

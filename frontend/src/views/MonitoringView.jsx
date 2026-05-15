@@ -188,8 +188,6 @@ export default function MonitoringView({
 	const [streamFps, setStreamFps] = useState(null);
 	const [cameraDetailError, setCameraDetailError] = useState("");
 	const [previewError, setPreviewError] = useState("");
-	const [trackSocketState, setTrackSocketState] = useState("idle");
-	const [violationSocketState, setViolationSocketState] = useState("idle");
 	const [realtimeError, setRealtimeError] = useState("");
 	const [selectedViolation, setSelectedViolation] = useState(null);
 	const [showTrajectoryOverlay, setShowTrajectoryOverlay] = useState(true);
@@ -252,8 +250,6 @@ export default function MonitoringView({
 			setCameraDetailError("");
 			setPreviewError("");
 			setRealtimeError("");
-			setTrackSocketState("idle");
-			setViolationSocketState("idle");
 			setSelectedViolation(null);
 			setTrajectoryRows([]);
 			setTrajectoryLimit(DEFAULT_MONITORING_UI_CONFIG.trajectory.default_limit);
@@ -261,6 +257,8 @@ export default function MonitoringView({
 			return;
 		}
 		let active = true;
+		// Xóa detail cũ ngay khi đổi camera để tránh hiển thị chéo dữ liệu camera trước.
+		setDetail(null);
 		setCameraDetailError("");
 		setPreviewError("");
 		setRealtimeError("");
@@ -371,8 +369,6 @@ export default function MonitoringView({
 		if (!selectedCameraId) return undefined;
 		const violationUi = monitoringUiConfig.violation;
 		let active = true;
-		setTrackSocketState("connecting");
-		setViolationSocketState("connecting");
 		const trackWs = connectTracks(
 			selectedCameraId,
 			(message) => {
@@ -405,24 +401,14 @@ export default function MonitoringView({
 				setRealtimeError("");
 			},
 			{
-				onOpen: () => {
-					if (!active) return;
-					setTrackSocketState("connected");
-				},
-				onClose: () => {
-					if (!active) return;
-					setTrackSocketState("disconnected");
-				},
 				onError: () => {
 					if (!active) return;
-					setTrackSocketState("error");
 					setRealtimeError(
 						"Mất kết nối luồng tracks realtime. Hệ thống sẽ tự thử kết nối lại khi đổi camera hoặc tải lại trang.",
 					);
 				},
 				onInvalidMessage: () => {
 					if (!active) return;
-					setTrackSocketState("error");
 					setRealtimeError("Dữ liệu tracks realtime không hợp lệ từ backend.");
 				},
 			},
@@ -441,24 +427,14 @@ export default function MonitoringView({
 				);
 			},
 			{
-				onOpen: () => {
-					if (!active) return;
-					setViolationSocketState("connected");
-				},
-				onClose: () => {
-					if (!active) return;
-					setViolationSocketState("disconnected");
-				},
 				onError: () => {
 					if (!active) return;
-					setViolationSocketState("error");
 					setRealtimeError(
 						"Mất kết nối luồng violations realtime. Dữ liệu vi phạm mới có thể bị chậm.",
 					);
 				},
 				onInvalidMessage: () => {
 					if (!active) return;
-					setViolationSocketState("error");
 					setRealtimeError("Dữ liệu violations realtime không hợp lệ từ backend.");
 				},
 			},
@@ -497,30 +473,15 @@ export default function MonitoringView({
 		setPreviewError("");
 	}, [previewUrl, selectedCameraId]);
 
-	const camera = detail?.camera || null;
-	const laneConfig = detail?.lane_config || null;
+	const detailCameraId = detail?.camera?.camera_id || null;
+	const isDetailMatchedSelectedCamera =
+		Boolean(selectedCameraId) && detailCameraId === selectedCameraId;
+	const camera = isDetailMatchedSelectedCamera ? detail?.camera || null : null;
+	const laneConfig = isDetailMatchedSelectedCamera
+		? detail?.lane_config || null
+		: null;
 	const cameraLocationRoadName = camera?.location?.road_name || "-";
 	const cameraLocationIntersection = camera?.location?.intersection_name || "";
-	const trackRealtimeLabel =
-		trackSocketState === "connected"
-			? "Tracks realtime: Online"
-			: trackSocketState === "connecting"
-				? "Tracks realtime: Đang kết nối"
-				: trackSocketState === "error"
-					? "Tracks realtime: Lỗi kết nối"
-					: trackSocketState === "disconnected"
-						? "Tracks realtime: Đã ngắt"
-						: "Tracks realtime: Chưa kết nối";
-	const violationRealtimeLabel =
-		violationSocketState === "connected"
-			? "Violations realtime: Online"
-			: violationSocketState === "connecting"
-				? "Violations realtime: Đang kết nối"
-				: violationSocketState === "error"
-					? "Violations realtime: Lỗi kết nối"
-					: violationSocketState === "disconnected"
-						? "Violations realtime: Đã ngắt"
-						: "Violations realtime: Chưa kết nối";
 	const orderedVehicles = [...vehicles]
 		.map((vehicle) => {
 			if (!vehicleSeenOrderRef.current.has(vehicle.vehicle_id)) {
@@ -590,33 +551,6 @@ export default function MonitoringView({
 							</select>
 						</label>
 					</div>
-
-					{selectedCameraId ? (
-						<div className="status-strip">
-							<div
-								className={
-									trackSocketState === "connected"
-										? "badge success"
-										: trackSocketState === "connecting"
-											? "badge"
-											: "badge warning"
-								}>
-								<AppIcon name="activity" />
-								{trackRealtimeLabel}
-							</div>
-							<div
-								className={
-									violationSocketState === "connected"
-										? "badge success"
-										: violationSocketState === "connecting"
-											? "badge"
-											: "badge warning"
-								}>
-								<AppIcon name="shield-alert" />
-								{violationRealtimeLabel}
-							</div>
-						</div>
-					) : null}
 
 					{loading && cameras.length === 0 ? (
 						<div className="empty-state">Đang tải danh sách camera...</div>
