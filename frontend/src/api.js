@@ -243,25 +243,67 @@ export function getViolationEvidenceUrl(imageUrlOrPath) {
   return apiUrl(`/api/violations/evidence/${encodeURIComponent(value).replaceAll("%2F", "/")}`);
 }
 
-export function connectTracks(cameraId, onMessage) {
+export function connectTracks(cameraId, onMessage, callbacks = {}) {
+  return connectTracksWithCallbacks(cameraId, onMessage, callbacks);
+}
+
+export function connectViolations(cameraId, onMessage, callbacks = {}) {
+  return connectViolationsWithCallbacks(cameraId, onMessage, callbacks);
+}
+
+function parseSocketJson(payload, onInvalidMessage, streamName) {
+  try {
+    return JSON.parse(payload);
+  } catch (error) {
+    const parseError = error instanceof Error ? error : new Error(String(error));
+    if (onInvalidMessage) {
+      onInvalidMessage(parseError, payload);
+    } else {
+      // Không nuốt lỗi parse âm thầm để vẫn điều tra được nguồn dữ liệu hỏng.
+      console.error(`[${streamName}] Invalid WebSocket payload`, parseError);
+    }
+    return null;
+  }
+}
+
+function bindSocketLifecycle(socket, streamName, callbacks = {}) {
+  const { onOpen, onClose, onError } = callbacks;
+  socket.onopen = () => {
+    onOpen?.();
+  };
+  socket.onclose = (event) => {
+    onClose?.(event);
+  };
+  socket.onerror = (event) => {
+    if (onError) {
+      onError(event);
+      return;
+    }
+    console.error(`[${streamName}] WebSocket connection error`, event);
+  };
+}
+
+function connectTracksWithCallbacks(cameraId, onMessage, callbacks = {}) {
   // Luồng track đẩy liên tục: payload nguyên bản từ backend TrackMessage.
   const socket = new WebSocket(`${wsUrl("/ws/tracks")}?camera_id=${encodeURIComponent(cameraId)}`);
+  bindSocketLifecycle(socket, "tracks", callbacks);
   socket.onmessage = (event) => {
-    const message = JSON.parse(event.data);
-    if (message.type === "track") {
+    const message = parseSocketJson(event.data, callbacks.onInvalidMessage, "tracks");
+    if (message?.type === "track") {
       onMessage(message);
     }
   };
   return socket;
 }
 
-export function connectViolations(cameraId, onMessage) {
+function connectViolationsWithCallbacks(cameraId, onMessage, callbacks = {}) {
   // Luồng violation mang envelope {type, event} để hỗ trợ mở rộng message type.
   const path = cameraId ? `/ws/violations?camera_id=${encodeURIComponent(cameraId)}` : "/ws/violations";
   const socket = new WebSocket(wsUrl(path));
+  bindSocketLifecycle(socket, "violations", callbacks);
   socket.onmessage = (event) => {
-    const message = JSON.parse(event.data);
-    if (message.type === "violation") {
+    const message = parseSocketJson(event.data, callbacks.onInvalidMessage, "violations");
+    if (message?.type === "violation") {
       onMessage(message.event);
     }
   };

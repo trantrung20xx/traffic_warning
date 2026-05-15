@@ -234,7 +234,7 @@ export default function AnalyticsView({ cameras, selectedCameraId, onSelectCamer
                   <option value="">Tất cả camera</option>
                   {cameras.map((camera) => (
                     <option key={camera.camera_id} value={camera.camera_id}>
-                      {camera.camera_id} - {camera.location.road_name}
+                      {camera.camera_id} - {camera.location?.road_name || "Chưa có tên đường"}
                     </option>
                   ))}
                 </select>
@@ -381,8 +381,8 @@ export default function AnalyticsView({ cameras, selectedCameraId, onSelectCamer
                     <td>{formatTimestamp(row.timestamp)}</td>
                     <td>{row.camera_id}</td>
                     <td>
-                      {row.location.road_name}
-                      {row.location.intersection ? ` · ${row.location.intersection}` : ""}
+                      {row.location?.road_name || "-"}
+                      {row.location?.intersection ? ` · ${row.location.intersection}` : ""}
                     </td>
                     <td>{getVehicleTypeLabel(row.vehicle_type)}</td>
                     <td>#{row.vehicle_id}</td>

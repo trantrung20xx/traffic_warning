@@ -186,6 +186,11 @@ export default function MonitoringView({
 	const [violations, setViolations] = useState([]);
 	const [processingFps, setProcessingFps] = useState(null);
 	const [streamFps, setStreamFps] = useState(null);
+	const [cameraDetailError, setCameraDetailError] = useState("");
+	const [previewError, setPreviewError] = useState("");
+	const [trackSocketState, setTrackSocketState] = useState("idle");
+	const [violationSocketState, setViolationSocketState] = useState("idle");
+	const [realtimeError, setRealtimeError] = useState("");
 	const [selectedViolation, setSelectedViolation] = useState(null);
 	const [showTrajectoryOverlay, setShowTrajectoryOverlay] = useState(true);
 	const [trajectoryLimit, setTrajectoryLimit] = useState(
@@ -244,27 +249,40 @@ export default function MonitoringView({
 	useEffect(() => {
 		if (!selectedCameraId) {
 			setDetail(null);
+			setCameraDetailError("");
+			setPreviewError("");
+			setRealtimeError("");
+			setTrackSocketState("idle");
+			setViolationSocketState("idle");
 			setSelectedViolation(null);
 			setTrajectoryRows([]);
 			setTrajectoryLimit(DEFAULT_MONITORING_UI_CONFIG.trajectory.default_limit);
 			liveTrajectoriesRef.current = new Map();
 			return;
 		}
+		let active = true;
+		setCameraDetailError("");
+		setPreviewError("");
+		setRealtimeError("");
 		fetchCameraDetail(selectedCameraId)
 			.then((nextDetail) => {
+				if (!active) return;
 				setDetail(nextDetail);
 				const uiConfig = normalizeMonitoringUiConfig(nextDetail?.ui?.monitoring);
 				setTrajectoryLimit(uiConfig.trajectory.default_limit);
 			})
-			.catch(() => {
+			.catch((error) => {
+				if (!active) return;
 				setDetail(null);
+				setCameraDetailError(
+					error?.message || "Không thể tải cấu hình camera hoặc backend đang offline.",
+				);
 				setTrajectoryLimit(DEFAULT_MONITORING_UI_CONFIG.trajectory.default_limit);
 			});
 		setVehicles([]);
 		setViolations([]);
 		setProcessingFps(null);
 		setStreamFps(null);
-		setDisplayStreamFps(null);
 		setTrajectoryRows([]);
 		setSelectedViolation(null);
 		vehicleSeenOrderRef.current = new Map();
@@ -272,6 +290,9 @@ export default function MonitoringView({
 		violatingVehicleIdsRef.current = new Map();
 		lastTrackUpdateRef.current = 0;
 		liveTrajectoriesRef.current = new Map();
+		return () => {
+			active = false;
+		};
 	}, [configRevision, selectedCameraId]);
 
 	const updateLiveTrajectories = (nextVehicles) => {
@@ -349,44 +370,109 @@ export default function MonitoringView({
 	useEffect(() => {
 		if (!selectedCameraId) return undefined;
 		const violationUi = monitoringUiConfig.violation;
-		const trackWs = connectTracks(selectedCameraId, (message) => {
-			if (message?.camera_id !== selectedCameraId) return;
-			lastTrackUpdateRef.current = Date.now();
-			const now = Date.now();
-			violatingVehicleIdsRef.current.forEach((expiresAt, vehicleId) => {
-				if (expiresAt <= now) {
-					violatingVehicleIdsRef.current.delete(vehicleId);
-				}
-			});
-			setVehicles(
-				(message.vehicles || []).map((vehicle) => ({
-					...vehicle,
-					// isViolating chỉ là cờ hiển thị tạm theo highlight window.
-					isViolating:
-						(violatingVehicleIdsRef.current.get(vehicle.vehicle_id) || 0) >
-						now,
-				})),
-			);
-			updateLiveTrajectories(message.vehicles || []);
-			setProcessingFps(
-				Number.isFinite(message.processing_fps) ? message.processing_fps : null,
-			);
-			setStreamFps(Number.isFinite(message.stream_fps) ? message.stream_fps : null);
-		});
-		const violationWs = connectViolations(selectedCameraId, (event) => {
-			if (event?.camera_id !== selectedCameraId) return;
-			// Đánh dấu "xe đang vi phạm" trong một khoảng thời gian highlight ngắn.
-			violatingVehicleIdsRef.current.set(
-				event.vehicle_id,
-				Date.now() + violationUi.highlight_duration_ms,
-			);
-			setViolations((prev) => [event, ...prev].slice(0, violationUi.list_max_rows));
-		});
+		let active = true;
+		setTrackSocketState("connecting");
+		setViolationSocketState("connecting");
+		const trackWs = connectTracks(
+			selectedCameraId,
+			(message) => {
+				if (!active || message?.camera_id !== selectedCameraId) return;
+				lastTrackUpdateRef.current = Date.now();
+				const now = Date.now();
+				violatingVehicleIdsRef.current.forEach((expiresAt, vehicleId) => {
+					if (expiresAt <= now) {
+						violatingVehicleIdsRef.current.delete(vehicleId);
+					}
+				});
+				setVehicles(
+					(message.vehicles || []).map((vehicle) => ({
+						...vehicle,
+						// isViolating chỉ là cờ hiển thị tạm theo highlight window.
+						isViolating:
+							(violatingVehicleIdsRef.current.get(vehicle.vehicle_id) || 0) >
+							now,
+					})),
+				);
+				updateLiveTrajectories(message.vehicles || []);
+				setProcessingFps(
+					Number.isFinite(message.processing_fps)
+						? message.processing_fps
+						: null,
+				);
+				setStreamFps(
+					Number.isFinite(message.stream_fps) ? message.stream_fps : null,
+				);
+				setRealtimeError("");
+			},
+			{
+				onOpen: () => {
+					if (!active) return;
+					setTrackSocketState("connected");
+				},
+				onClose: () => {
+					if (!active) return;
+					setTrackSocketState("disconnected");
+				},
+				onError: () => {
+					if (!active) return;
+					setTrackSocketState("error");
+					setRealtimeError(
+						"Mất kết nối luồng tracks realtime. Hệ thống sẽ tự thử kết nối lại khi đổi camera hoặc tải lại trang.",
+					);
+				},
+				onInvalidMessage: () => {
+					if (!active) return;
+					setTrackSocketState("error");
+					setRealtimeError("Dữ liệu tracks realtime không hợp lệ từ backend.");
+				},
+			},
+		);
+		const violationWs = connectViolations(
+			selectedCameraId,
+			(event) => {
+				if (!active || event?.camera_id !== selectedCameraId) return;
+				// Đánh dấu "xe đang vi phạm" trong một khoảng thời gian highlight ngắn.
+				violatingVehicleIdsRef.current.set(
+					event.vehicle_id,
+					Date.now() + violationUi.highlight_duration_ms,
+				);
+				setViolations((prev) =>
+					[event, ...prev].slice(0, violationUi.list_max_rows),
+				);
+			},
+			{
+				onOpen: () => {
+					if (!active) return;
+					setViolationSocketState("connected");
+				},
+				onClose: () => {
+					if (!active) return;
+					setViolationSocketState("disconnected");
+				},
+				onError: () => {
+					if (!active) return;
+					setViolationSocketState("error");
+					setRealtimeError(
+						"Mất kết nối luồng violations realtime. Dữ liệu vi phạm mới có thể bị chậm.",
+					);
+				},
+				onInvalidMessage: () => {
+					if (!active) return;
+					setViolationSocketState("error");
+					setRealtimeError("Dữ liệu violations realtime không hợp lệ từ backend.");
+				},
+			},
+		);
 		return () => {
+			active = false;
 			trackWs.close();
 			violationWs.close();
 		};
-	}, [monitoringUiConfig.trajectory, monitoringUiConfig.violation, selectedCameraId]);
+	}, [
+		monitoringUiConfig.violation.highlight_duration_ms,
+		monitoringUiConfig.violation.list_max_rows,
+		selectedCameraId,
+	]);
 
 	useEffect(() => {
 		if (!selectedCameraId) return undefined;
@@ -402,8 +488,39 @@ export default function MonitoringView({
 		return () => window.clearInterval(timer);
 	}, [monitoringUiConfig.processing_fps, selectedCameraId]);
 
+	useEffect(() => {
+		if (!selectedCameraId) {
+			setPreviewError("");
+			return;
+		}
+		// Mỗi session preview mới cần reset trạng thái lỗi cũ.
+		setPreviewError("");
+	}, [previewUrl, selectedCameraId]);
+
 	const camera = detail?.camera || null;
 	const laneConfig = detail?.lane_config || null;
+	const cameraLocationRoadName = camera?.location?.road_name || "-";
+	const cameraLocationIntersection = camera?.location?.intersection_name || "";
+	const trackRealtimeLabel =
+		trackSocketState === "connected"
+			? "Tracks realtime: Online"
+			: trackSocketState === "connecting"
+				? "Tracks realtime: Đang kết nối"
+				: trackSocketState === "error"
+					? "Tracks realtime: Lỗi kết nối"
+					: trackSocketState === "disconnected"
+						? "Tracks realtime: Đã ngắt"
+						: "Tracks realtime: Chưa kết nối";
+	const violationRealtimeLabel =
+		violationSocketState === "connected"
+			? "Violations realtime: Online"
+			: violationSocketState === "connecting"
+				? "Violations realtime: Đang kết nối"
+				: violationSocketState === "error"
+					? "Violations realtime: Lỗi kết nối"
+					: violationSocketState === "disconnected"
+						? "Violations realtime: Đã ngắt"
+						: "Violations realtime: Chưa kết nối";
 	const orderedVehicles = [...vehicles]
 		.map((vehicle) => {
 			if (!vehicleSeenOrderRef.current.has(vehicle.vehicle_id)) {
@@ -467,12 +584,39 @@ export default function MonitoringView({
 										key={cameraRow.camera_id}
 										value={cameraRow.camera_id}>
 										{cameraRow.camera_id} -{" "}
-										{cameraRow.location.road_name}
+										{cameraRow.location?.road_name || "Chưa có tên đường"}
 									</option>
 								))}
 							</select>
 						</label>
 					</div>
+
+					{selectedCameraId ? (
+						<div className="status-strip">
+							<div
+								className={
+									trackSocketState === "connected"
+										? "badge success"
+										: trackSocketState === "connecting"
+											? "badge"
+											: "badge warning"
+								}>
+								<AppIcon name="activity" />
+								{trackRealtimeLabel}
+							</div>
+							<div
+								className={
+									violationSocketState === "connected"
+										? "badge success"
+										: violationSocketState === "connecting"
+											? "badge"
+											: "badge warning"
+								}>
+								<AppIcon name="shield-alert" />
+								{violationRealtimeLabel}
+							</div>
+						</div>
+					) : null}
 
 					{loading && cameras.length === 0 ? (
 						<div className="empty-state">Đang tải danh sách camera...</div>
@@ -480,24 +624,39 @@ export default function MonitoringView({
 					{!selectedCameraId ? (
 						<div className="empty-state">Chưa có camera được cấu hình.</div>
 					) : null}
+					{selectedCameraId && cameraDetailError ? (
+						<div className="message-bar warning">{cameraDetailError}</div>
+					) : null}
+					{selectedCameraId && realtimeError ? (
+						<div className="message-bar warning">{realtimeError}</div>
+					) : null}
+					{selectedCameraId && !cameraDetailError && !laneConfig ? (
+						<div className="empty-state">
+							Đang chờ cấu hình camera từ backend...
+						</div>
+					) : null}
 
 					{selectedCameraId && laneConfig ? (
 						<>
 							<div className="camera-meta-grid">
-								<StatPill label="Camera ID" value={camera.camera_id} icon="camera" />
+								<StatPill
+									label="Camera ID"
+									value={camera?.camera_id || selectedCameraId}
+									icon="camera"
+								/>
 								<StatPill
 									label="Loại camera"
-									value={getCameraTypeLabel(camera.camera_type)}
+									value={getCameraTypeLabel(camera?.camera_type)}
 									icon="video"
 								/>
 								<StatPill
 									label="Hướng quan sát"
-									value={camera.view_direction || "-"}
+									value={camera?.view_direction || "-"}
 									icon="navigation"
 								/>
 								<StatPill
 									label="Vị trí"
-									value={`${camera.location.road_name}${camera.location.intersection_name ? ` · ${camera.location.intersection_name}` : ""}`}
+									value={`${cameraLocationRoadName}${cameraLocationIntersection ? ` · ${cameraLocationIntersection}` : ""}`}
 									icon="map-pin"
 								/>
 							</div>
@@ -555,6 +714,12 @@ export default function MonitoringView({
 									key={previewUrl || selectedCameraId}
 									alt="Xem trước camera"
 									src={previewUrl}
+									onLoad={() => setPreviewError("")}
+									onError={() =>
+										setPreviewError(
+											"Không thể tải preview MJPEG. Hãy kiểm tra backend hoặc camera stream.",
+										)
+									}
 								/>
 								<CameraCanvas
 									overlay
@@ -569,6 +734,9 @@ export default function MonitoringView({
 									streamFps={streamFps}
 								/>
 							</div>
+							{previewError ? (
+								<div className="message-bar warning">{previewError}</div>
+							) : null}
 						</>
 					) : null}
 				</section>

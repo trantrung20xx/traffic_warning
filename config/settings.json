@@ -8,7 +8,7 @@
 		}
 	},
 	"detection": {
-		"weights_path": "backend/yolov8m.pt",
+		"weights_path": "backend/yolov8s.pt",
 		"device": "auto",
 		"confidence_threshold": 0.25,
 		"iou_threshold": 0.7,
@@ -194,7 +194,7 @@
 		"detector_weights_path": "backend/license_plate_yolov8.pt",
 		"detector_confidence_threshold": 0.35,
 		"detector_allowed_classes": ["license_plate", "License Plates"],
-		"ocr_backend": "paddleocr",
+		"ocr_backend": "easyocr",
 		"easyocr_lang": "en",
 		"easyocr_use_gpu": true,
 		"paddle_ocr_version": "PP-OCRv5",

@@ -1890,6 +1890,17 @@ select {
   color: #ffe0a3;
 }
 
+.app-crash-boundary {
+  max-width: 860px;
+  margin: 42px auto;
+  padding: 0 20px;
+}
+
+.app-crash-boundary .message-bar {
+  display: grid;
+  gap: 12px;
+}
+
 .lane-editor-message {
   margin-top: 14px;
 }

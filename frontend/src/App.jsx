@@ -11,12 +11,14 @@ export default function App() {
   const [cameras, setCameras] = useState([]);
   const [selectedCameraId, setSelectedCameraId] = useState(null);
   const [loadingCameras, setLoadingCameras] = useState(true);
+  const [cameraLoadError, setCameraLoadError] = useState("");
   const [configRevision, setConfigRevision] = useState(0);
 
   const refreshCameras = async (preferredCameraId = null) => {
     setLoadingCameras(true);
     try {
       const rows = await fetchCameras();
+      setCameraLoadError("");
       startTransition(() => {
         setCameras(rows);
         setConfigRevision((value) => value + 1);
@@ -29,6 +31,12 @@ export default function App() {
           }
           return rows[0]?.camera_id || null;
         });
+      });
+    } catch (error) {
+      setCameraLoadError(error?.message || "Không thể tải danh sách camera.");
+      startTransition(() => {
+        setCameras([]);
+        setSelectedCameraId(null);
       });
     } finally {
       setLoadingCameras(false);
@@ -72,6 +80,9 @@ export default function App() {
       </header>
 
       <main className="workspace">
+        {cameraLoadError ? (
+          <div className="message-bar warning">{`Không thể tải danh sách camera: ${cameraLoadError}`}</div>
+        ) : null}
         {view === "monitor" ? (
           <MonitoringView
             cameras={cameras}

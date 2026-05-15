@@ -1221,9 +1221,9 @@ export default function ManagementView({
 											{camera.camera_id}
 										</div>
 										<div className="row-sub">
-											{camera.location.road_name}
-											{camera.location.intersection
-												? ` · ${camera.location.intersection}`
+											{camera.location?.road_name || "Chưa có tên đường"}
+											{camera.location?.intersection
+												? ` · ${camera.location?.intersection}`
 												: ""}
 										</div>
 									</button>

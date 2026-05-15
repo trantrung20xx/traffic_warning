@@ -653,10 +653,22 @@ export default function CameraCanvas({
 		});
 
 		vehicles.forEach((v) => {
-			const x1 = v.bbox.x1;
-			const y1 = v.bbox.y1;
-			const w = v.bbox.x2 - v.bbox.x1;
-			const h = v.bbox.y2 - v.bbox.y1;
+			const bbox = v?.bbox;
+			if (!bbox) return;
+			const x1 = Number(bbox.x1);
+			const y1 = Number(bbox.y1);
+			const x2 = Number(bbox.x2);
+			const y2 = Number(bbox.y2);
+			if (
+				!Number.isFinite(x1) ||
+				!Number.isFinite(y1) ||
+				!Number.isFinite(x2) ||
+				!Number.isFinite(y2)
+			) {
+				return;
+			}
+			const w = x2 - x1;
+			const h = y2 - y1;
 			const strokeColor = v.isViolating
 				? "rgba(255, 107, 87, 0.98)"
 				: "rgba(0, 214, 143, 0.98)";
@@ -725,9 +737,9 @@ export default function CameraCanvas({
 			Number.isFinite(processingFps) ||
 			Number.isFinite(streamFps);
 		if (shouldShowFps) {
-			const aiLabel = Number.isFinite(processingFps)
-				? `AI FPS: ${processingFps.toFixed(1)}`
-				: "AI FPS: -";
+			const processingLabel = Number.isFinite(processingFps)
+				? `Processing FPS: ${processingFps.toFixed(1)}`
+				: "Processing FPS: -";
 			const sourceStreamLabel = Number.isFinite(streamFps)
 				? `Source FPS: ${streamFps.toFixed(1)}`
 				: "Source FPS: -";
@@ -743,7 +755,7 @@ export default function CameraCanvas({
 				? displayMetrics.px(MONITOR_OVERLAY.fpsTextBaselinePx)
 				: 15;
 			const textWidth = Math.max(
-				ctx.measureText(aiLabel).width,
+				ctx.measureText(processingLabel).width,
 				ctx.measureText(sourceStreamLabel).width,
 			);
 			const textX = frameWidth - textWidth - fpsMargin;
@@ -756,7 +768,7 @@ export default function CameraCanvas({
 			ctx.fillStyle = isMonitoringOverlay
 				? "rgba(0, 214, 143, 0.98)"
 				: "rgba(255,255,255,0.96)";
-			ctx.fillText(aiLabel, textX, textY);
+			ctx.fillText(processingLabel, textX, textY);
 			ctx.fillText(sourceStreamLabel, textX, textY + labelHeight + labelGap);
 		}
 
