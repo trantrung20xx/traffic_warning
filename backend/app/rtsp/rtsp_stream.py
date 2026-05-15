@@ -244,9 +244,30 @@ class RtspFrameReader:
     def _reader_loop(self) -> None:
         while not self._stop_event.is_set():
             with self._cap_lock:
-                if self._cap is None:
+                if self._use_ffmpeg_pipe:
+                    if self._ffmpeg_proc is None or self._ffmpeg_proc.poll() is not None:
+                        self._open_locked()
+                elif self._cap is None:
                     self._open_locked()
                 cap = self._cap
+
+            if self._use_ffmpeg_pipe:
+                frame = self._read_ffmpeg_frame()
+                if frame is None:
+                    # Mất frame/ffmpeg dừng -> chờ ngắn rồi reopen ffmpeg pipeline.
+                    if self._stop_event.wait(self.reconnect_delay_s):
+                        break
+                    with self._cap_lock:
+                        self._open_locked()
+                    continue
+
+                snapshot = Frame(bgr=frame, timestamp_utc_ms=int(time.time() * 1000))
+                with self._latest_lock:
+                    # Luôn ghi đè frame mới nhất, không tích backlog.
+                    self._latest_frame = snapshot
+                    self._latest_frame_seq += 1
+                self._record_source_frame()
+                continue
 
             if cap is None:
                 # Chưa mở được capture: chờ rồi thử lại.
@@ -328,13 +349,22 @@ class RtspFrameReader:
         # Signal dừng cho reader loop và các wait() đang chờ.
         self._stop_event.set()
         cap_to_release: Optional[cv2.VideoCapture] = None
+        ffmpeg_to_terminate: Optional[subprocess.Popen] = None
         if self._cap_lock.acquire(timeout=0.1):
             try:
                 # Tách cap ra biến cục bộ để release ngoài lock.
                 cap_to_release = self._cap
                 self._cap = None
+                ffmpeg_to_terminate = self._ffmpeg_proc
+                self._ffmpeg_proc = None
             finally:
                 self._cap_lock.release()
+
+        if ffmpeg_to_terminate is not None:
+            try:
+                self._terminate_ffmpeg(ffmpeg_to_terminate)
+            except Exception:
+                pass
 
         if cap_to_release is not None:
             def _release_capture(capture: cv2.VideoCapture) -> None:

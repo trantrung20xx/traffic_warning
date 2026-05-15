@@ -111,3 +111,43 @@ def test_reader_source_fps_estimation_from_samples(monkeypatch) -> None:
         assert fps < 12.0
     finally:
         reader.close()
+
+
+def test_reader_ffmpeg_pipe_mode_emits_frames(monkeypatch) -> None:
+    class _FakeProc:
+        def poll(self):
+            return None
+
+    def _fake_open_locked(self):
+        self._cap = None
+        self._ffmpeg_proc = _FakeProc()
+
+    def _fake_read_ffmpeg_frame(self):
+        if getattr(self, "_test_frame_emitted", False):
+            return None
+        self._test_frame_emitted = True
+        # Dừng reader sau khi đã phát một frame để test kết thúc nhanh.
+        self._stop_event.set()
+        return np.zeros((int(self.frame_height), int(self.frame_width), 3), dtype=np.uint8)
+
+    monkeypatch.setattr(RtspFrameReader, "_open_locked", _fake_open_locked)
+    monkeypatch.setattr(RtspFrameReader, "_read_ffmpeg_frame", _fake_read_ffmpeg_frame)
+
+    reader = RtspFrameReader(
+        "rtsp://127.0.0.1:8554/live",
+        reconnect_delay_s=0.05,
+        frame_width=320,
+        frame_height=180,
+    )
+    try:
+        deadline = time.perf_counter() + 1.0
+        frame = None
+        while time.perf_counter() < deadline:
+            frame = reader.read(only_new=False)
+            if frame is not None:
+                break
+            time.sleep(0.01)
+        assert frame is not None
+        assert frame.bgr.shape == (180, 320, 3)
+    finally:
+        reader.close()
