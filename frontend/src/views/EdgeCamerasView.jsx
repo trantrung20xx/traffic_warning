@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import AppIcon from "../components/AppIcon";
 import {
+  cycleEdgeCameraImageTuning,
   fetchEdgeCamera,
   fetchEdgeCameras,
   restartEdgeCameraStream,
@@ -8,6 +9,14 @@ import {
   startEdgeCameraStream,
   stopEdgeCameraStream,
 } from "../api";
+
+const IMAGE_TUNING_SHORT_LABELS = Object.freeze({
+  normal: "Thường",
+  low_light: "Tối",
+  bright_scene: "Sáng",
+  sharpness_safe: "Nét",
+  disabled: "Tắt",
+});
 
 function formatLastSeen(value) {
   if (!value) return "-";
@@ -36,6 +45,12 @@ function isStreamStarted(row) {
 
 function isEdgeOnline(row) {
   return String(row?.status || "").toLowerCase() === "online";
+}
+
+function getImageTuningButtonLabel(profile) {
+  const key = String(profile || "").trim().toLowerCase();
+  const shortLabel = IMAGE_TUNING_SHORT_LABELS[key] || "Mặc định";
+  return `Ảnh: ${shortLabel}`;
 }
 
 export default function EdgeCamerasView() {
@@ -99,7 +114,12 @@ export default function EdgeCamerasView() {
     async (row, action) => {
       const cameraId = String(row?.camera_id || "");
       if (!cameraId) return;
-      const key = action === "restart" ? `${cameraId}:restart` : `${cameraId}:toggle`;
+      const key =
+        action === "restart"
+          ? `${cameraId}:restart`
+          : action === "tuning"
+            ? `${cameraId}:tuning`
+            : `${cameraId}:toggle`;
       setBusyAction(key);
       setError("");
       try {
@@ -107,6 +127,7 @@ export default function EdgeCamerasView() {
         if (action === "start") response = await startEdgeCameraStream(cameraId);
         if (action === "stop") response = await stopEdgeCameraStream(cameraId);
         if (action === "restart") response = await restartEdgeCameraStream(cameraId);
+        if (action === "tuning") response = await cycleEdgeCameraImageTuning(cameraId);
 
         const cameraPayload = response?.camera;
         if (cameraPayload && cameraPayload.camera_id) {
@@ -128,7 +149,11 @@ export default function EdgeCamerasView() {
 
         await loadRows({ silent: true });
       } catch (actionError) {
-        setError(actionError?.message || "Không thể gửi lệnh điều khiển stream.");
+        if (action === "tuning") {
+          setError(actionError?.message || "Không thể đổi chế độ ảnh của edge camera.");
+        } else {
+          setError(actionError?.message || "Không thể gửi lệnh điều khiển stream.");
+        }
       } finally {
         setBusyAction("");
       }
@@ -195,13 +220,17 @@ export default function EdgeCamerasView() {
                     <td>{formatLastSeen(row.last_seen)}</td>
                     <td className="edge-camera-actions">
                       <button
+                        className="button secondary compact-button edge-profile-button"
+                        onClick={() => handleAction(row, "tuning")}
+                        disabled={!isEdgeOnline(row) || busyAction.startsWith(`${row.camera_id}:`)}>
+                        {busyAction === `${row.camera_id}:tuning`
+                          ? "Đang đổi"
+                          : getImageTuningButtonLabel(row.image_tuning_profile)}
+                      </button>
+                      <button
                         className={`button compact-button ${isStreamStarted(row) ? "warning-action" : "secondary"}`}
                         onClick={() => handleAction(row, isStreamStarted(row) ? "stop" : "start")}
-                        disabled={
-                          !isEdgeOnline(row) ||
-                          busyAction === `${row.camera_id}:toggle` ||
-                          busyAction === `${row.camera_id}:restart`
-                        }>
+                        disabled={!isEdgeOnline(row) || busyAction.startsWith(`${row.camera_id}:`)}>
                         {busyAction === `${row.camera_id}:toggle`
                           ? "Đang gửi..."
                           : isStreamStarted(row)
@@ -211,7 +240,7 @@ export default function EdgeCamerasView() {
                       <button
                         className="button danger compact-button"
                         onClick={() => handleAction(row, "restart")}
-                        disabled={!isEdgeOnline(row) || busyAction === `${row.camera_id}:restart`}>
+                        disabled={!isEdgeOnline(row) || busyAction.startsWith(`${row.camera_id}:`)}>
                         Restart Stream
                       </button>
                     </td>

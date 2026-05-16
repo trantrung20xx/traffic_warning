@@ -12,7 +12,7 @@ from enum import Enum
 from logging import Logger
 from pathlib import Path
 
-from ..config import AppConfig
+from ..config import AppConfig, normalize_image_tuning_profile
 from ..identity import RuntimeIdentity, get_port_listeners
 
 
@@ -118,6 +118,7 @@ class RtspPipeline:
         self._source_kind = self._resolve_source_kind()
         self._active_usb_device: str | None = None
         self._active_usb_input_format: str | None = None
+        self._image_tuning_profile = config.image_tuning.profile
 
     def _resolve_binary(self, configured_binary: str) -> str:
         found = shutil.which(configured_binary)
@@ -341,7 +342,7 @@ class RtspPipeline:
         else:
             cmd[10:10] = ["--codec", "h264"]
 
-        cmd.extend(_image_tuning_args(self._config.image_tuning.profile))
+        cmd.extend(_image_tuning_args(self._image_tuning_profile))
         return cmd
 
     def _build_usb_source_command(self, mode: PipelineMode) -> list[str]:
@@ -862,6 +863,16 @@ class RtspPipeline:
         self.stop()
         time.sleep(0.5)
         self.start()
+
+    def set_image_tuning_profile(self, profile: str) -> str:
+        normalized = normalize_image_tuning_profile(profile)
+        with self._lock:
+            self._image_tuning_profile = normalized
+        return normalized
+
+    def get_image_tuning_profile(self) -> str:
+        with self._lock:
+            return self._image_tuning_profile
 
     def is_running(self) -> bool:
         # CSI cần 3 tiến trình; USB cần MediaMTX + source (publisher đã tích hợp trong source).

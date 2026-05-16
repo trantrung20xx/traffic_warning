@@ -5,12 +5,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-ALLOWED_IMAGE_TUNING_PROFILES = {
+IMAGE_TUNING_PROFILE_CYCLE = (
     "normal",
     "low_light",
     "bright_scene",
     "sharpness_safe",
     "disabled",
+)
+ALLOWED_IMAGE_TUNING_PROFILES = set(IMAGE_TUNING_PROFILE_CYCLE)
+_IMAGE_TUNING_PROFILE_INDEX = {
+    profile: index for index, profile in enumerate(IMAGE_TUNING_PROFILE_CYCLE)
 }
 ALLOWED_STREAM_PIPELINE_MODES = {
     "auto",
@@ -170,6 +174,37 @@ def _as_interfaces(raw: Any) -> tuple[str, ...]:
     return tuple(values) if values else ("eth0", "wlan0")
 
 
+def normalize_image_tuning_profile(raw: Any) -> str:
+    profile = str(raw or "normal").strip().lower()
+    if profile not in ALLOWED_IMAGE_TUNING_PROFILES:
+        raise ValueError(f"Unsupported image_tuning.profile: {profile}")
+    return profile
+
+
+def next_image_tuning_profile(current_profile: str) -> str:
+    normalized = normalize_image_tuning_profile(current_profile)
+    next_index = (_IMAGE_TUNING_PROFILE_INDEX[normalized] + 1) % len(IMAGE_TUNING_PROFILE_CYCLE)
+    return IMAGE_TUNING_PROFILE_CYCLE[next_index]
+
+
+def persist_image_tuning_profile(config_path: Path, profile: str) -> str:
+    normalized = normalize_image_tuning_profile(profile)
+    raw = _load_json(config_path)
+    raw_tuning = raw.get("image_tuning")
+    if not isinstance(raw_tuning, dict):
+        raw_tuning = {}
+        raw["image_tuning"] = raw_tuning
+    raw_tuning["profile"] = normalized
+
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = config_path.with_suffix(f"{config_path.suffix}.tmp")
+    with temp_path.open("w", encoding="utf-8") as handle:
+        json.dump(raw, handle, ensure_ascii=True, indent=2)
+        handle.write("\n")
+    temp_path.replace(config_path)
+    return normalized
+
+
 def load_config(config_path: Path) -> AppConfig:
     root_dir = config_path.resolve().parent.parent
     raw = _load_json(config_path)
@@ -190,9 +225,7 @@ def load_config(config_path: Path) -> AppConfig:
         fps=int(raw_camera.get("fps", 25)),
     )
 
-    profile = str(raw_tuning.get("profile", "normal")).strip().lower()
-    if profile not in ALLOWED_IMAGE_TUNING_PROFILES:
-        raise ValueError(f"Unsupported image_tuning.profile: {profile}")
+    profile = normalize_image_tuning_profile(raw_tuning.get("profile", "normal"))
     image_tuning = ImageTuningConfig(profile=profile)
 
     identity = IdentityConfig(

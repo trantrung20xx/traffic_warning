@@ -177,6 +177,10 @@ class NodeState:
         with self._lock:
             self._stream_enabled = enabled
 
+    def set_image_tuning_profile(self, profile: str) -> None:
+        with self._lock:
+            self._image_tuning_profile = str(profile).strip().lower()
+
     def set_urls(
         self,
         primary_rtsp_url: str,

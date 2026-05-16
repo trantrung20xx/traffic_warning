@@ -1235,6 +1235,13 @@ select {
   gap: 8px;
 }
 
+.edge-profile-button {
+  width: 106px;
+  min-width: 106px;
+  max-width: 106px;
+  white-space: nowrap;
+}
+
 .edge-camera-node-status {
   margin-top: 4px;
   color: var(--muted);

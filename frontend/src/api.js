@@ -357,3 +357,10 @@ export async function restartEdgeCameraStream(cameraId) {
     timeoutMs: 7000,
   });
 }
+
+export async function cycleEdgeCameraImageTuning(cameraId) {
+  return await request(`/api/edge-cameras/${cameraId}/image-tuning/cycle`, {
+    method: "POST",
+    timeoutMs: 7000,
+  });
+}

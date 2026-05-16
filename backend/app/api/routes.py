@@ -129,8 +129,10 @@ def create_api_router(manager: CameraManager, edge_discovery: EdgeDiscoveryServi
             raise HTTPException(status_code=404, detail="Edge camera not found")
         return item
 
-    async def _proxy_edge_stream_action(camera_id: str, action: str):
+    async def _proxy_edge_action(camera_id: str, action: str):
         try:
+            if action == "image_tuning_cycle":
+                return await edge_discovery.proxy_image_tuning_cycle(camera_id)
             return await edge_discovery.proxy_stream_action(camera_id, action)
         except KeyError:
             raise HTTPException(status_code=404, detail="Edge camera not found")
@@ -149,15 +151,19 @@ def create_api_router(manager: CameraManager, edge_discovery: EdgeDiscoveryServi
 
     @router.post("/api/edge-cameras/{camera_id}/stream/start")
     async def edge_stream_start(camera_id: str):
-        return await _proxy_edge_stream_action(camera_id, "start")
+        return await _proxy_edge_action(camera_id, "start")
 
     @router.post("/api/edge-cameras/{camera_id}/stream/stop")
     async def edge_stream_stop(camera_id: str):
-        return await _proxy_edge_stream_action(camera_id, "stop")
+        return await _proxy_edge_action(camera_id, "stop")
 
     @router.post("/api/edge-cameras/{camera_id}/stream/restart")
     async def edge_stream_restart(camera_id: str):
-        return await _proxy_edge_stream_action(camera_id, "restart")
+        return await _proxy_edge_action(camera_id, "restart")
+
+    @router.post("/api/edge-cameras/{camera_id}/image-tuning/cycle")
+    async def edge_image_tuning_cycle(camera_id: str):
+        return await _proxy_edge_action(camera_id, "image_tuning_cycle")
 
     @router.get("/api/cameras/{camera_id}")
     def get_camera(camera_id: str):

@@ -7,7 +7,12 @@ import time
 from pathlib import Path
 
 from . import __version__
-from .config import AppConfig, load_config
+from .config import (
+    AppConfig,
+    load_config,
+    next_image_tuning_profile,
+    persist_image_tuning_profile,
+)
 from .hardware.buttons import ButtonCallbacks, ButtonController
 from .hardware.gpio_pins import HardwarePins
 from .hardware.leds import LedController
@@ -39,7 +44,7 @@ class CameraNodeApp:
         self._config = config
         self._logger = setup_logging(config)
         self._stop_event = threading.Event()
-        self._restart_service_requested = False
+        self._image_tuning_lock = threading.Lock()
 
         self._identity: RuntimeIdentity = load_or_create_identity(config)
         self._state = NodeState(
@@ -79,7 +84,7 @@ class CameraNodeApp:
             logger=self._logger,
             set_stream_enabled_callback=lambda enabled: self._supervisor.set_stream_enabled(enabled),
             restart_stream_callback=lambda: self._supervisor.request_restart(),
-            restart_service_callback=self._request_service_restart,
+            cycle_image_tuning_callback=self._cycle_image_tuning_profile,
         )
 
         callbacks = ButtonCallbacks(
@@ -120,8 +125,6 @@ class CameraNodeApp:
             return 1
         finally:
             self._shutdown()
-        if self._restart_service_requested:
-            self._logger.warning("Process exited by remote restart request; systemd will start it again.")
         return 0
 
     def _tick(self) -> None:
@@ -211,14 +214,48 @@ class CameraNodeApp:
         self._logger.info("RESET_WATCHDOG button pressed.")
         self._supervisor.clear_watchdog_and_restart()
 
-    def _request_service_restart(self) -> bool:
-        if self._stop_event.is_set():
-            return False
-        self._logger.warning("Remote restart-service requested.")
-        self._restart_service_requested = True
-        self._state.transition(NodeStatus.SHUTTING_DOWN)
-        self._stop_event.set()
-        return True
+    def _cycle_image_tuning_profile(self) -> dict[str, object]:
+        with self._image_tuning_lock:
+            previous_profile = self._pipeline.get_image_tuning_profile()
+            next_profile = next_image_tuning_profile(previous_profile)
+            applied_profile = self._pipeline.set_image_tuning_profile(next_profile)
+            persisted_profile = persist_image_tuning_profile(self._config.config_path, applied_profile)
+            self._state.set_image_tuning_profile(persisted_profile)
+            self._display.set_image_tuning_profile(persisted_profile)
+
+        stream_enabled = self._supervisor.is_stream_enabled()
+        restart_requested = False
+        if stream_enabled:
+            restart_requested = self._supervisor.request_restart()
+            if restart_requested:
+                self._logger.info(
+                    "Image tuning profile changed: %s -> %s (stream restart requested).",
+                    previous_profile,
+                    persisted_profile,
+                )
+            else:
+                self._logger.warning(
+                    "Image tuning profile changed: %s -> %s (restart request rejected).",
+                    previous_profile,
+                    persisted_profile,
+                )
+        else:
+            self._logger.info(
+                "Image tuning profile changed: %s -> %s (stream currently disabled).",
+                previous_profile,
+                persisted_profile,
+            )
+
+        snapshot = self._state.snapshot()
+        return {
+            "status": "accepted",
+            "previous_image_tuning_profile": previous_profile,
+            "image_tuning_profile": persisted_profile,
+            "stream_enabled": snapshot.stream_enabled,
+            "stream_running": snapshot.stream_running,
+            "stream_restart_requested": restart_requested,
+            "fps_estimate": snapshot.fps_estimate,
+        }
 
     def _install_signal_handlers(self) -> None:
         def _handler(signum: int, _frame: object) -> None:

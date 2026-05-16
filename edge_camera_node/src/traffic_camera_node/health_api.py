@@ -20,14 +20,14 @@ class HealthAPIServer:
         logger: Logger,
         set_stream_enabled_callback: Callable[[bool], bool],
         restart_stream_callback: Callable[[], bool],
-        restart_service_callback: Callable[[], bool],
+        cycle_image_tuning_callback: Callable[[], dict[str, object]],
     ) -> None:
         self._config = config
         self._state = state
         self._logger = logger
         self._set_stream_enabled_callback = set_stream_enabled_callback
         self._restart_stream_callback = restart_stream_callback
-        self._restart_service_callback = restart_service_callback
+        self._cycle_image_tuning_callback = cycle_image_tuning_callback
         self._thread: threading.Thread | None = None
         self._server: ThreadingHTTPServer | None = None
 
@@ -141,6 +141,26 @@ class HealthAPIServer:
                 )
                 return True
 
+            def _handle_image_tuning_cycle(self, query_string: str) -> bool:
+                authorized, detail, status = self._authorize_restart(query_string)
+                if not authorized:
+                    self._send_json({"detail": detail or "Unauthorized"}, status=status)
+                    return False
+                try:
+                    payload = owner._cycle_image_tuning_callback()
+                except ValueError as exc:
+                    self._send_json({"detail": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+                    return False
+                except Exception:
+                    owner._logger.exception("Failed to cycle image tuning profile.")
+                    self._send_json(
+                        {"detail": "Failed to cycle image tuning profile"},
+                        status=HTTPStatus.INTERNAL_SERVER_ERROR,
+                    )
+                    return False
+                self._send_json(payload)
+                return True
+
             def do_OPTIONS(self) -> None:  # noqa: N802
                 self.send_response(int(HTTPStatus.NO_CONTENT))
                 self._send_cors_headers()
@@ -154,28 +174,6 @@ class HealthAPIServer:
 
                 if parsed.path in {"/identity", "/api/identity"}:
                     self._send_json(owner._identity_payload())
-                    return
-
-                if parsed.path == "/stream/start":
-                    self._handle_stream_start(parsed.query)
-                    return
-
-                if parsed.path == "/stream/stop":
-                    self._handle_stream_stop(parsed.query)
-                    return
-
-                if parsed.path == "/restart-service":
-                    authorized, detail, status = self._authorize_restart(parsed.query)
-                    if not authorized:
-                        self._send_json({"detail": detail or "Unauthorized"}, status=status)
-                        return
-                    if not owner._restart_service_callback():
-                        self._send_json(
-                            {"detail": "Restart request rejected"},
-                            status=HTTPStatus.CONFLICT,
-                        )
-                        return
-                    self._send_json({"status": "accepted"})
                     return
 
                 self._send_json(
@@ -204,6 +202,10 @@ class HealthAPIServer:
 
                 if parsed.path == "/api/stream/restart":
                     self._handle_stream_restart(parsed.query)
+                    return
+
+                if parsed.path == "/api/image-tuning/cycle":
+                    self._handle_image_tuning_cycle(parsed.query)
                     return
 
                 self._send_json(

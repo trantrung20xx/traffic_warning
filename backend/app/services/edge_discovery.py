@@ -221,10 +221,49 @@ class EdgeDiscoveryService:
         if action_name not in {"start", "stop", "restart"}:
             raise ValueError(f"Unsupported stream action: {action}")
 
+        payload = await self._proxy_edge_post_action(
+            camera_id=camera_id,
+            action_label=f"stream {action_name}",
+            path=f"/api/stream/{action_name}",
+        )
+        self._apply_stream_action_hint(camera_id=camera_id, action_name=action_name, edge_payload=payload)
+        await self._wait_for_stream_action_state(camera_id=camera_id, action_name=action_name)
+        latest = self.get_camera(camera_id)
+        return {
+            "ok": True,
+            "camera_id": camera_id,
+            "action": action_name,
+            "edge_response": payload,
+            "camera": latest,
+        }
+
+    async def proxy_image_tuning_cycle(self, camera_id: str) -> dict[str, Any]:
+        payload = await self._proxy_edge_post_action(
+            camera_id=camera_id,
+            action_label="image_tuning_cycle",
+            path="/api/image-tuning/cycle",
+        )
+        self._apply_image_tuning_hint(camera_id=camera_id, edge_payload=payload)
+        latest = self.get_camera(camera_id)
+        return {
+            "ok": True,
+            "camera_id": camera_id,
+            "action": "image_tuning_cycle",
+            "edge_response": payload,
+            "camera": latest,
+        }
+
+    async def _proxy_edge_post_action(
+        self,
+        *,
+        camera_id: str,
+        action_label: str,
+        path: str,
+    ) -> dict[str, Any]:
         item = self.get_camera(camera_id)
         if not item:
             raise KeyError(camera_id)
-        candidate_urls = self._build_stream_action_candidate_urls(item=item, action_name=action_name)
+        candidate_urls = self._build_action_candidate_urls(item=item, path=path)
         if not candidate_urls:
             self._mark_camera_offline(camera_id)
             raise ConnectionError("edge camera is offline or unreachable")
@@ -243,35 +282,28 @@ class EdgeDiscoveryService:
                     )
                 raise EdgeStreamActionError(
                     status_code=int(getattr(exc, "code", 502) or 502),
-                    message=self._extract_http_error_message(exc) or "edge stream action failed",
+                    message=self._extract_http_error_message(exc) or "edge action failed",
                 ) from exc
             except Exception as exc:
                 last_error = exc
                 self._logger.warning(
-                    "Stream action %s failed for %s at %s: %s",
-                    action_name,
+                    "Action %s failed for %s at %s: %s",
+                    action_label,
                     camera_id,
                     target_url,
                     exc,
                 )
                 continue
 
-            reached_host, reached_port = self._extract_host_port_from_url(target_url)
+            reached = self._extract_host_port_from_url(target_url)
+            reached_host = reached[0] if reached is not None else None
+            reached_port = reached[1] if reached is not None else None
             self._mark_camera_online(
                 camera_id,
                 reached_host=reached_host,
                 reached_port=reached_port,
             )
-            self._apply_stream_action_hint(camera_id=camera_id, action_name=action_name, edge_payload=payload)
-            await self._wait_for_stream_action_state(camera_id=camera_id, action_name=action_name)
-            latest = self.get_camera(camera_id)
-            return {
-                "ok": True,
-                "camera_id": camera_id,
-                "action": action_name,
-                "edge_response": payload,
-                "camera": latest,
-            }
+            return payload
 
         self._mark_camera_offline(camera_id)
         if last_error is not None:
@@ -351,8 +383,28 @@ class EdgeDiscoveryService:
 
             self._registry[camera_id] = updated
 
-    def _build_stream_action_candidate_urls(self, *, item: dict[str, Any], action_name: str) -> list[str]:
-        path = f"/api/stream/{action_name}"
+    def _apply_image_tuning_hint(self, *, camera_id: str, edge_payload: dict[str, Any]) -> None:
+        with self._lock:
+            current = self._registry.get(camera_id)
+            if not current:
+                return
+            updated = dict(current)
+            if isinstance(edge_payload, dict):
+                profile = edge_payload.get("image_tuning_profile")
+                if profile is not None:
+                    updated["image_tuning_profile"] = str(profile).strip().lower()
+                if "stream_enabled" in edge_payload:
+                    updated["stream_enabled"] = bool(edge_payload.get("stream_enabled"))
+                if "stream_running" in edge_payload:
+                    updated["stream_running"] = bool(edge_payload.get("stream_running"))
+                if "fps_estimate" in edge_payload:
+                    try:
+                        updated["edge_fps"] = float(edge_payload.get("fps_estimate"))
+                    except (TypeError, ValueError):
+                        pass
+            self._registry[camera_id] = updated
+
+    def _build_action_candidate_urls(self, *, item: dict[str, Any], path: str) -> list[str]:
         candidates: list[str] = []
 
         api_port = _safe_int(item.get("api_port"), 0)
@@ -919,6 +971,10 @@ class EdgeDiscoveryService:
                         updated["edge_fps"] = float(health_payload.get("fps_estimate"))
                     except (TypeError, ValueError):
                         pass
+                if "image_tuning_profile" in health_payload:
+                    updated["image_tuning_profile"] = str(
+                        health_payload.get("image_tuning_profile") or ""
+                    ).strip().lower()
                 if "service_version" in health_payload:
                     updated["service_version"] = str(health_payload.get("service_version") or "")
             updated["status"] = "online"

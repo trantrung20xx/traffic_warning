@@ -222,6 +222,43 @@ def test_proxy_stream_action_attempts_even_when_registry_status_offline(monkeypa
     assert any("172.20.10.2" in url for url in called_urls)
 
 
+def test_proxy_image_tuning_cycle_updates_registry(monkeypatch) -> None:
+    discovery = EdgeDiscoveryService()
+    discovery._registry["cam_tuning"] = {
+        "camera_id": "cam_tuning",
+        "host": "172.20.10.9",
+        "ip_address": "172.20.10.9",
+        "api_port": 8088,
+        "identity_api_url": "http://172.20.10.9:8088/api/identity",
+        "health_api_url": "http://172.20.10.9:8088/api/health",
+        "status": "online",
+        "image_tuning_profile": "normal",
+    }
+
+    called_urls: list[str] = []
+
+    def _fake_http_request(url: str, method: str, timeout_s: float | None = None) -> dict[str, object]:
+        _ = timeout_s
+        called_urls.append(url)
+        assert method == "POST"
+        return {
+            "status": "accepted",
+            "image_tuning_profile": "low_light",
+            "stream_enabled": True,
+            "stream_running": True,
+        }
+
+    monkeypatch.setattr(discovery, "_http_json_request", _fake_http_request)
+
+    result = asyncio.run(discovery.proxy_image_tuning_cycle("cam_tuning"))
+
+    assert result["ok"] is True
+    assert result["camera_id"] == "cam_tuning"
+    assert result["action"] == "image_tuning_cycle"
+    assert discovery._registry["cam_tuning"]["image_tuning_profile"] == "low_light"
+    assert any("/api/image-tuning/cycle" in url for url in called_urls)
+
+
 def test_refresh_status_marks_camera_offline_when_health_unreachable(monkeypatch) -> None:
     discovery = EdgeDiscoveryService()
     discovery._registry["cam_dead"] = {

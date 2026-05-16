@@ -203,6 +203,10 @@ class TFTDisplayManager:
         with self._lock:
             self._screen_idx = (self._screen_idx + 1) % 4
 
+    def set_image_tuning_profile(self, profile: str) -> None:
+        with self._lock:
+            self._context.image_tuning_profile = str(profile).strip().lower()
+
     def render_snapshot(self, snapshot: HealthSnapshot) -> None:
         if self._renderer is None:
             return
