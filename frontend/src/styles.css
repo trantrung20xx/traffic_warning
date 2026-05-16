@@ -1202,6 +1202,23 @@ select {
 .edge-camera-table-wrap {
   margin-top: 12px;
   overflow-x: auto;
+  scrollbar-color: rgba(28, 166, 255, 0.42) rgba(255, 255, 255, 0.04);
+}
+
+.edge-camera-table-wrap::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.edge-camera-table-wrap::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 999px;
+}
+
+.edge-camera-table-wrap::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(28, 166, 255, 0.72), rgba(0, 214, 143, 0.62));
+  border-radius: 999px;
+  border: 1px solid rgba(160, 210, 229, 0.14);
 }
 
 .edge-camera-table {
@@ -1257,10 +1274,75 @@ select {
 
 .edge-hardware-modal {
   width: min(760px, 100%);
+  max-height: min(90vh, 920px);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.edge-hardware-modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px 20px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.edge-hardware-modal-header .confirm-dialog-header {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.edge-hardware-close-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--muted);
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+.edge-hardware-close-button:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.edge-hardware-close-button:focus-visible {
+  outline: 2px solid rgba(28, 166, 255, 0.72);
+  outline-offset: 1px;
+}
+
+.edge-hardware-content {
+  padding: 14px 20px 20px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-color: rgba(28, 166, 255, 0.42) rgba(255, 255, 255, 0.04);
+}
+
+.edge-hardware-content::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.edge-hardware-content::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 999px;
+}
+
+.edge-hardware-content::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(28, 166, 255, 0.72), rgba(0, 214, 143, 0.62));
+  border-radius: 999px;
+  border: 1px solid rgba(160, 210, 229, 0.14);
 }
 
 .edge-hardware-meta {
-  margin-top: 14px;
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
@@ -2082,6 +2164,20 @@ select {
   .confirm-dialog {
     padding: 16px;
     border-radius: 20px;
+  }
+
+  .edge-hardware-modal {
+    width: 100%;
+    max-height: calc(100vh - 24px);
+    padding: 0;
+  }
+
+  .edge-hardware-modal-header {
+    padding: 14px 14px 10px;
+  }
+
+  .edge-hardware-content {
+    padding: 12px 14px 14px;
   }
 
   .confirm-dialog-actions {
