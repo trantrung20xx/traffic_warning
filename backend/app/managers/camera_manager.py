@@ -239,67 +239,6 @@ class CameraManager:
     def unregister_violation_websocket(self, ws: WebSocket) -> None:
         self._violation_websockets.discard(ws)
 
-    def get_lane_polygons(self, camera_id: str) -> dict:
-        ctx = self._contexts.get(camera_id)
-        if ctx is None:
-            # Khi context chưa chạy, trả dữ liệu từ file config đã denormalize.
-            lane_cfg = load_lane_config_for_camera(self.repo_root, camera_id)
-            lane_cfg_pixels = denormalize_lane_config(lane_cfg)
-            validation = validate_lane_geometry(lane_cfg)
-            return {
-                "camera_id": lane_cfg.camera_id,
-                "frame_width": lane_cfg.frame_width,
-                "frame_height": lane_cfg.frame_height,
-                "lanes": [
-                    {
-                        "lane_id": lane.lane_id,
-                        "polygon": lane.polygon,
-                        "approach_zone": lane.approach_zone,
-                        "commit_gate": lane.commit_gate,
-                        "commit_line": lane.commit_line,
-                        "allowed_maneuvers": lane.allowed_maneuvers or [],
-                        "allowed_lane_changes": lane.allowed_lane_changes or [lane.lane_id],
-                        "allowed_vehicle_types": lane.allowed_vehicle_types or ["motorcycle", "car", "truck", "bus"],
-                        "maneuvers": lane.maneuvers or {},
-                    }
-                    for lane in lane_cfg_pixels.lanes
-                ],
-                "config_validation": validation,
-            }
-        payload = ctx.get_lane_polygons_for_ui()
-        try:
-            lane_cfg = load_lane_config_for_camera(self.repo_root, camera_id)
-            # Luôn trả validation mới nhất từ file để UI cảnh báo chính xác.
-            payload["config_validation"] = validate_lane_geometry(lane_cfg)
-        except Exception:
-            # Lỗi load/validate config không làm hỏng API runtime lane payload.
-            payload["config_validation"] = []
-        return payload
-
-    def get_recent_trajectories(
-        self,
-        camera_id: str,
-        *,
-        limit: int = 30,
-        lane_id: Optional[int] = None,
-        vehicle_type: Optional[str] = None,
-    ) -> dict:
-        self._require_camera_exists(camera_id)
-        ctx = self._contexts.get(camera_id)
-        if ctx is None:
-            return {
-                "camera_id": camera_id,
-                "limit": int(limit),
-                "lane_id": lane_id,
-                "vehicle_type": vehicle_type,
-                "rows": [],
-            }
-        return ctx.get_recent_trajectories_for_ui(
-            limit=limit,
-            lane_id=lane_id,
-            vehicle_type=vehicle_type,
-        )
-
     def has_background_image(self, camera_id: str) -> bool:
         self._require_camera_exists(camera_id)
         # Chỉ cần kiểm tra path tồn tại hay không.

@@ -423,57 +423,6 @@ class CameraContext:
     def camera_id(self) -> str:
         return self.camera_config.camera_id
 
-    def get_lane_polygons_for_ui(self) -> dict[str, Any]:
-        """
-        Trả dữ liệu polygon ở hệ pixel để frontend vẽ trực tiếp lên canvas.
-        """
-        lanes = []
-        for lp in self.lane_config.lanes:
-            # Dữ liệu trả về giữ nguyên cấu trúc đã denormalize để UI không phải suy luận thêm.
-            lanes.append(
-                {
-                    "lane_id": lp.lane_id,
-                    "polygon": lp.polygon,
-                    "approach_zone": lp.approach_zone,
-                    "commit_gate": lp.commit_gate,
-                    "commit_line": lp.commit_line,
-                    "allowed_maneuvers": lp.allowed_maneuvers or [],
-                    "allowed_lane_changes": lp.allowed_lane_changes or [lp.lane_id],
-                    "allowed_vehicle_types": lp.allowed_vehicle_types or ["motorcycle", "car", "truck", "bus"],
-                    "maneuvers": lp.maneuvers or {},
-                    "direction_rule": lp.direction_rule.model_dump(mode="json", exclude_none=True)
-                    if lp.direction_rule is not None
-                    else None,
-                }
-            )
-        return {
-            "camera_id": self.camera_id,
-            "frame_width": self.lane_config.frame_width,
-            "frame_height": self.lane_config.frame_height,
-            "lanes": lanes,
-        }
-
-    def get_recent_trajectories_for_ui(
-        self,
-        *,
-        limit: int = 30,
-        lane_id: Optional[int] = None,
-        vehicle_type: Optional[str] = None,
-    ) -> dict[str, Any]:
-        # API polling trajectory chỉ đọc snapshot hiện tại từ violation_logic.
-        trajectories = self.violation_logic.get_recent_trajectories(
-            limit=limit,
-            lane_id=lane_id,
-            vehicle_type=vehicle_type,
-        )
-        return {
-            "camera_id": self.camera_id,
-            "limit": int(limit),
-            "lane_id": lane_id,
-            "vehicle_type": vehicle_type,
-            "rows": trajectories,
-        }
-
     def get_latest_preview_jpeg(self) -> Optional[bytes]:
         with self._preview_condition:
             # Trả bytes JPEG mới nhất hoặc None nếu chưa có frame nào được encode.

@@ -172,7 +172,7 @@ class HealthAPIServer:
                     self._send_json(owner._state.snapshot().to_health_dict())
                     return
 
-                if parsed.path in {"/identity", "/api/identity"}:
+                if parsed.path == "/api/identity":
                     self._send_json(owner._identity_payload())
                     return
 

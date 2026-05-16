@@ -167,16 +167,6 @@ class EdgeDiscoveryService:
             item = self._registry.get(camera_id)
             return dict(item) if item else None
 
-    def debug_snapshot(self) -> dict[str, Any]:
-        with self._lock:
-            return {
-                **self._last_scan_summary,
-                "running": self._running,
-                "registry_count": len(self._registry),
-                "service_count": len(self._service_to_camera_id),
-                "zeroconf_import_error": str(_ZEROCONF_IMPORT_ERROR) if _ZEROCONF_IMPORT_ERROR else None,
-            }
-
     def refresh_service(self, service_type: str, service_name: str) -> None:
         with self._lock:
             zc = self._zeroconf

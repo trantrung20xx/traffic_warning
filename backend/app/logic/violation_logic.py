@@ -2346,41 +2346,6 @@ class ViolationLogic:
             return 0
         return 1 if value > 0 else -1
 
-    def get_recent_trajectories(
-        self,
-        *,
-        limit: int = 30,
-        lane_id: Optional[int] = None,
-        vehicle_type: Optional[str] = None,
-        min_points: int = 3,
-    ) -> list[dict]:
-        # Snapshot trajectory runtime cho API debug/giám sát.
-        rows: list[dict] = []
-        for state in self._vehicle_states.values():
-            if lane_id is not None and state.current_stable_lane_id != lane_id:
-                continue
-            if vehicle_type and state.vehicle_type != vehicle_type:
-                continue
-            points = [[float(sample.center[0]), float(sample.center[1])] for sample in state.trajectory]
-            if len(points) < max(int(min_points), 2):
-                continue
-            rows.append(
-                {
-                    "vehicle_id": state.vehicle_id,
-                    "vehicle_type": state.vehicle_type,
-                    "lane_id": state.current_stable_lane_id,
-                    "last_seen_ts": state.last_seen_ts.isoformat() if state.last_seen_ts else None,
-                    "points": points,
-                    "turn_phase": state.turn_state.phase,
-                    "turn_source_lane_id": state.turn_state.source_lane_id,
-                    "turn_confirmed_maneuver": state.turn_state.confirmed_maneuver,
-                    "turn_reject_reasons": dict(state.turn_state.last_reject_reasons),
-                }
-            )
-        # Ưu tiên xe mới xuất hiện gần nhất lên đầu danh sách.
-        rows.sort(key=lambda row: row.get("last_seen_ts") or "", reverse=True)
-        return rows[: max(int(limit), 1)]
-
     def get_direction_status_for_vehicle(self, *, vehicle_id: int) -> tuple[str, Optional[float]]:
         st = self._vehicle_states.get(vehicle_id)
         if st is None:

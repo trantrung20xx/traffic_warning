@@ -112,10 +112,6 @@ def create_api_router(manager: CameraManager, edge_discovery: EdgeDiscoveryServi
             )
         return rows
 
-    @router.get("/api/edge-cameras/debug")
-    def debug_edge_cameras():
-        return edge_discovery.debug_snapshot()
-
     @router.get("/api/edge-cameras/{camera_id}")
     async def get_edge_camera(camera_id: str):
         try:
@@ -235,31 +231,6 @@ def create_api_router(manager: CameraManager, edge_discovery: EdgeDiscoveryServi
             # Trả thêm cờ deleted để client biết có ảnh để xóa hay không.
             deleted = manager.delete_background_image(camera_id)
             return {"ok": True, "camera_id": camera_id, "deleted": deleted}
-        except KeyError:
-            raise HTTPException(status_code=404, detail="Camera not found")
-
-    @router.get("/api/cameras/{camera_id}/lanes")
-    def get_camera_lanes(camera_id: str):
-        try:
-            return manager.get_lane_polygons(camera_id)
-        except KeyError:
-            raise HTTPException(status_code=404, detail="Camera not found")
-
-    @router.get("/api/cameras/{camera_id}/trajectories")
-    def get_camera_trajectories(
-        camera_id: str,
-        limit: int = Query(default=30, ge=1, le=200),
-        lane_id: Optional[int] = Query(default=None),
-        vehicle_type: Optional[str] = Query(default=None),
-    ):
-        try:
-            # Truy vấn snapshot trajectory runtime đã làm mượt theo track hiện tại.
-            return manager.get_recent_trajectories(
-                camera_id,
-                limit=limit,
-                lane_id=lane_id,
-                vehicle_type=vehicle_type,
-            )
         except KeyError:
             raise HTTPException(status_code=404, detail="Camera not found")
 
