@@ -25,6 +25,38 @@ function formatLastSeen(value) {
   return date.toLocaleString("vi-VN");
 }
 
+function formatPercent(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? `${parsed.toFixed(1)}%` : "-";
+}
+
+function formatTemperature(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? `${parsed.toFixed(1)}C` : "-";
+}
+
+function formatFps(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? `${parsed.toFixed(1)} fps` : "-";
+}
+
+function formatBoolean(value) {
+  if (value === true) return "Có";
+  if (value === false) return "Không";
+  return "-";
+}
+
+function formatUptimeSeconds(value) {
+  const total = Number(value);
+  if (!Number.isFinite(total) || total < 0) return "-";
+  const seconds = Math.floor(total % 60);
+  const minutes = Math.floor((total / 60) % 60);
+  const hours = Math.floor(total / 3600);
+  if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
+  if (minutes > 0) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
+}
+
 function getStatusBadgeClass(status) {
   const normalized = String(status || "").toLowerCase();
   if (normalized === "online") return "badge success";
@@ -58,6 +90,8 @@ export default function EdgeCamerasView() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [busyAction, setBusyAction] = useState("");
+  const [hardwarePopupRow, setHardwarePopupRow] = useState(null);
+  const [hardwareLoading, setHardwareLoading] = useState(false);
 
   const loadRows = useCallback(async ({ silent = false } = {}) => {
     if (!silent) {
@@ -161,6 +195,31 @@ export default function EdgeCamerasView() {
     [loadRows],
   );
 
+  const openHardwarePopup = useCallback(async (row) => {
+    const cameraId = String(row?.camera_id || "");
+    if (!cameraId) return;
+    setHardwarePopupRow({ ...row });
+    setHardwareLoading(true);
+    try {
+      const latest = await fetchEdgeCamera(cameraId);
+      if (latest && latest.camera_id) {
+        setHardwarePopupRow((current) => {
+          if (!current || String(current.camera_id || "") !== cameraId) return current;
+          return { ...current, ...latest };
+        });
+      }
+    } catch (popupError) {
+      setError(popupError?.message || "Không thể đồng bộ thông tin phần cứng edge camera.");
+    } finally {
+      setHardwareLoading(false);
+    }
+  }, []);
+
+  const closeHardwarePopup = useCallback(() => {
+    setHardwarePopupRow(null);
+    setHardwareLoading(false);
+  }, []);
+
   return (
     <div className="edge-cameras-layout">
       <section className="panel edge-cameras-panel">
@@ -207,7 +266,18 @@ export default function EdgeCamerasView() {
               </thead>
               <tbody>
                 {sortedRows.map((row) => (
-                  <tr key={row.camera_id}>
+                  <tr
+                    key={row.camera_id}
+                    className="edge-camera-row-button"
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => openHardwarePopup(row)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        openHardwarePopup(row);
+                      }
+                    }}>
                     <td>{row.camera_id || "-"}</td>
                     <td>{row.host || "-"}</td>
                     <td>{row.api_port ?? "-"}</td>
@@ -221,7 +291,10 @@ export default function EdgeCamerasView() {
                     <td className="edge-camera-actions">
                       <button
                         className="button secondary compact-button edge-profile-button"
-                        onClick={() => handleAction(row, "tuning")}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          handleAction(row, "tuning");
+                        }}
                         disabled={!isEdgeOnline(row) || busyAction.startsWith(`${row.camera_id}:`)}>
                         {busyAction === `${row.camera_id}:tuning`
                           ? "Đang đổi"
@@ -229,7 +302,10 @@ export default function EdgeCamerasView() {
                       </button>
                       <button
                         className={`button compact-button ${isStreamStarted(row) ? "warning-action" : "secondary"}`}
-                        onClick={() => handleAction(row, isStreamStarted(row) ? "stop" : "start")}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          handleAction(row, isStreamStarted(row) ? "stop" : "start");
+                        }}
                         disabled={!isEdgeOnline(row) || busyAction.startsWith(`${row.camera_id}:`)}>
                         {busyAction === `${row.camera_id}:toggle`
                           ? "Đang gửi..."
@@ -239,7 +315,10 @@ export default function EdgeCamerasView() {
                       </button>
                       <button
                         className="button danger compact-button"
-                        onClick={() => handleAction(row, "restart")}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          handleAction(row, "restart");
+                        }}
                         disabled={!isEdgeOnline(row) || busyAction.startsWith(`${row.camera_id}:`)}>
                         Restart Stream
                       </button>
@@ -251,6 +330,92 @@ export default function EdgeCamerasView() {
           </div>
         ) : null}
       </section>
+
+      {hardwarePopupRow ? (
+        <div className="modal-backdrop" onClick={closeHardwarePopup}>
+          <div
+            className="confirm-dialog edge-hardware-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="edge-hardware-title"
+            onClick={(event) => event.stopPropagation()}>
+            <div className="confirm-dialog-header">
+              <span className="confirm-dialog-icon">
+                <AppIcon name="server" size={20} />
+              </span>
+              <div>
+                <div className="panel-kicker">Edge Hardware</div>
+                <h3 id="edge-hardware-title">{hardwarePopupRow.camera_id || "Edge Camera"}</h3>
+              </div>
+            </div>
+
+            <div className="edge-hardware-meta">
+              <span className={getStatusBadgeClass(hardwarePopupRow.status)}>{hardwarePopupRow.status || "unknown"}</span>
+              <span>{`Lần cuối thấy: ${formatLastSeen(hardwarePopupRow.last_seen)}`}</span>
+              <span>{`Node: ${hardwarePopupRow.node_status || "-"}`}</span>
+            </div>
+
+            {hardwareLoading ? <div className="empty-state slim">Đang đồng bộ thông tin phần cứng...</div> : null}
+
+            <div className="edge-hardware-grid">
+              <div className="edge-hardware-item">
+                <div className="edge-hardware-label">Nhiệt độ CPU</div>
+                <div className="edge-hardware-value">{formatTemperature(hardwarePopupRow.temperature_c)}</div>
+              </div>
+              <div className="edge-hardware-item">
+                <div className="edge-hardware-label">CPU</div>
+                <div className="edge-hardware-value">{formatPercent(hardwarePopupRow.cpu_percent)}</div>
+              </div>
+              <div className="edge-hardware-item">
+                <div className="edge-hardware-label">RAM</div>
+                <div className="edge-hardware-value">{formatPercent(hardwarePopupRow.ram_percent)}</div>
+              </div>
+              <div className="edge-hardware-item">
+                <div className="edge-hardware-label">Disk</div>
+                <div className="edge-hardware-value">{formatPercent(hardwarePopupRow.disk_percent)}</div>
+              </div>
+              <div className="edge-hardware-item">
+                <div className="edge-hardware-label">FPS stream</div>
+                <div className="edge-hardware-value">{formatFps(hardwarePopupRow.edge_fps)}</div>
+              </div>
+              <div className="edge-hardware-item">
+                <div className="edge-hardware-label">Uptime</div>
+                <div className="edge-hardware-value">{formatUptimeSeconds(hardwarePopupRow.uptime_s)}</div>
+              </div>
+              <div className="edge-hardware-item">
+                <div className="edge-hardware-label">Undervoltage</div>
+                <div className="edge-hardware-value">{formatBoolean(hardwarePopupRow.undervoltage)}</div>
+              </div>
+              <div className="edge-hardware-item">
+                <div className="edge-hardware-label">Watchdog latched</div>
+                <div className="edge-hardware-value">{formatBoolean(hardwarePopupRow.watchdog_latched)}</div>
+              </div>
+              <div className="edge-hardware-item">
+                <div className="edge-hardware-label">Restart count</div>
+                <div className="edge-hardware-value">{hardwarePopupRow.restart_count ?? "-"}</div>
+              </div>
+              <div className="edge-hardware-item">
+                <div className="edge-hardware-label">Interface</div>
+                <div className="edge-hardware-value">{hardwarePopupRow.active_interface || "-"}</div>
+              </div>
+              <div className="edge-hardware-item edge-hardware-item-wide">
+                <div className="edge-hardware-label">Throttled raw</div>
+                <div className="edge-hardware-value">{hardwarePopupRow.throttled_raw || "-"}</div>
+              </div>
+              <div className="edge-hardware-item edge-hardware-item-wide">
+                <div className="edge-hardware-label">Lỗi gần nhất</div>
+                <div className="edge-hardware-value">{hardwarePopupRow.last_error || "-"}</div>
+              </div>
+            </div>
+
+            <div className="confirm-dialog-actions">
+              <button className="button secondary" type="button" onClick={closeHardwarePopup}>
+                Đóng
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

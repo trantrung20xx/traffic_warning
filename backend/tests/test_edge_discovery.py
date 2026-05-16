@@ -300,6 +300,17 @@ def test_refresh_status_treats_streaming_health_payload_as_online(monkeypatch) -
             "status": "STREAMING",
             "stream_enabled": True,
             "stream_running": True,
+            "cpu_percent": 42.5,
+            "ram_percent": 61.2,
+            "disk_percent": 70.4,
+            "temperature_c": 63.1,
+            "undervoltage": False,
+            "watchdog_latched": False,
+            "restart_count": 2,
+            "uptime_s": 1234,
+            "active_interface": "eth0",
+            "last_error": None,
+            "throttled_raw": "0x0",
         }
 
     monkeypatch.setattr(discovery, "_http_json_request", _healthy_payload)
@@ -309,3 +320,13 @@ def test_refresh_status_treats_streaming_health_payload_as_online(monkeypatch) -
     assert discovery._registry["cam_live"]["node_status"] == "STREAMING"
     assert discovery._registry["cam_live"]["stream_enabled"] is True
     assert discovery._registry["cam_live"]["stream_running"] is True
+    assert discovery._registry["cam_live"]["cpu_percent"] == 42.5
+    assert discovery._registry["cam_live"]["ram_percent"] == 61.2
+    assert discovery._registry["cam_live"]["disk_percent"] == 70.4
+    assert discovery._registry["cam_live"]["temperature_c"] == 63.1
+    assert discovery._registry["cam_live"]["undervoltage"] is False
+    assert discovery._registry["cam_live"]["watchdog_latched"] is False
+    assert discovery._registry["cam_live"]["restart_count"] == 2
+    assert discovery._registry["cam_live"]["uptime_s"] == 1234
+    assert discovery._registry["cam_live"]["active_interface"] == "eth0"
+    assert discovery._registry["cam_live"]["throttled_raw"] == "0x0"

@@ -971,6 +971,22 @@ class EdgeDiscoveryService:
                         updated["edge_fps"] = float(health_payload.get("fps_estimate"))
                     except (TypeError, ValueError):
                         pass
+                for field in (
+                    "mdns_status",
+                    "temperature_c",
+                    "cpu_percent",
+                    "ram_percent",
+                    "disk_percent",
+                    "throttled_raw",
+                    "undervoltage",
+                    "last_error",
+                    "restart_count",
+                    "watchdog_latched",
+                    "active_interface",
+                    "uptime_s",
+                ):
+                    if field in health_payload:
+                        updated[field] = health_payload.get(field)
                 if "image_tuning_profile" in health_payload:
                     updated["image_tuning_profile"] = str(
                         health_payload.get("image_tuning_profile") or ""

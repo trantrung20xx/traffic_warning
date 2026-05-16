@@ -1235,11 +1235,69 @@ select {
   gap: 8px;
 }
 
+.edge-camera-row-button {
+  cursor: pointer;
+}
+
+.edge-camera-row-button:hover td {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.edge-camera-row-button:focus-visible {
+  outline: 2px solid rgba(28, 166, 255, 0.72);
+  outline-offset: -2px;
+}
+
 .edge-profile-button {
   width: 106px;
   min-width: 106px;
   max-width: 106px;
   white-space: nowrap;
+}
+
+.edge-hardware-modal {
+  width: min(760px, 100%);
+}
+
+.edge-hardware-meta {
+  margin-top: 14px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  color: var(--muted);
+}
+
+.edge-hardware-grid {
+  margin-top: 14px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.edge-hardware-item {
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.edge-hardware-item-wide {
+  grid-column: 1 / -1;
+}
+
+.edge-hardware-label {
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.edge-hardware-value {
+  margin-top: 6px;
+  color: var(--text);
+  font-weight: 600;
+  word-break: break-word;
 }
 
 .edge-camera-node-status {
@@ -1985,6 +2043,10 @@ select {
 
   .edge-camera-actions {
     flex-direction: column;
+  }
+
+  .edge-hardware-grid {
+    grid-template-columns: 1fr;
   }
 }
 
