@@ -29,7 +29,12 @@
     "spi_device": 0,
     "dc_pin": 25,
     "reset_pin": 24,
-    "backlight_pin": null
+    "backlight_pin": null,
+    "width": 240,
+    "height": 320,
+    "madctl": "0x48",
+    "spi_max_speed_hz": 16000000,
+    "font_size": 14
   },
   "stream": {
     "bitrate": 6000000,

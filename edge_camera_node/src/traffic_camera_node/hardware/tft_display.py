@@ -34,12 +34,22 @@ class ConsoleRenderer:
 
 
 class ILI9341Renderer:
-    WIDTH = 320
-    HEIGHT = 240
-
-    def __init__(self, pins: DisplayPins, logger: Logger) -> None:
+    def __init__(
+        self,
+        pins: DisplayPins,
+        width: int,
+        height: int,
+        madctl: int,
+        spi_max_speed_hz: int,
+        font_size: int,
+        logger: Logger,
+    ) -> None:
         self._logger = logger
         self._pins = pins
+        self._width = max(1, int(width))
+        self._height = max(1, int(height))
+        self._madctl = madctl & 0xFF
+        self._font_size = max(8, int(font_size))
         self._spi = None
         self._dc = None
         self._rst = None
@@ -58,7 +68,7 @@ class ILI9341Renderer:
 
         self._spi = spidev.SpiDev()
         self._spi.open(pins.spi_bus, pins.spi_device)
-        self._spi.max_speed_hz = 32_000_000
+        self._spi.max_speed_hz = max(1, int(spi_max_speed_hz))
         self._spi.mode = 0
 
         self._dc = DigitalOutputDevice(pins.dc_pin)
@@ -66,8 +76,36 @@ class ILI9341Renderer:
         if pins.backlight_pin is not None:
             self._backlight = DigitalOutputDevice(pins.backlight_pin)
 
-        self._font = self._ImageFont.load_default()
+        self._font = self._load_font()
+        self._line_char_limit = max(
+            12,
+            (self._width - 8) // max(6, int(self._font_size * 0.62)),
+        )
+        self._line_height = self._resolve_line_height()
         self._init_panel()
+
+    def _load_font(self) -> object:
+        font_candidates = (
+            "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        )
+        for path in font_candidates:
+            try:
+                return self._ImageFont.truetype(path, self._font_size)
+            except Exception:
+                continue
+        return self._ImageFont.load_default()
+
+    def _resolve_line_height(self) -> int:
+        try:
+            left, top, right, bottom = self._font.getbbox("Ag")
+            height = bottom - top
+            width = right - left
+            if height > 0 and width > 0:
+                return max(12, height + 2)
+        except Exception:
+            pass
+        return max(12, self._font_size + 2)
 
     def _command(self, cmd: int) -> None:
         self._dc.off()
@@ -97,7 +135,7 @@ class ILI9341Renderer:
         self._data(bytes([0x55]))  # chế độ màu 16-bit RGB565
 
         self._command(0x36)  # điều khiển thứ tự truy cập bộ nhớ
-        self._data(bytes([0x48]))  # thứ tự hàng/cột chuẩn cho panel
+        self._data(bytes([self._madctl]))  # thứ tự hàng/cột theo cấu hình panel
 
         self._command(0x11)  # thoát chế độ ngủ
         time.sleep(0.12)
@@ -128,18 +166,23 @@ class ILI9341Renderer:
         return bytes(out)
 
     def render(self, lines: list[str]) -> None:
-        image = self._Image.new("RGB", (self.WIDTH, self.HEIGHT), (0, 0, 0))
+        image = self._Image.new("RGB", (self._width, self._height), (0, 0, 0))
         draw = self._ImageDraw.Draw(image)
         y = 4
         for line in lines:
-            draw.text((4, y), line, fill=(255, 255, 255), font=self._font)
-            y += 14
-            if y > self.HEIGHT - 12:
+            draw.text(
+                (4, y),
+                _trim_line(line, self._line_char_limit),
+                fill=(255, 255, 255),
+                font=self._font,
+            )
+            y += self._line_height
+            if y > self._height - self._line_height:
                 break
 
         rgb_bytes = image.tobytes()
         frame = self._rgb888_to_565_bytes(rgb_bytes)
-        self._set_window(0, 0, self.WIDTH - 1, self.HEIGHT - 1)
+        self._set_window(0, 0, self._width - 1, self._height - 1)
         self._data(frame)
 
     def close(self) -> None:
@@ -169,18 +212,29 @@ class DisplayContext:
     image_tuning_profile: str
 
 
+@dataclass(frozen=True)
+class DisplayRenderConfig:
+    width: int = 320
+    height: int = 240
+    madctl: int = 0x48
+    spi_max_speed_hz: int = 32_000_000
+    font_size: int = 14
+
+
 class TFTDisplayManager:
     def __init__(
         self,
         enabled: bool,
         update_hz: int,
         pins: DisplayPins,
+        render_config: DisplayRenderConfig,
         context: DisplayContext,
         logger: Logger,
     ) -> None:
         self._enabled = enabled
         self._update_hz = max(1, update_hz)
         self._pins = pins
+        self._render_config = render_config
         self._context = context
         self._logger = logger
         self._renderer: ConsoleRenderer | ILI9341Renderer | None = None
@@ -193,7 +247,15 @@ class TFTDisplayManager:
             self._logger.info("TFT disabled by config; console renderer enabled.")
             return
         try:
-            self._renderer = ILI9341Renderer(self._pins, self._logger)
+            self._renderer = ILI9341Renderer(
+                pins=self._pins,
+                width=self._render_config.width,
+                height=self._render_config.height,
+                madctl=self._render_config.madctl,
+                spi_max_speed_hz=self._render_config.spi_max_speed_hz,
+                font_size=self._render_config.font_size,
+                logger=self._logger,
+            )
             self._logger.info("ILI9341 renderer initialized successfully.")
         except Exception as exc:
             self._logger.warning("Unable to initialize ILI9341 renderer, fallback to console: %s", exc)

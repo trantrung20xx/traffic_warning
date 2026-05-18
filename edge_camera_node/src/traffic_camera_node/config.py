@@ -118,6 +118,11 @@ class DisplayConfig:
     dc_pin: int = 25
     reset_pin: int = 24
     backlight_pin: int | None = None
+    width: int = 320
+    height: int = 240
+    madctl: int = 0x48
+    spi_max_speed_hz: int = 32_000_000
+    font_size: int = 14
 
 
 @dataclass(frozen=True)
@@ -165,6 +170,15 @@ def _as_optional_int(raw: Any) -> int | None:
     if raw is None or raw == "":
         return None
     return int(raw)
+
+
+def _as_byte(raw: Any, default: int) -> int:
+    if raw is None or raw == "":
+        return default
+    value = int(str(raw).strip(), 0)
+    if value < 0 or value > 0xFF:
+        raise ValueError(f"display.madctl must be in range 0..255, got: {value}")
+    return value
 
 
 def _as_interfaces(raw: Any) -> tuple[str, ...]:
@@ -310,6 +324,11 @@ def load_config(config_path: Path) -> AppConfig:
         dc_pin=int(raw_display.get("dc_pin", 25)),
         reset_pin=int(raw_display.get("reset_pin", 24)),
         backlight_pin=_as_optional_int(raw_display.get("backlight_pin")),
+        width=int(raw_display.get("width", 320)),
+        height=int(raw_display.get("height", 240)),
+        madctl=_as_byte(raw_display.get("madctl"), 0x48),
+        spi_max_speed_hz=int(raw_display.get("spi_max_speed_hz", 32_000_000)),
+        font_size=int(raw_display.get("font_size", 14)),
     )
 
     logging = LoggingConfig(
@@ -354,3 +373,9 @@ def _validate(
         raise ValueError("health_api.port must be positive.")
     if display.update_hz <= 0:
         raise ValueError("display.update_hz must be positive.")
+    if display.width <= 0 or display.height <= 0:
+        raise ValueError("display.width and display.height must be positive.")
+    if display.spi_max_speed_hz <= 0:
+        raise ValueError("display.spi_max_speed_hz must be positive.")
+    if display.font_size <= 0:
+        raise ValueError("display.font_size must be positive.")

@@ -17,7 +17,7 @@ from .hardware.buttons import ButtonCallbacks, ButtonController
 from .hardware.gpio_pins import HardwarePins
 from .hardware.leds import LedController
 from .hardware.system_metrics import collect_metrics
-from .hardware.tft_display import DisplayContext, TFTDisplayManager
+from .hardware.tft_display import DisplayContext, DisplayRenderConfig, TFTDisplayManager
 from .health_api import HealthAPIServer
 from .identity import (
     RuntimeIdentity,
@@ -59,6 +59,13 @@ class CameraNodeApp:
             enabled=config.display.enabled,
             update_hz=config.display.update_hz,
             pins=self._pins.display,
+            render_config=DisplayRenderConfig(
+                width=config.display.width,
+                height=config.display.height,
+                madctl=config.display.madctl,
+                spi_max_speed_hz=config.display.spi_max_speed_hz,
+                font_size=config.display.font_size,
+            ),
             context=DisplayContext(
                 camera_width=config.camera.width,
                 camera_height=config.camera.height,

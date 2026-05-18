@@ -36,6 +36,11 @@ def test_minimal_config_loads_with_defaults(tmp_path: Path) -> None:
     assert cfg.stream.source == "auto"
     assert cfg.stream.usb_device == "auto"
     assert cfg.stream.usb_input_format == "auto"
+    assert cfg.display.width == 320
+    assert cfg.display.height == 240
+    assert cfg.display.madctl == 0x48
+    assert cfg.display.spi_max_speed_hz == 32_000_000
+    assert cfg.display.font_size == 14
 
 
 def test_invalid_profile_raises(tmp_path: Path) -> None:
@@ -82,6 +87,54 @@ def test_invalid_stream_source_raises(tmp_path: Path) -> None:
                 "camera": {"width": 1920, "height": 1080, "fps": 25},
                 "image_tuning": {"profile": "normal"},
                 "stream": {"source": "bad_source"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError):
+        load_config(config_path)
+
+
+def test_display_config_accepts_hex_madctl(tmp_path: Path) -> None:
+    config_path = tmp_path / "config" / "settings.json"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(
+        json.dumps(
+            {
+                "camera": {"width": 1920, "height": 1080, "fps": 25},
+                "image_tuning": {"profile": "normal"},
+                "display": {
+                    "width": 240,
+                    "height": 320,
+                    "madctl": "0x48",
+                    "spi_max_speed_hz": 16_000_000,
+                    "font_size": 14,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    cfg = load_config(config_path)
+    assert cfg.display.width == 240
+    assert cfg.display.height == 320
+    assert cfg.display.madctl == 0x48
+    assert cfg.display.spi_max_speed_hz == 16_000_000
+    assert cfg.display.font_size == 14
+
+
+def test_invalid_display_madctl_raises(tmp_path: Path) -> None:
+    config_path = tmp_path / "config" / "settings.json"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(
+        json.dumps(
+            {
+                "camera": {"width": 1920, "height": 1080, "fps": 25},
+                "image_tuning": {"profile": "normal"},
+                "display": {
+                    "madctl": "0x1FF",
+                },
             }
         ),
         encoding="utf-8",
