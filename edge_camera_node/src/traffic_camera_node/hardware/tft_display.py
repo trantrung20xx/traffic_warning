@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import threading
+import textwrap
 import time
 from dataclasses import dataclass
 from logging import Logger
@@ -9,12 +10,6 @@ from logging import Logger
 from ..state import HealthSnapshot
 from ..utils.time_utils import format_uptime
 from .gpio_pins import DisplayPins
-
-
-def _trim_line(text: str, limit: int = 38) -> str:
-    if len(text) <= limit:
-        return text
-    return f"{text[: limit - 3]}..."
 
 
 class ConsoleRenderer:
@@ -107,6 +102,35 @@ class ILI9341Renderer:
             pass
         return max(12, self._font_size + 2)
 
+    def _wrap_line(self, line: str) -> list[str]:
+        raw = str(line or "")
+        if not raw:
+            return [""]
+
+        if ": " in raw:
+            key, value = raw.split(": ", 1)
+            prefix = f"{key}: "
+            available = max(8, self._line_char_limit - len(prefix))
+            wrapped_value = textwrap.wrap(
+                value,
+                width=available,
+                break_long_words=True,
+                break_on_hyphens=False,
+            )
+            if not wrapped_value:
+                return [prefix.rstrip()]
+            continuation_prefix = " " * len(prefix)
+            result = [prefix + wrapped_value[0]]
+            result.extend(f"{continuation_prefix}{part}" for part in wrapped_value[1:])
+            return result
+
+        return textwrap.wrap(
+            raw,
+            width=self._line_char_limit,
+            break_long_words=True,
+            break_on_hyphens=False,
+        ) or [raw]
+
     def _command(self, cmd: int) -> None:
         self._dc.off()
         self._spi.xfer2([cmd & 0xFF])
@@ -168,11 +192,15 @@ class ILI9341Renderer:
     def render(self, lines: list[str]) -> None:
         image = self._Image.new("RGB", (self._width, self._height), (0, 0, 0))
         draw = self._ImageDraw.Draw(image)
+        flattened_lines: list[str] = []
+        for raw in lines:
+            flattened_lines.extend(self._wrap_line(raw))
+
         y = 4
-        for line in lines:
+        for line in flattened_lines:
             draw.text(
                 (4, y),
-                _trim_line(line, self._line_char_limit),
+                line,
                 fill=(255, 255, 255),
                 font=self._font,
             )
@@ -292,12 +320,14 @@ class TFTDisplayManager:
                 except Exception:
                     port = "N/A"
             return [
-                "Screen 1/4 NET+RTSP",
-                f"ID: {_trim_line(snapshot.camera_id)}",
-                f"mDNS: {_trim_line(snapshot.mdns_hostname)}",
-                f"RTSP: {_trim_line(snapshot.primary_rtsp_url)}",
+                "NET + RTSP [1/4]",
+                "",
+                f"ID: {snapshot.camera_id}",
+                f"mDNS: {snapshot.mdns_hostname}",
+                f"RTSP: {snapshot.primary_rtsp_url or 'N/A'}",
                 f"IP: {ip}",
-                f"Fallback: {_trim_line(fallback)}",
+                f"Fallback: {fallback}",
+                "",
                 f"Port: {port}",
                 f"Path: /{path}",
                 f"mDNS status: {snapshot.mdns_status}",
@@ -314,19 +344,22 @@ class TFTDisplayManager:
             )
             uv = "YES" if snapshot.undervoltage else "NO"
             return [
-                "Screen 2/4 HARDWARE",
+                "HARDWARE [2/4]",
+                "",
                 f"CPU: {snapshot.cpu_percent if snapshot.cpu_percent is not None else math.nan:.1f}%",
                 f"RAM: {snapshot.ram_percent if snapshot.ram_percent is not None else math.nan:.1f}%",
                 f"Disk: {snapshot.disk_percent if snapshot.disk_percent is not None else math.nan:.1f}%",
                 f"Temp: {temp}",
-                f"Throttled: {_trim_line(snapshot.throttled_raw or 'N/A')}",
+                f"Throttled: {snapshot.throttled_raw or 'N/A'}",
                 f"Undervolt: {uv}",
+                "",
                 f"Status: {snapshot.status}",
             ]
 
         if idx == 2:
             return [
-                "Screen 3/4 CAMERA",
+                "CAMERA [3/4]",
+                "",
                 f"Resolution: {self._context.camera_width}x{self._context.camera_height}",
                 f"FPS target: {self._context.camera_fps}",
                 "Codec: h264",
@@ -336,12 +369,13 @@ class TFTDisplayManager:
             ]
 
         return [
-            "Screen 4/4 DIAGNOSTICS",
+            "DIAGNOSTICS [4/4]",
+            "",
             f"Status: {snapshot.status}",
-            f"Error: {_trim_line(snapshot.last_error or 'None')}",
+            f"Error: {snapshot.last_error or 'None'}",
             f"Restarts: {snapshot.restart_count}",
             f"Watchdog: {'LATCHED' if snapshot.watchdog_latched else 'OK'}",
-            f"Iface: {_trim_line(snapshot.active_interface or 'N/A')}",
+            f"Iface: {snapshot.active_interface or 'N/A'}",
             f"Version: {snapshot.service_version}",
             f"mDNS: {snapshot.mdns_status}",
         ]
