@@ -253,11 +253,8 @@ class LicensePlateOcr:
         except Exception:
             return None
 
-        backend_reader = self._backend_reader
-        if backend_reader is None:
-            return None
         try:
-            return backend_reader(image_rgb)
+            return self._backend_reader(image_rgb)
         except Exception:
             return None
 

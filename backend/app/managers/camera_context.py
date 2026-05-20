@@ -459,7 +459,7 @@ class CameraContext:
                     paddle_lang=license_plate_paddle_lang,
                     paddle_use_gpu=license_plate_paddle_use_gpu,
                 )
-                if self._license_plate_ocr is None or not self._license_plate_ocr.available:
+                if not self._license_plate_ocr.available:
                     # OCR backend không khả dụng thì tắt hẳn nhánh biển số để tránh gọi null engine.
                     self._license_plate_enabled = False
                     self._license_plate_detector = None
@@ -647,10 +647,8 @@ class CameraContext:
             bbox_xyxy=[float(value) for value in bbox_xyxy],
             vehicle_crop_bgr=vehicle_crop_bgr,
         )
-        prioritize_pending = bool(
-            getattr(self, "_license_plate_prioritize_pending_violation_ocr", False)
-        )
-        pending_violation_ids = getattr(self, "_pending_violation_vehicle_ids", set())
+        prioritize_pending = bool(self._license_plate_prioritize_pending_violation_ocr)
+        pending_violation_ids = self._pending_violation_vehicle_ids
         is_pending_violation_vehicle = int(job.vehicle_id) in pending_violation_ids
         with self._license_plate_jobs_cond:
             existing = self._license_plate_pending_jobs.get(job.vehicle_id)
@@ -772,19 +770,9 @@ class CameraContext:
         return best_readout, best_plate_crop
 
     def _process_license_plate_jobs(self, jobs: list[_LicensePlateJob]) -> None:
-        resolver = self._license_plate_resolver
         detector = self._license_plate_detector
         ocr = self._license_plate_ocr
-        if resolver is None or detector is None or ocr is None:
-            # Hạ cấp an toàn: vẫn ghi nhận "đã thử nhưng không đọc được"
-            # để resolver tiến trạng thái thay vì đứng im vô hạn.
-            for job in jobs:
-                self._observe_license_plate_attempt(
-                    vehicle_id=job.vehicle_id,
-                    ts_dt=job.ts_dt,
-                    raw_text=None,
-                    confidence=None,
-                )
+        if detector is None or ocr is None:
             return
 
         # Chạy detector biển số theo batch trước, sau đó OCR từng crop plate tốt nhất.
