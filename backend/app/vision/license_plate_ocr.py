@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import os
-from typing import Optional
+from typing import Callable, Optional
 
 import cv2
 
@@ -172,6 +172,7 @@ class LicensePlateOcr:
         self._paddle_lang = str(paddle_lang or "en").strip().lower()
         self._paddle_use_gpu = bool(paddle_use_gpu)
         self._engine = None
+        self._backend_reader: Optional[Callable] = None
         # available phản ánh backend đã init thành công và sẵn sàng nhận ảnh.
         self.available = False
         self._init_backend()
@@ -204,6 +205,7 @@ class LicensePlateOcr:
                 gpu=self._easyocr_use_gpu,
                 verbose=False,
             )
+            self._backend_reader = self._read_easyocr
             self.available = True
         except Exception:
             return
@@ -217,6 +219,7 @@ class LicensePlateOcr:
                 lang=self._paddle_lang,
                 use_gpu=self._paddle_use_gpu,
             )
+            self._backend_reader = self._read_paddleocr
             self.available = True
         except Exception:
             return
@@ -250,15 +253,13 @@ class LicensePlateOcr:
         except Exception:
             return None
 
+        backend_reader = self._backend_reader
+        if backend_reader is None:
+            return None
         try:
-            # Cùng một interface read_best, backend OCR nào cũng trả OcrReadout.
-            if self.backend == "easyocr":
-                return self._read_easyocr(image_rgb)
-            if self.backend == "paddleocr":
-                return self._read_paddleocr(image_rgb)
+            return backend_reader(image_rgb)
         except Exception:
             return None
-        return None
 
     def _generate_ocr_variants(self, image_bgr) -> list:
         variants: list = []

@@ -40,8 +40,6 @@ from app.vision.license_plate_ocr import LicensePlateOcr
 @dataclass(slots=True)
 class _LicensePlateJob:
     # Job OCR tách riêng khỏi vòng lặp chính để giảm blocking theo từng frame.
-    camera_id: str
-    track_session_id: str
     vehicle_id: int
     ts_dt: datetime
     frame_timestamp_utc_ms: int
@@ -642,9 +640,6 @@ class CameraContext:
     ) -> None:
         # Freeze toàn bộ dữ liệu cần thiết ngay lúc enqueue để worker đọc độc lập.
         job = _LicensePlateJob(
-            # camera_id/track_session_id đi kèm job để chặn job "mồ côi" sau khi reload camera.
-            camera_id=self.camera_id,
-            track_session_id=self.track_session_id,
             # Ép kiểu ngay khi enqueue để worker luôn nhận dữ liệu sạch.
             vehicle_id=int(vehicle_id),
             ts_dt=ts_dt,
@@ -792,15 +787,10 @@ class CameraContext:
                 )
             return
 
-        # Bỏ job từ session cũ sau khi camera reload để tránh trộn state giữa hai vòng đời pipeline.
-        valid_jobs = [job for job in jobs if job.track_session_id == self.track_session_id]
-        if not valid_jobs:
-            return
-
         # Chạy detector biển số theo batch trước, sau đó OCR từng crop plate tốt nhất.
-        detection_batches = detector.detect_batch([job.vehicle_crop_bgr for job in valid_jobs])
+        detection_batches = detector.detect_batch([job.vehicle_crop_bgr for job in jobs])
 
-        for index, job in enumerate(valid_jobs):
+        for index, job in enumerate(jobs):
             detections = detection_batches[index] if index < len(detection_batches) else []
             if not detections:
                 self._observe_license_plate_attempt(
