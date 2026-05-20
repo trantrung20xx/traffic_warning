@@ -14,7 +14,11 @@ import cv2
 
 from app.core.config import CameraConfig, RuntimeCameraLaneConfig
 from app.core.evidence_images import build_evidence_image_url, save_evidence_image
-from app.db.repository import insert_violation, update_pending_violation_plate
+from app.db.repository import (
+    insert_violation,
+    query_violation_payloads_by_ids,
+    update_pending_violation_plate,
+)
 from app.logic.lane_logic import LaneLogic, TemporalLaneAssigner
 from app.logic.license_plate_logic import LicensePlateSnapshot, LicensePlateTemporalResolver
 from app.logic.track_id_logic import StableTrackIdAssigner
@@ -56,6 +60,8 @@ class _PendingViolationPlateState:
     has_committed_plate: bool = False
     best_plate_image_quality: float = 0.0
     best_plate_image_path: Optional[str] = None
+    best_violation_image_quality: float = 0.0
+    best_violation_image_path: Optional[str] = None
 
 
 @dataclass(slots=True)
@@ -787,6 +793,12 @@ class CameraContext:
                     raw_text=None,
                     confidence=None,
                 )
+                self._attempt_late_plate_enrichment(
+                    vehicle_id=job.vehicle_id,
+                    ts_dt=job.ts_dt,
+                    plate_crop_bgr=None,
+                    vehicle_crop_bgr=job.vehicle_crop_bgr,
+                )
                 continue
 
             readout, plate_crop = self._select_best_plate_crop_and_readout(
@@ -802,6 +814,12 @@ class CameraContext:
                     raw_text=None,
                     confidence=None,
                 )
+                self._attempt_late_plate_enrichment(
+                    vehicle_id=job.vehicle_id,
+                    ts_dt=job.ts_dt,
+                    plate_crop_bgr=None,
+                    vehicle_crop_bgr=job.vehicle_crop_bgr,
+                )
                 continue
 
             # readout có thể None nếu OCR fail; resolver sẽ tự xử lý theo luật temporal voting.
@@ -815,6 +833,7 @@ class CameraContext:
                 vehicle_id=job.vehicle_id,
                 ts_dt=job.ts_dt,
                 plate_crop_bgr=plate_crop,
+                vehicle_crop_bgr=job.vehicle_crop_bgr,
             )
 
     def _license_plate_worker_loop(self) -> None:
@@ -834,6 +853,8 @@ class CameraContext:
         lane_id: int,
         ts_dt: datetime,
         bbox_xyxy: list[float],
+        initial_violation_image_path: Optional[str] = None,
+        initial_violation_image_quality: float = 0.0,
     ) -> None:
         if not self._license_plate_violation_update_enabled:
             return
@@ -843,6 +864,13 @@ class CameraContext:
         normalized_vehicle_id = int(vehicle_id)
         normalized_lane_id = int(lane_id)
         normalized_bbox = [float(value) for value in bbox_xyxy]
+        normalized_initial_violation_image_path = (
+            str(initial_violation_image_path or "").strip() or None
+        )
+        normalized_initial_violation_image_quality = max(
+            float(initial_violation_image_quality),
+            0.0,
+        )
         with self._late_plate_state_lock:
             state = self._pending_violation_plate_states.get(normalized_vehicle_id)
             if state is None:
@@ -851,11 +879,23 @@ class CameraContext:
                     last_pending_ts=ts_dt,
                     pending_count=1,
                     last_lane_id=normalized_lane_id,
+                    best_violation_image_quality=normalized_initial_violation_image_quality,
+                    best_violation_image_path=normalized_initial_violation_image_path,
                 )
             else:
                 state.last_pending_ts = ts_dt
                 state.pending_count += 1
                 state.last_lane_id = normalized_lane_id
+                if (
+                    normalized_initial_violation_image_path
+                    and (
+                        state.best_violation_image_path is None
+                        or normalized_initial_violation_image_quality
+                        > float(state.best_violation_image_quality)
+                    )
+                ):
+                    state.best_violation_image_path = normalized_initial_violation_image_path
+                    state.best_violation_image_quality = normalized_initial_violation_image_quality
 
             self._pending_violation_vehicle_ids.add(normalized_vehicle_id)
             if normalized_vehicle_id not in self._track_continuity_states:
@@ -1029,12 +1069,78 @@ class CameraContext:
         except Exception:
             return None
 
+    def _vehicle_evidence_quality_score(self, vehicle_crop_bgr) -> float:
+        if vehicle_crop_bgr is None or getattr(vehicle_crop_bgr, "size", 0) == 0:
+            return 0.0
+        try:
+            height, width = vehicle_crop_bgr.shape[:2]
+        except Exception:
+            return 0.0
+        if height <= 0 or width <= 0:
+            return 0.0
+
+        area_score = min((float(height * width) / 40000.0), 6.0)
+        try:
+            gray = cv2.cvtColor(vehicle_crop_bgr, cv2.COLOR_BGR2GRAY)
+            sharpness = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+        except Exception:
+            sharpness = 0.0
+        sharpness_score = min(max(sharpness, 0.0) / 350.0, 6.0)
+        return float(area_score + sharpness_score)
+
+    def _save_late_violation_evidence_from_vehicle_crop(
+        self,
+        *,
+        vehicle_crop_bgr,
+        frame_timestamp_utc_ms: int,
+        vehicle_id: int,
+        lane_id: int,
+    ) -> Optional[str]:
+        if vehicle_crop_bgr is None or getattr(vehicle_crop_bgr, "size", 0) == 0:
+            return None
+        try:
+            evidence_bgr = vehicle_crop_bgr.copy()
+            frame_h, frame_w = evidence_bgr.shape[:2]
+            if frame_h > 0 and frame_w > 0:
+                thickness = max(int(round(min(frame_h, frame_w) * 0.0056)), 1)
+                cv2.rectangle(
+                    evidence_bgr,
+                    (0, 0),
+                    (frame_w - 1, frame_h - 1),
+                    (0, 0, 255),
+                    thickness=thickness,
+                    lineType=cv2.LINE_AA,
+                )
+            return save_evidence_image(
+                self.repo_root,
+                camera_id=self.camera_id,
+                timestamp_utc_ms=int(frame_timestamp_utc_ms),
+                vehicle_id=int(vehicle_id),
+                lane_id=int(lane_id),
+                violation="late_plate_enrichment_vehicle_evidence",
+                image_bgr=evidence_bgr,
+                jpeg_quality=self._evidence_jpeg_quality,
+            )
+        except Exception:
+            return None
+
+    def _emit_violation_updates_from_payloads(self, payloads: list[dict]) -> None:
+        if not payloads:
+            return
+        for payload in payloads:
+            try:
+                event = ViolationEvent.model_validate(payload)
+            except Exception:
+                continue
+            self.on_violation(event)
+
     def _attempt_late_plate_enrichment(
         self,
         *,
         vehicle_id: int,
         ts_dt: datetime,
         plate_crop_bgr,
+        vehicle_crop_bgr,
     ) -> None:
         if not self._license_plate_violation_update_enabled:
             return
@@ -1064,31 +1170,77 @@ class CameraContext:
             return
 
         frame_timestamp_utc_ms = int(ts_dt.timestamp() * 1000.0)
-        if plate_crop_bgr is None or getattr(plate_crop_bgr, "size", 0) == 0:
-            return
-        candidate_quality = self._plate_crop_quality_score(plate_crop_bgr)
-        quality_delta_min = 0.35
-        should_commit = (
-            not pending_state.has_committed_plate
-            or pending_state.best_plate_image_path is None
-            or candidate_quality > (float(pending_state.best_plate_image_quality) + quality_delta_min)
+        has_plate_crop = plate_crop_bgr is not None and getattr(plate_crop_bgr, "size", 0) > 0
+        plate_candidate_quality = self._plate_crop_quality_score(plate_crop_bgr) if has_plate_crop else 0.0
+        plate_quality_delta_min = 0.35
+        existing_plate_image_path = str(pending_state.best_plate_image_path or "").strip() or None
+        should_update_plate_image = bool(
+            has_plate_crop
+            and (
+                not pending_state.has_committed_plate
+                or existing_plate_image_path is None
+                or plate_candidate_quality
+                > (float(pending_state.best_plate_image_quality) + plate_quality_delta_min)
+            )
         )
-        if not should_commit:
+        license_plate_image_path: Optional[str] = None
+        if should_update_plate_image:
+            license_plate_image_path = self._save_late_plate_evidence_from_crop(
+                plate_crop_bgr=plate_crop_bgr,
+                frame_timestamp_utc_ms=frame_timestamp_utc_ms,
+                vehicle_id=int(vehicle_id),
+                lane_id=int(pending_state.last_lane_id),
+            )
+            if not license_plate_image_path:
+                # Lưu crop mới thất bại: fallback ảnh đã commit trước đó (nếu có),
+                # không mở rộng update nếu chưa từng có plate image hợp lệ.
+                license_plate_image_path = existing_plate_image_path
+                should_update_plate_image = False
+        else:
+            license_plate_image_path = existing_plate_image_path
+        if not license_plate_image_path:
             return
 
-        license_plate_image_path = self._save_late_plate_evidence_from_crop(
-            plate_crop_bgr=plate_crop_bgr,
-            frame_timestamp_utc_ms=frame_timestamp_utc_ms,
-            vehicle_id=int(vehicle_id),
-            lane_id=int(pending_state.last_lane_id),
+        violation_image_quality = 0.0
+        violation_quality_delta_min = 0.45
+        violation_image_path: Optional[str] = None
+        has_vehicle_crop = (
+            vehicle_crop_bgr is not None and getattr(vehicle_crop_bgr, "size", 0) > 0
         )
-        if not license_plate_image_path:
+        if has_vehicle_crop:
+            violation_image_quality = self._vehicle_evidence_quality_score(vehicle_crop_bgr)
+        should_update_violation_image = bool(
+            has_vehicle_crop
+            and (
+                pending_state.best_violation_image_path is None
+                or (
+                    violation_image_quality
+                    > (
+                        float(pending_state.best_violation_image_quality)
+                        + violation_quality_delta_min
+                    )
+                )
+            )
+        )
+        if should_update_violation_image:
+            violation_image_path = self._save_late_violation_evidence_from_vehicle_crop(
+                vehicle_crop_bgr=vehicle_crop_bgr,
+                frame_timestamp_utc_ms=frame_timestamp_utc_ms,
+                vehicle_id=int(vehicle_id),
+                lane_id=int(pending_state.last_lane_id),
+            )
+            if not violation_image_path:
+                should_update_violation_image = False
+
+        if not should_update_plate_image and not should_update_violation_image:
             return
 
         violation_not_before_ts = ts_dt - timedelta(
             milliseconds=int(self._license_plate_violation_update_window_ms)
         )
+        updated_payloads: list[dict] = []
         with self._db_session_factory() as session:
+            updated_violation_ids: list[int] = []
             updated_rows = update_pending_violation_plate(
                 session,
                 camera_id=self.camera_id,
@@ -1099,21 +1251,36 @@ class CameraContext:
                 license_plate_confidence=float(snapshot.confidence),
                 license_plate_image_path=license_plate_image_path,
                 min_confidence=float(self._license_plate_violation_update_min_confidence),
+                evidence_image_path=violation_image_path if should_update_violation_image else None,
                 allowed_current_statuses=("pending", "unreadable"),
                 violation_not_before_ts=violation_not_before_ts,
+                updated_violation_ids_out=updated_violation_ids,
             )
+            if updated_rows > 0:
+                updated_payloads = query_violation_payloads_by_ids(
+                    session,
+                    violation_ids=updated_violation_ids,
+                )
 
         if updated_rows > 0:
             with self._late_plate_state_lock:
                 state = self._pending_violation_plate_states.get(int(vehicle_id))
                 if state is not None:
                     state.has_committed_plate = True
-                    state.best_plate_image_quality = max(
-                        float(state.best_plate_image_quality),
-                        float(candidate_quality),
-                    )
-                    state.best_plate_image_path = str(license_plate_image_path)
+                    if should_update_plate_image and license_plate_image_path:
+                        state.best_plate_image_quality = max(
+                            float(state.best_plate_image_quality),
+                            float(plate_candidate_quality),
+                        )
+                        state.best_plate_image_path = str(license_plate_image_path)
+                    if should_update_violation_image and violation_image_path:
+                        state.best_violation_image_quality = max(
+                            float(state.best_violation_image_quality),
+                            float(violation_image_quality),
+                        )
+                        state.best_violation_image_path = str(violation_image_path)
                     state.last_pending_ts = ts_dt
+            self._emit_violation_updates_from_payloads(updated_payloads)
 
     def _prune_late_plate_state(self, *, current_ts: datetime) -> None:
         if not self._license_plate_violation_update_enabled:
@@ -1624,6 +1791,8 @@ class CameraContext:
                 violation=str(cand["violation"]),
                 image_path=image_path,
                 image_url=build_evidence_image_url(image_path),
+                evidence_image_path=image_path,
+                evidence_image_url=build_evidence_image_url(image_path),
                 license_plate=resolved_license_plate,
                 license_plate_status=resolved_license_plate_status,
                 license_plate_confidence=resolved_license_plate_confidence,
@@ -1637,11 +1806,19 @@ class CameraContext:
             await asyncio.to_thread(self._save_event_to_db, event)
 
             if event.license_plate_status != "confirmed":
+                initial_violation_image_quality = 0.0
+                if image_path:
+                    initial_violation_crop = self._crop_violation_evidence(frame_bgr, bbox_xyxy)
+                    initial_violation_image_quality = self._vehicle_evidence_quality_score(
+                        initial_violation_crop
+                    )
                 self._register_pending_violation_for_late_plate(
                     vehicle_id=vehicle_id,
                     lane_id=int(cand["lane_id"]),
                     ts_dt=ts_dt,
                     bbox_xyxy=bbox_xyxy,
+                    initial_violation_image_path=image_path,
+                    initial_violation_image_quality=initial_violation_image_quality,
                 )
 
             # Cập nhật thống kê realtime rồi phát sự kiện cho client đang nghe.

@@ -68,8 +68,10 @@ def update_pending_violation_plate(
     license_plate_confidence: float,
     license_plate_image_path: str | None,
     min_confidence: float,
+    evidence_image_path: str | None = None,
     allowed_current_statuses: tuple[str, ...] = ("pending", "unreadable"),
     violation_not_before_ts: datetime | None = None,
+    updated_violation_ids_out: list[int] | None = None,
 ) -> int:
     normalized_status = str(license_plate_status or "").strip().lower()
     if normalized_status != "confirmed":
@@ -91,6 +93,7 @@ def update_pending_violation_plate(
     if not normalized_allowed_statuses:
         normalized_allowed_statuses = ("pending", "unreadable")
     normalized_image_path = str(license_plate_image_path or "").strip() or None
+    normalized_evidence_path = str(evidence_image_path or "").strip() or None
     if not normalized_image_path:
         # Không có ảnh crop biển số thì không cập nhật plate vào violation.
         return 0
@@ -143,9 +146,16 @@ def update_pending_violation_plate(
         if current_image_path != normalized_image_path:
             row.license_plate_image_path = normalized_image_path
             changed = True
+        if normalized_evidence_path:
+            current_evidence_path = str(row.evidence_image_path or "").strip()
+            if current_evidence_path != normalized_evidence_path:
+                row.evidence_image_path = normalized_evidence_path
+                changed = True
 
         if changed:
             updated_rows += 1
+            if updated_violation_ids_out is not None:
+                updated_violation_ids_out.append(int(row.id))
 
     if updated_rows > 0:
         session.commit()
@@ -179,6 +189,9 @@ def _violation_row_to_payload(row: Violation) -> dict:
         "violation": row.violation,
         "image_path": row.evidence_image_path,
         "image_url": build_evidence_image_url(row.evidence_image_path),
+        # Giữ tương thích ngược với field image_* hiện có và bổ sung alias evidence_* cho client mới.
+        "evidence_image_path": row.evidence_image_path,
+        "evidence_image_url": build_evidence_image_url(row.evidence_image_path),
         "license_plate": display_license_plate,
         "license_plate_status": display_license_plate_status,
         "license_plate_confidence": display_license_plate_confidence,
@@ -187,6 +200,26 @@ def _violation_row_to_payload(row: Violation) -> dict:
         "track_session_id": row.track_session_id,
         "timestamp": to_vietnam_isoformat(row.timestamp_utc),
     }
+
+
+def query_violation_payloads_by_ids(
+    session,
+    *,
+    violation_ids: list[int],
+) -> list[dict]:
+    normalized_ids = [int(v) for v in violation_ids if int(v) > 0]
+    if not normalized_ids:
+        return []
+    rows = session.execute(
+        select(Violation).where(Violation.id.in_(normalized_ids))
+    ).scalars().all()
+    payload_by_id = {int(row.id): _violation_row_to_payload(row) for row in rows}
+    ordered_payloads: list[dict] = []
+    for violation_id in normalized_ids:
+        payload = payload_by_id.get(int(violation_id))
+        if payload is not None:
+            ordered_payloads.append(payload)
+    return ordered_payloads
 
 
 def query_violation_counts(

@@ -176,6 +176,21 @@ function pointDistance(left, right) {
 	return Math.hypot(left[0] - right[0], left[1] - right[1]);
 }
 
+function violationRowKey(violation) {
+	const id = Number(violation?.id);
+	if (Number.isFinite(id) && id > 0) {
+		return `id:${id}`;
+	}
+	return `fallback:${String(violation?.camera_id || "")}:${String(violation?.vehicle_id || "")}:${String(violation?.violation || "")}:${String(violation?.timestamp || "")}`;
+}
+
+function upsertViolationRows(prevRows, nextRow, maxRows) {
+	const safeMaxRows = Math.max(Number(maxRows) || 1, 1);
+	const nextKey = violationRowKey(nextRow);
+	const merged = [nextRow, ...prevRows.filter((row) => violationRowKey(row) !== nextKey)];
+	return merged.slice(0, safeMaxRows);
+}
+
 export default function MonitoringView({
 	cameras,
 	selectedCameraId,
@@ -425,9 +440,13 @@ export default function MonitoringView({
 					normalizedEvent.vehicle_id,
 					Date.now() + violationUi.highlight_duration_ms,
 				);
-				setViolations((prev) =>
-					[normalizedEvent, ...prev].slice(0, violationUi.list_max_rows),
-				);
+				setViolations((prev) => upsertViolationRows(prev, normalizedEvent, violationUi.list_max_rows));
+				setSelectedViolation((current) => {
+					if (!current) return current;
+					return violationRowKey(current) === violationRowKey(normalizedEvent)
+						? normalizedEvent
+						: current;
+				});
 			},
 			{
 				onError: () => {
@@ -785,7 +804,7 @@ export default function MonitoringView({
 						{violations.map((event) => (
 							<article
 								className="list-row violation-row violation-trigger"
-								key={`${event.camera_id}-${event.vehicle_id}-${event.violation}-${event.timestamp}`}
+								key={violationRowKey(event)}
 								onClick={() => setSelectedViolation(event)}
 								onKeyDown={(keyEvent) =>
 									handleViolationKeyDown(keyEvent, event)

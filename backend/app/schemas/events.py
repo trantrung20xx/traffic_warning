@@ -53,6 +53,8 @@ class ViolationEvent(BaseModel):
     violation: str
     image_path: Optional[str] = None
     image_url: Optional[str] = None
+    evidence_image_path: Optional[str] = None
+    evidence_image_url: Optional[str] = None
     license_plate: Optional[str] = None
     license_plate_status: Optional[str] = None
     license_plate_confidence: Optional[float] = None
@@ -74,6 +76,8 @@ class ViolationEvent(BaseModel):
         violation: str,
         image_path: Optional[str] = None,
         image_url: Optional[str] = None,
+        evidence_image_path: Optional[str] = None,
+        evidence_image_url: Optional[str] = None,
         license_plate: Optional[str] = None,
         license_plate_status: Optional[str] = None,
         license_plate_confidence: Optional[float] = None,
@@ -94,6 +98,8 @@ class ViolationEvent(BaseModel):
             violation=violation,
             image_path=image_path,
             image_url=image_url,
+            evidence_image_path=evidence_image_path or image_path,
+            evidence_image_url=evidence_image_url or image_url,
             license_plate=license_plate,
             license_plate_status=license_plate_status,
             license_plate_confidence=license_plate_confidence,

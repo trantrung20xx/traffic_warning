@@ -25,6 +25,26 @@ import {
 } from "../utils";
 import { sanitizeViolationPlateForDisplay } from "../violationDetails";
 
+function violationRowKey(violation) {
+  const id = Number(violation?.id);
+  if (Number.isFinite(id) && id > 0) {
+    return `id:${id}`;
+  }
+  return `fallback:${String(violation?.camera_id || "")}:${String(violation?.vehicle_id || "")}:${String(violation?.violation || "")}:${String(violation?.timestamp || "")}`;
+}
+
+function violationTimestampMs(violation) {
+  const value = new Date(violation?.timestamp || "").getTime();
+  return Number.isFinite(value) ? value : 0;
+}
+
+function upsertHistoryRows(prevRows, nextRow) {
+  const nextKey = violationRowKey(nextRow);
+  const merged = [nextRow, ...prevRows.filter((row) => violationRowKey(row) !== nextKey)];
+  merged.sort((left, right) => violationTimestampMs(right) - violationTimestampMs(left));
+  return merged;
+}
+
 export default function AnalyticsView({ cameras, selectedCameraId, onSelectCamera }) {
   const [cameraFilter, setCameraFilter] = useState("");
   const [licensePlateFilter, setLicensePlateFilter] = useState("");
@@ -136,9 +156,16 @@ export default function AnalyticsView({ cameras, selectedCameraId, onSelectCamer
     };
 
     const socket = connectViolations(cameraFilter || null, (event) => {
-      if (eventMatchesCurrentFilter(event)) {
-        scheduleRefresh();
-      }
+      const normalizedEvent = sanitizeViolationPlateForDisplay(event);
+      if (!eventMatchesCurrentFilter(normalizedEvent)) return;
+      setHistory((prev) => upsertHistoryRows(prev, normalizedEvent));
+      setSelectedViolation((current) => {
+        if (!current) return current;
+        return violationRowKey(current) === violationRowKey(normalizedEvent)
+          ? normalizedEvent
+          : current;
+      });
+      scheduleRefresh();
     });
 
     return () => {

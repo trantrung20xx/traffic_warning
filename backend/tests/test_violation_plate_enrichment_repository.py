@@ -25,6 +25,7 @@ def _event(
     license_plate_status: str | None = "pending",
     license_plate_confidence: float | None = None,
     license_plate_image_path: str | None = None,
+    image_path: str | None = None,
     ts: datetime | None = None,
 ) -> ViolationEvent:
     timestamp = ts or datetime(2026, 5, 21, 10, 0, 0, tzinfo=timezone.utc)
@@ -35,6 +36,7 @@ def _event(
         vehicle_type="car",
         lane_id=1,
         violation="wrong_lane",
+        image_path=image_path,
         license_plate=license_plate,
         license_plate_status=license_plate_status,
         license_plate_confidence=license_plate_confidence,
@@ -364,6 +366,43 @@ class ViolationPlateEnrichmentRepositoryTests(unittest.TestCase):
         self.assertEqual(rows[0]["license_plate_status"], "pending")
         self.assertIsNone(rows[0]["license_plate_confidence"])
         self.assertIsNone(rows[0]["license_plate_image_path"])
+
+    def test_updates_evidence_image_path_when_new_evidence_is_provided(self) -> None:
+        engine = None
+        try:
+            engine, session_factory = self._create_session_factory()
+            with session_factory() as session:
+                insert_violation(
+                    session,
+                    _event(
+                        license_plate_status="pending",
+                        image_path="config/evidence_images/cam_01/evidence_old.jpg",
+                    ),
+                )
+                updated = update_pending_violation_plate(
+                    session,
+                    camera_id="cam_01",
+                    track_session_id="cam_01-session",
+                    vehicle_id=10,
+                    license_plate="51A12345",
+                    license_plate_status="confirmed",
+                    license_plate_confidence=0.91,
+                    license_plate_image_path="config/evidence_images/cam_01/plate_v2.jpg",
+                    evidence_image_path="config/evidence_images/cam_01/evidence_new.jpg",
+                    min_confidence=0.8,
+                )
+                rows = query_violation_history(session)
+        finally:
+            if engine is not None:
+                engine.dispose()
+
+        self.assertEqual(updated, 1)
+        self.assertEqual(rows[0]["license_plate"], "51A12345")
+        self.assertEqual(rows[0]["license_plate_status"], "confirmed")
+        self.assertEqual(rows[0]["license_plate_image_path"], "config/evidence_images/cam_01/plate_v2.jpg")
+        self.assertEqual(rows[0]["image_path"], "config/evidence_images/cam_01/evidence_new.jpg")
+        self.assertEqual(rows[0]["evidence_image_path"], "config/evidence_images/cam_01/evidence_new.jpg")
+        self.assertEqual(rows[0]["evidence_image_url"], rows[0]["image_url"])
 
 
 if __name__ == "__main__":
