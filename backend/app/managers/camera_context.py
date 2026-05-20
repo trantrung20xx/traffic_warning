@@ -733,6 +733,7 @@ class CameraContext:
     def _select_best_plate_crop_and_readout(
         self,
         *,
+        vehicle_id: int,
         vehicle_crop_bgr,
         detections,
         ocr: LicensePlateOcr,
@@ -740,7 +741,9 @@ class CameraContext:
         best_readout = None
         best_plate_crop = None
         fallback_plate_crop = None
-        scan_limit = max(int(self._license_plate_ocr_detection_scan_limit), 1)
+        with self._late_plate_state_lock:
+            is_pending_violation_vehicle = int(vehicle_id) in self._pending_violation_vehicle_ids
+        scan_limit = max(int(self._license_plate_ocr_detection_scan_limit), 1) if is_pending_violation_vehicle else 1
 
         for detection in list(detections)[:scan_limit]:
             plate_crop = self._extract_plate_crop_from_vehicle_crop(
@@ -752,7 +755,10 @@ class CameraContext:
             if fallback_plate_crop is None:
                 fallback_plate_crop = plate_crop
 
-            readout = ocr.read_best(plate_crop)
+            readout = ocr.read_best(
+                plate_crop,
+                aggressive=bool(is_pending_violation_vehicle),
+            )
             if readout is None:
                 continue
             if best_readout is None or float(readout.confidence) > float(best_readout.confidence):
@@ -803,6 +809,7 @@ class CameraContext:
                 continue
 
             readout, plate_crop = self._select_best_plate_crop_and_readout(
+                vehicle_id=job.vehicle_id,
                 vehicle_crop_bgr=job.vehicle_crop_bgr,
                 detections=detections,
                 ocr=ocr,
@@ -1034,6 +1041,8 @@ class CameraContext:
                 vehicle_id=int(vehicle_id),
                 lane_id=int(pending_state.last_lane_id),
             )
+        if not license_plate_image_path:
+            return
 
         violation_not_before_ts = ts_dt - timedelta(
             milliseconds=int(self._license_plate_violation_update_window_ms)
@@ -1528,6 +1537,20 @@ class CameraContext:
                 lane_id=int(cand["lane_id"]),
                 violation=str(cand["violation"]),
             )
+            evidence_ready_for_plate = bool(str(license_plate_image_path or "").strip())
+            resolved_license_plate = plate_snapshot.license_plate if plate_snapshot else None
+            resolved_license_plate_status = plate_snapshot.status if plate_snapshot else None
+            resolved_license_plate_confidence = plate_snapshot.confidence if plate_snapshot else None
+            if (
+                plate_snapshot is not None
+                and plate_snapshot.license_plate
+                and plate_snapshot.status == "confirmed"
+                and not evidence_ready_for_plate
+            ):
+                # Text không có ảnh crop thì chưa đủ tiêu chuẩn bằng chứng -> giữ pending để enrich tiếp.
+                resolved_license_plate = None
+                resolved_license_plate_status = "pending"
+                resolved_license_plate_confidence = None
 
             event = ViolationEvent.from_parts(
                 camera_id=self.camera_id,
@@ -1538,9 +1561,9 @@ class CameraContext:
                 violation=str(cand["violation"]),
                 image_path=image_path,
                 image_url=build_evidence_image_url(image_path),
-                license_plate=plate_snapshot.license_plate if plate_snapshot else None,
-                license_plate_status=plate_snapshot.status if plate_snapshot else None,
-                license_plate_confidence=plate_snapshot.confidence if plate_snapshot else None,
+                license_plate=resolved_license_plate,
+                license_plate_status=resolved_license_plate_status,
+                license_plate_confidence=resolved_license_plate_confidence,
                 license_plate_image_path=license_plate_image_path,
                 license_plate_image_url=build_evidence_image_url(license_plate_image_path),
                 track_session_id=self.track_session_id,

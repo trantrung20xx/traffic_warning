@@ -75,6 +75,9 @@ def update_pending_violation_plate(
     if not normalized_allowed_statuses:
         normalized_allowed_statuses = ("pending", "unreadable")
     normalized_image_path = str(license_plate_image_path or "").strip() or None
+    if not normalized_image_path:
+        # Không có ảnh crop biển số thì không cập nhật plate vào violation.
+        return 0
 
     query = (
         select(Violation)

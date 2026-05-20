@@ -5,7 +5,6 @@ import os
 from typing import Optional
 
 import cv2
-import numpy as np
 
 
 @dataclass(frozen=True)
@@ -222,13 +221,15 @@ class LicensePlateOcr:
         except Exception:
             return
 
-    def read_best(self, image_bgr) -> Optional[OcrReadout]:
+    def read_best(self, image_bgr, *, aggressive: bool = False) -> Optional[OcrReadout]:
         if not self.available or self._engine is None:
             return None
         if image_bgr is None or getattr(image_bgr, "size", 0) == 0:
             return None
         primary = self._read_backend_from_bgr(image_bgr)
         if primary is not None and float(primary.confidence) >= 0.82:
+            return primary
+        if not aggressive:
             return primary
 
         best = primary
@@ -298,19 +299,6 @@ class LicensePlateOcr:
                 8,
             )
             variants.append(cv2.cvtColor(threshold, cv2.COLOR_GRAY2BGR))
-        except Exception:
-            pass
-
-        try:
-            sharpen_kernel = np.array(
-                [
-                    [0.0, -1.0, 0.0],
-                    [-1.0, 5.0, -1.0],
-                    [0.0, -1.0, 0.0],
-                ],
-                dtype=np.float32,
-            )
-            variants.append(cv2.filter2D(image_bgr, -1, sharpen_kernel))
         except Exception:
             pass
         return variants

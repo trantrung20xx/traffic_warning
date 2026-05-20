@@ -319,9 +319,61 @@ def test_late_plate_enrichment_can_update_without_new_plate_crop(monkeypatch) ->
         plate_crop_bgr=None,
     )
 
-    assert captured["calls"] == 1
-    assert captured["image_path"] is None
-    assert vehicle_id not in ctx._pending_violation_vehicle_ids
+    assert captured["calls"] == 0
+    assert captured["image_path"] == "unset"
+    assert vehicle_id in ctx._pending_violation_vehicle_ids
+
+
+def test_violation_event_does_not_confirm_plate_without_plate_image() -> None:
+    ctx = object.__new__(CameraContext)
+    ctx.camera_config = SimpleNamespace(
+        camera_id="cam_test",
+        location=SimpleNamespace(
+            road_name="Road A",
+            intersection_name=None,
+            gps_lat=None,
+            gps_lng=None,
+        ),
+    )
+    ctx.track_session_id = "cam_test-session"
+    ctx._create_violation_evidence = lambda *args, **kwargs: None
+    ctx._create_license_plate_evidence = lambda *args, **kwargs: None
+    ctx._save_event_to_db = lambda event: setattr(event, "id", 2)
+    ctx._license_plate_snapshot_for = lambda **_: LicensePlateSnapshot(
+        license_plate="51A12345",
+        status="confirmed",
+        confidence=0.95,
+        consensus_hits=3,
+        attempt_count=6,
+        confirmed_ts=datetime(2026, 5, 21, 12, 0, 0, tzinfo=timezone.utc),
+    )
+    registered = []
+    emitted = []
+    ctx._register_pending_violation_for_late_plate = lambda **kwargs: registered.append(kwargs)
+    ctx.stats = SimpleNamespace(update_realtime=lambda event: None)
+    ctx.on_violation = lambda event: emitted.append(event)
+
+    asyncio.run(
+        ctx._handle_violations(
+            violation_candidates=[
+                (
+                    102,
+                    "car",
+                    {"lane_id": 1, "violation": "wrong_lane"},
+                    [10.0, 10.0, 40.0, 40.0],
+                )
+            ],
+            ts_dt=datetime(2026, 5, 21, 12, 0, 0, tzinfo=timezone.utc),
+            frame_bgr=np.zeros((100, 100, 3), dtype=np.uint8),
+            frame_timestamp_utc_ms=1716292800000,
+        )
+    )
+
+    assert len(emitted) == 1
+    assert emitted[0].license_plate is None
+    assert emitted[0].license_plate_status == "pending"
+    assert emitted[0].license_plate_image_path is None
+    assert len(registered) == 1
 
 
 def test_violation_is_emitted_immediately_even_when_plate_is_pending() -> None:

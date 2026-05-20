@@ -206,7 +206,7 @@
 		"min_ocr_confidence": 0.6,
 		"consensus_min_hits": 2,
 		"candidate_window_ms": 5000,
-		"max_attempts_before_unreadable": 10,
+		"max_attempts_before_unreadable": 8,
 		"crop_expand_x_ratio": 0.1,
 		"crop_expand_y_ratio": 0.08,
 		"image_jpeg_quality": 92,

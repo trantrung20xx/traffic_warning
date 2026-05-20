@@ -279,9 +279,9 @@ class ViolationPlateEnrichmentRepositoryTests(unittest.TestCase):
             if engine is not None:
                 engine.dispose()
 
-        self.assertEqual(updated, 1)
-        self.assertEqual(rows[0]["license_plate"], "51A12345")
-        self.assertEqual(rows[0]["license_plate_status"], "confirmed")
+        self.assertEqual(updated, 0)
+        self.assertIsNone(rows[0]["license_plate"])
+        self.assertEqual(rows[0]["license_plate_status"], "pending")
         self.assertIsNone(rows[0]["license_plate_image_path"])
 
 
