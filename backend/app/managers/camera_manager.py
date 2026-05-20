@@ -514,6 +514,31 @@ class CameraManager:
             license_plate_crop_expand_x_ratio=self.cfg.license_plate.crop_expand_x_ratio,
             license_plate_crop_expand_y_ratio=self.cfg.license_plate.crop_expand_y_ratio,
             license_plate_image_jpeg_quality=self.cfg.license_plate.image_jpeg_quality,
+            license_plate_violation_update_enabled=self.cfg.license_plate.violation_update_enabled,
+            license_plate_violation_update_min_confidence=self.cfg.license_plate.violation_update_min_confidence,
+            license_plate_violation_update_consensus_min_hits=(
+                self.cfg.license_plate.violation_update_consensus_min_hits
+            ),
+            license_plate_violation_update_window_ms=self.cfg.license_plate.violation_update_window_ms,
+            license_plate_violation_require_clean_track=(
+                self.cfg.license_plate.require_clean_track_for_violation_update
+            ),
+            license_plate_prioritize_pending_violation_ocr=(
+                self.cfg.license_plate.prioritize_pending_violation_ocr
+            ),
+            license_plate_violation_track_max_gap_ms=self.cfg.license_plate.violation_update_track_max_gap_ms,
+            license_plate_violation_track_min_observations=(
+                self.cfg.license_plate.violation_update_track_min_observations
+            ),
+            license_plate_violation_track_max_center_jump=(
+                self.cfg.license_plate.violation_update_track_max_center_jump
+            ),
+            license_plate_violation_track_overlap_risk_iou=(
+                self.cfg.license_plate.violation_update_track_overlap_risk_iou
+            ),
+            license_plate_violation_track_overlap_risk_distance=(
+                self.cfg.license_plate.violation_update_track_overlap_risk_distance
+            ),
         )
 
     def _ui_payload(self) -> dict:

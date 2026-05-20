@@ -5,7 +5,7 @@ import threading
 import time
 from collections import OrderedDict, deque
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional
 from uuid import uuid4
@@ -14,7 +14,7 @@ import cv2
 
 from app.core.config import CameraConfig, RuntimeCameraLaneConfig
 from app.core.evidence_images import build_evidence_image_url, save_evidence_image
-from app.db.repository import insert_violation
+from app.db.repository import insert_violation, update_pending_violation_plate
 from app.logic.lane_logic import LaneLogic, TemporalLaneAssigner
 from app.logic.license_plate_logic import LicensePlateSnapshot, LicensePlateTemporalResolver
 from app.logic.track_id_logic import StableTrackIdAssigner
@@ -47,6 +47,60 @@ class _LicensePlateJob:
     frame_timestamp_utc_ms: int
     bbox_xyxy: list[float]
     vehicle_crop_bgr: Any
+
+
+@dataclass(slots=True)
+class _PendingViolationPlateState:
+    first_pending_ts: datetime
+    last_pending_ts: datetime
+    pending_count: int = 1
+    last_lane_id: int = 0
+
+
+@dataclass(slots=True)
+class _TrackContinuityState:
+    first_seen_ts: datetime
+    last_seen_ts: datetime
+    last_bbox_xyxy: list[float]
+    observation_count: int = 1
+    dirty: bool = False
+
+
+def _bbox_iou(box_a: list[float], box_b: list[float]) -> float:
+    ax1, ay1, ax2, ay2 = box_a
+    bx1, by1, bx2, by2 = box_b
+
+    inter_x1 = max(ax1, bx1)
+    inter_y1 = max(ay1, by1)
+    inter_x2 = min(ax2, bx2)
+    inter_y2 = min(ay2, by2)
+
+    inter_w = max(0.0, inter_x2 - inter_x1)
+    inter_h = max(0.0, inter_y2 - inter_y1)
+    inter_area = inter_w * inter_h
+    if inter_area <= 0.0:
+        return 0.0
+
+    area_a = max(0.0, ax2 - ax1) * max(0.0, ay2 - ay1)
+    area_b = max(0.0, bx2 - bx1) * max(0.0, by2 - by1)
+    union = area_a + area_b - inter_area
+    if union <= 0.0:
+        return 0.0
+    return inter_area / union
+
+
+def _normalized_center_distance(box_a: list[float], box_b: list[float]) -> float:
+    ax = (box_a[0] + box_a[2]) / 2.0
+    ay = (box_a[1] + box_a[3]) / 2.0
+    bx = (box_b[0] + box_b[2]) / 2.0
+    by = (box_b[1] + box_b[3]) / 2.0
+
+    aw = max(1.0, box_a[2] - box_a[0])
+    ah = max(1.0, box_a[3] - box_a[1])
+    bw = max(1.0, box_b[2] - box_b[0])
+    bh = max(1.0, box_b[3] - box_b[1])
+    scale = max((aw + bw) / 2.0, (ah + bh) / 2.0, 1.0)
+    return (((ax - bx) ** 2 + (ay - by) ** 2) ** 0.5) / scale
 
 
 class CameraContext:
@@ -177,6 +231,17 @@ class CameraContext:
         license_plate_crop_expand_x_ratio: float = 0.10,
         license_plate_crop_expand_y_ratio: float = 0.08,
         license_plate_image_jpeg_quality: int = 92,
+        license_plate_violation_update_enabled: bool = True,
+        license_plate_violation_update_min_confidence: float = 0.8,
+        license_plate_violation_update_consensus_min_hits: int = 2,
+        license_plate_violation_update_window_ms: int = 5000,
+        license_plate_violation_require_clean_track: bool = True,
+        license_plate_prioritize_pending_violation_ocr: bool = True,
+        license_plate_violation_track_max_gap_ms: int = 900,
+        license_plate_violation_track_min_observations: int = 3,
+        license_plate_violation_track_max_center_jump: float = 1.8,
+        license_plate_violation_track_overlap_risk_iou: float = 0.45,
+        license_plate_violation_track_overlap_risk_distance: float = 0.55,
     ):
         # Root dùng để lưu evidence/config theo camera.
         self.repo_root = Path(repo_root)
@@ -305,6 +370,48 @@ class CameraContext:
         self._license_plate_crop_expand_x_ratio = float(license_plate_crop_expand_x_ratio)
         self._license_plate_crop_expand_y_ratio = float(license_plate_crop_expand_y_ratio)
         self._license_plate_image_jpeg_quality = int(license_plate_image_jpeg_quality)
+        self._license_plate_violation_update_enabled = bool(license_plate_violation_update_enabled)
+        self._license_plate_violation_update_min_confidence = float(
+            license_plate_violation_update_min_confidence
+        )
+        self._license_plate_violation_update_consensus_min_hits = max(
+            int(license_plate_violation_update_consensus_min_hits),
+            1,
+        )
+        self._license_plate_violation_update_window_ms = max(
+            int(license_plate_violation_update_window_ms),
+            200,
+        )
+        self._license_plate_violation_require_clean_track = bool(
+            license_plate_violation_require_clean_track
+        )
+        self._license_plate_prioritize_pending_violation_ocr = bool(
+            license_plate_prioritize_pending_violation_ocr
+        )
+        self._license_plate_violation_track_max_gap_ms = max(
+            int(license_plate_violation_track_max_gap_ms),
+            100,
+        )
+        self._license_plate_violation_track_min_observations = max(
+            int(license_plate_violation_track_min_observations),
+            1,
+        )
+        self._license_plate_violation_track_max_center_jump = max(
+            float(license_plate_violation_track_max_center_jump),
+            0.1,
+        )
+        self._license_plate_violation_track_overlap_risk_iou = max(
+            float(license_plate_violation_track_overlap_risk_iou),
+            0.0,
+        )
+        self._license_plate_violation_track_overlap_risk_distance = max(
+            float(license_plate_violation_track_overlap_risk_distance),
+            0.0,
+        )
+        self._late_plate_state_lock = threading.Lock()
+        self._pending_violation_plate_states: dict[int, _PendingViolationPlateState] = {}
+        self._pending_violation_vehicle_ids: set[int] = set()
+        self._track_continuity_states: dict[int, _TrackContinuityState] = {}
         self._license_plate_detector: Optional[YoloV8LicensePlateDetector] = None
         self._license_plate_ocr: Optional[LicensePlateOcr] = None
         self._license_plate_resolver: Optional[LicensePlateTemporalResolver] = None
@@ -535,17 +642,28 @@ class CameraContext:
             bbox_xyxy=[float(value) for value in bbox_xyxy],
             vehicle_crop_bgr=vehicle_crop_bgr,
         )
+        prioritize_pending = bool(
+            getattr(self, "_license_plate_prioritize_pending_violation_ocr", False)
+        )
+        pending_violation_ids = getattr(self, "_pending_violation_vehicle_ids", set())
+        is_pending_violation_vehicle = int(job.vehicle_id) in pending_violation_ids
         with self._license_plate_jobs_cond:
             existing = self._license_plate_pending_jobs.get(job.vehicle_id)
             if existing is not None:
                 # Cùng 1 vehicle_id thì ghi đè để OCR luôn chạy trên crop mới nhất.
                 self._license_plate_pending_jobs[job.vehicle_id] = job
-                self._license_plate_pending_jobs.move_to_end(job.vehicle_id, last=True)
+                # Xe đang có violation pending được đẩy lên ưu tiên xử lý sớm hơn.
+                self._license_plate_pending_jobs.move_to_end(
+                    job.vehicle_id,
+                    last=not (prioritize_pending and is_pending_violation_vehicle),
+                )
             else:
                 if len(self._license_plate_pending_jobs) >= self._license_plate_worker_max_pending_jobs:
                     # Quá tải thì bỏ job cũ nhất toàn cục để bảo vệ độ trễ realtime.
                     self._license_plate_pending_jobs.popitem(last=False)
                 self._license_plate_pending_jobs[job.vehicle_id] = job
+                if prioritize_pending and is_pending_violation_vehicle:
+                    self._license_plate_pending_jobs.move_to_end(job.vehicle_id, last=False)
             # Đánh thức worker để xử lý batch mới.
             self._license_plate_jobs_cond.notify()
 
@@ -663,6 +781,11 @@ class CameraContext:
                 raw_text=readout.text if readout is not None else None,
                 confidence=readout.confidence if readout is not None else None,
             )
+            self._attempt_late_plate_enrichment(
+                vehicle_id=job.vehicle_id,
+                ts_dt=job.ts_dt,
+                plate_crop_bgr=plate_crop,
+            )
 
     def _license_plate_worker_loop(self) -> None:
         while not self._license_plate_worker_stop_event.is_set():
@@ -673,6 +796,242 @@ class CameraContext:
                 self._process_license_plate_jobs(jobs)
             except Exception:
                 continue
+
+    def _register_pending_violation_for_late_plate(
+        self,
+        *,
+        vehicle_id: int,
+        lane_id: int,
+        ts_dt: datetime,
+        bbox_xyxy: list[float],
+    ) -> None:
+        if not self._license_plate_violation_update_enabled:
+            return
+        if not self._license_plate_enabled:
+            return
+
+        normalized_vehicle_id = int(vehicle_id)
+        normalized_lane_id = int(lane_id)
+        normalized_bbox = [float(value) for value in bbox_xyxy]
+        with self._late_plate_state_lock:
+            state = self._pending_violation_plate_states.get(normalized_vehicle_id)
+            if state is None:
+                self._pending_violation_plate_states[normalized_vehicle_id] = _PendingViolationPlateState(
+                    first_pending_ts=ts_dt,
+                    last_pending_ts=ts_dt,
+                    pending_count=1,
+                    last_lane_id=normalized_lane_id,
+                )
+            else:
+                state.last_pending_ts = ts_dt
+                state.pending_count += 1
+                state.last_lane_id = normalized_lane_id
+
+            self._pending_violation_vehicle_ids.add(normalized_vehicle_id)
+            if normalized_vehicle_id not in self._track_continuity_states:
+                self._track_continuity_states[normalized_vehicle_id] = _TrackContinuityState(
+                    first_seen_ts=ts_dt,
+                    last_seen_ts=ts_dt,
+                    last_bbox_xyxy=normalized_bbox,
+                    observation_count=1,
+                    dirty=False,
+                )
+
+    def _clear_pending_violation_for_late_plate(self, *, vehicle_id: int) -> None:
+        normalized_vehicle_id = int(vehicle_id)
+        with self._late_plate_state_lock:
+            self._pending_violation_vehicle_ids.discard(normalized_vehicle_id)
+            self._pending_violation_plate_states.pop(normalized_vehicle_id, None)
+            self._track_continuity_states.pop(normalized_vehicle_id, None)
+
+    def _update_late_plate_track_continuity(self, *, tracks, ts_dt: datetime) -> None:
+        if not self._license_plate_violation_update_enabled:
+            return
+        if not self._license_plate_enabled:
+            return
+        if not self._license_plate_violation_require_clean_track:
+            return
+
+        with self._late_plate_state_lock:
+            pending_vehicle_ids = list(self._pending_violation_vehicle_ids)
+        if not pending_vehicle_ids:
+            return
+
+        track_map = {int(track.vehicle_id): track for track in tracks}
+
+        for vehicle_id in pending_vehicle_ids:
+            track = track_map.get(vehicle_id)
+            if track is None:
+                continue
+
+            normalized_bbox = [float(value) for value in track.bbox_xyxy]
+            with self._late_plate_state_lock:
+                state = self._track_continuity_states.get(vehicle_id)
+                if state is None:
+                    self._track_continuity_states[vehicle_id] = _TrackContinuityState(
+                        first_seen_ts=ts_dt,
+                        last_seen_ts=ts_dt,
+                        last_bbox_xyxy=normalized_bbox,
+                        observation_count=1,
+                        dirty=False,
+                    )
+                    state = self._track_continuity_states[vehicle_id]
+                else:
+                    gap_ms = (ts_dt - state.last_seen_ts).total_seconds() * 1000.0
+                    if gap_ms > float(self._license_plate_violation_track_max_gap_ms):
+                        state.dirty = True
+
+                    jump_distance = _normalized_center_distance(normalized_bbox, state.last_bbox_xyxy)
+                    if jump_distance > float(self._license_plate_violation_track_max_center_jump):
+                        state.dirty = True
+
+                    state.last_seen_ts = ts_dt
+                    state.last_bbox_xyxy = normalized_bbox
+                    state.observation_count += 1
+
+            for other_track in tracks:
+                other_vehicle_id = int(other_track.vehicle_id)
+                if other_vehicle_id == vehicle_id:
+                    continue
+                other_bbox = [float(value) for value in other_track.bbox_xyxy]
+                if _bbox_iou(normalized_bbox, other_bbox) >= float(
+                    self._license_plate_violation_track_overlap_risk_iou
+                ) or _normalized_center_distance(normalized_bbox, other_bbox) <= float(
+                    self._license_plate_violation_track_overlap_risk_distance
+                ):
+                    with self._late_plate_state_lock:
+                        state = self._track_continuity_states.get(vehicle_id)
+                        if state is not None:
+                            state.dirty = True
+                    break
+
+    def _is_late_plate_update_track_clean(self, *, vehicle_id: int, ts_dt: datetime) -> bool:
+        if not self._license_plate_violation_require_clean_track:
+            return True
+
+        with self._late_plate_state_lock:
+            pending_state = self._pending_violation_plate_states.get(int(vehicle_id))
+            continuity_state = self._track_continuity_states.get(int(vehicle_id))
+
+        if pending_state is None or continuity_state is None:
+            return False
+        if continuity_state.dirty:
+            return False
+        if continuity_state.observation_count < int(self._license_plate_violation_track_min_observations):
+            return False
+
+        age_ms = (ts_dt - pending_state.last_pending_ts).total_seconds() * 1000.0
+        if age_ms > float(self._license_plate_violation_update_window_ms):
+            return False
+        return True
+
+    def _save_late_plate_evidence_from_crop(
+        self,
+        *,
+        plate_crop_bgr,
+        frame_timestamp_utc_ms: int,
+        vehicle_id: int,
+        lane_id: int,
+    ) -> Optional[str]:
+        if plate_crop_bgr is None or plate_crop_bgr.size == 0:
+            return None
+        try:
+            return save_evidence_image(
+                self.repo_root,
+                camera_id=self.camera_id,
+                timestamp_utc_ms=int(frame_timestamp_utc_ms),
+                vehicle_id=int(vehicle_id),
+                lane_id=int(lane_id),
+                violation="late_plate_enrichment_license_plate",
+                image_bgr=plate_crop_bgr,
+                jpeg_quality=self._license_plate_image_jpeg_quality,
+            )
+        except Exception:
+            return None
+
+    def _attempt_late_plate_enrichment(
+        self,
+        *,
+        vehicle_id: int,
+        ts_dt: datetime,
+        plate_crop_bgr,
+    ) -> None:
+        if not self._license_plate_violation_update_enabled:
+            return
+        if not self._license_plate_enabled:
+            return
+        if plate_crop_bgr is None or plate_crop_bgr.size == 0:
+            return
+
+        with self._late_plate_state_lock:
+            pending_state = self._pending_violation_plate_states.get(int(vehicle_id))
+            is_pending = int(vehicle_id) in self._pending_violation_vehicle_ids
+        if pending_state is None or not is_pending:
+            return
+
+        snapshot = self._license_plate_snapshot_for(vehicle_id=int(vehicle_id))
+        if snapshot is None:
+            return
+        if snapshot.status != "confirmed":
+            return
+        if not snapshot.license_plate:
+            return
+        if snapshot.confidence is None:
+            return
+        if float(snapshot.confidence) < float(self._license_plate_violation_update_min_confidence):
+            return
+        if int(snapshot.consensus_hits) < int(self._license_plate_violation_update_consensus_min_hits):
+            return
+        if not self._is_late_plate_update_track_clean(vehicle_id=int(vehicle_id), ts_dt=ts_dt):
+            return
+
+        frame_timestamp_utc_ms = int(ts_dt.timestamp() * 1000.0)
+        license_plate_image_path = self._save_late_plate_evidence_from_crop(
+            plate_crop_bgr=plate_crop_bgr,
+            frame_timestamp_utc_ms=frame_timestamp_utc_ms,
+            vehicle_id=int(vehicle_id),
+            lane_id=int(pending_state.last_lane_id),
+        )
+        if not license_plate_image_path:
+            return
+
+        violation_not_before_ts = ts_dt - timedelta(
+            milliseconds=int(self._license_plate_violation_update_window_ms)
+        )
+        with self._db_session_factory() as session:
+            updated_rows = update_pending_violation_plate(
+                session,
+                camera_id=self.camera_id,
+                track_session_id=self.track_session_id,
+                vehicle_id=int(vehicle_id),
+                license_plate=str(snapshot.license_plate),
+                license_plate_status="confirmed",
+                license_plate_confidence=float(snapshot.confidence),
+                license_plate_image_path=license_plate_image_path,
+                min_confidence=float(self._license_plate_violation_update_min_confidence),
+                allowed_current_statuses=("pending", "unreadable"),
+                violation_not_before_ts=violation_not_before_ts,
+            )
+
+        if updated_rows >= 0:
+            self._clear_pending_violation_for_late_plate(vehicle_id=int(vehicle_id))
+
+    def _prune_late_plate_state(self, *, current_ts: datetime) -> None:
+        if not self._license_plate_violation_update_enabled:
+            return
+        if not self._license_plate_enabled:
+            return
+
+        cutoff_ts = current_ts.timestamp() - (
+            float(self._license_plate_violation_update_window_ms) / 1000.0
+        )
+        stale_vehicle_ids: list[int] = []
+        with self._late_plate_state_lock:
+            for vehicle_id, pending_state in self._pending_violation_plate_states.items():
+                if pending_state.last_pending_ts.timestamp() < cutoff_ts:
+                    stale_vehicle_ids.append(int(vehicle_id))
+        for vehicle_id in stale_vehicle_ids:
+            self._clear_pending_violation_for_late_plate(vehicle_id=vehicle_id)
 
     def _maybe_update_preview(self, frame_bgr, *, source_timestamp_utc_ms: int = 0) -> None:
         """Mã hóa JPEG theo nhịp giới hạn để giao diện web xem được ảnh camera trực tiếp."""
@@ -736,6 +1095,7 @@ class CameraContext:
                 # Các bước nặng CPU/GPU chạy qua thread để không block event loop FastAPI.
                 tracks = await asyncio.to_thread(self.tracker.track, frame.bgr)
                 tracks = await asyncio.to_thread(self.stable_track_id_assigner.assign, raw_tracks=tracks, ts=ts_dt)
+                self._update_late_plate_track_continuity(tracks=tracks, ts_dt=ts_dt)
                 # OCR snapshot chạy bất đồng bộ; tại frame hiện tại dùng snapshot đã hội tụ tới thời điểm này.
                 plate_snapshots = self._prepare_license_plate_snapshots_and_enqueue(
                     frame.bgr,
@@ -851,6 +1211,10 @@ class CameraContext:
                             self._prune_license_plate_state,
                             ts_dt,
                         )
+                    await asyncio.to_thread(
+                        self._prune_late_plate_state,
+                        current_ts=ts_dt,
+                    )
                     # Lưu mốc prune gần nhất theo timestamp frame để tính chu kỳ lần sau.
                     self._last_prune_at_ms = int(frame.timestamp_utc_ms)
                 self._mark_processed_frame()
@@ -1138,6 +1502,14 @@ class CameraContext:
 
             # Ghi DB là thao tác đồng bộ nên chuyển sang thread để không chặn event loop.
             await asyncio.to_thread(self._save_event_to_db, event)
+
+            if event.license_plate_status != "confirmed":
+                self._register_pending_violation_for_late_plate(
+                    vehicle_id=vehicle_id,
+                    lane_id=int(cand["lane_id"]),
+                    ts_dt=ts_dt,
+                    bbox_xyxy=bbox_xyxy,
+                )
 
             # Cập nhật thống kê realtime rồi phát sự kiện cho client đang nghe.
             self.stats.update_realtime(event)

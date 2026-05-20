@@ -4,7 +4,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Optional
 
-from sqlalchemy import desc, func, select
+from sqlalchemy import desc, func, or_, select, update
 
 from app.core.config import AnalyticsChartConfig
 from app.core.evidence_images import build_evidence_image_url
@@ -39,6 +39,67 @@ def insert_violation(session, event: ViolationEvent) -> int:
     session.commit()
     session.refresh(row)
     return int(row.id)
+
+
+def update_pending_violation_plate(
+    session,
+    *,
+    camera_id: str,
+    track_session_id: str,
+    vehicle_id: int,
+    license_plate: str,
+    license_plate_status: str,
+    license_plate_confidence: float,
+    license_plate_image_path: str,
+    min_confidence: float,
+    allowed_current_statuses: tuple[str, ...] = ("pending", "unreadable"),
+    violation_not_before_ts: datetime | None = None,
+) -> int:
+    normalized_status = str(license_plate_status or "").strip().lower()
+    if normalized_status != "confirmed":
+        return 0
+
+    normalized_plate = str(license_plate or "").strip().upper()
+    if not normalized_plate:
+        return 0
+
+    normalized_confidence = float(license_plate_confidence)
+    if normalized_confidence < float(min_confidence):
+        return 0
+
+    normalized_allowed_statuses = tuple(
+        status.strip().lower()
+        for status in allowed_current_statuses
+        if str(status or "").strip()
+    )
+    if not normalized_allowed_statuses:
+        normalized_allowed_statuses = ("pending", "unreadable")
+
+    stmt = (
+        update(Violation)
+        .where(Violation.camera_id == str(camera_id))
+        .where(Violation.track_session_id == str(track_session_id))
+        .where(Violation.vehicle_id == int(vehicle_id))
+        .where(
+            or_(
+                Violation.license_plate_status.is_(None),
+                func.lower(Violation.license_plate_status).in_(normalized_allowed_statuses),
+            )
+        )
+        .values(
+            license_plate=normalized_plate,
+            license_plate_status="confirmed",
+            license_plate_confidence=normalized_confidence,
+            license_plate_image_path=str(license_plate_image_path),
+        )
+    )
+
+    if violation_not_before_ts is not None:
+        stmt = stmt.where(Violation.timestamp_utc >= ensure_utc_datetime(violation_not_before_ts))
+
+    result = session.execute(stmt)
+    session.commit()
+    return int(result.rowcount or 0)
 
 
 def query_violation_counts(

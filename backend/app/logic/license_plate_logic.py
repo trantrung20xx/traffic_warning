@@ -34,6 +34,7 @@ class LicensePlateState:
     best_text: Optional[str] = None
     status: str = "pending"
     confidence: Optional[float] = None
+    best_hits: int = 0
     # Danh sách candidate dùng để voting trong cửa sổ ngắn.
     candidates: list[PlateCandidate] = field(default_factory=list)
     first_seen_ts: Optional[datetime] = None
@@ -49,6 +50,9 @@ class LicensePlateSnapshot:
     license_plate: Optional[str]
     status: str
     confidence: Optional[float]
+    consensus_hits: int = 0
+    attempt_count: int = 0
+    confirmed_ts: Optional[datetime] = None
 
 
 class LicensePlateTemporalResolver:
@@ -123,12 +127,22 @@ class LicensePlateTemporalResolver:
     def snapshot_for(self, *, vehicle_id: int) -> LicensePlateSnapshot:
         state = self._states.get(vehicle_id)
         if state is None:
-            return LicensePlateSnapshot(license_plate=None, status="pending", confidence=None)
+            return LicensePlateSnapshot(
+                license_plate=None,
+                status="pending",
+                confidence=None,
+                consensus_hits=0,
+                attempt_count=0,
+                confirmed_ts=None,
+            )
         # Snapshot chỉ expose các trường cần cho pipeline/WS payload.
         return LicensePlateSnapshot(
             license_plate=state.best_text,
             status=state.status if state.status in LICENSE_PLATE_STATUSES else "pending",
             confidence=state.confidence,
+            consensus_hits=max(int(state.best_hits), 0),
+            attempt_count=max(int(state.attempt_count), 0),
+            confirmed_ts=state.confirmed_ts,
         )
 
     def prune(self, *, current_ts: datetime, max_age_s: float) -> None:
@@ -154,6 +168,7 @@ class LicensePlateTemporalResolver:
             # Không còn candidate hợp lệ thì hạ về pending/unreadable.
             state.best_text = None
             state.confidence = None
+            state.best_hits = 0
             state.status = (
                 "unreadable"
                 if state.attempt_count >= self._max_attempts_before_unreadable
@@ -182,6 +197,7 @@ class LicensePlateTemporalResolver:
         # Gán winner tạm thời theo bảng xếp hạng.
         state.best_text = top_text
         state.confidence = top_avg_conf
+        state.best_hits = top_count
 
         if top_count >= self._consensus_min_hits and top_avg_conf >= self._min_ocr_confidence:
             # Đủ hit + đủ tin cậy thì chuyển confirmed.

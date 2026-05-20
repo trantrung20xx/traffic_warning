@@ -140,6 +140,17 @@ def test_load_app_config_reads_grouped_settings_schema(tmp_path: Path) -> None:
             "crop_expand_x_ratio": 0.12,
             "crop_expand_y_ratio": 0.1,
             "image_jpeg_quality": 90,
+            "violation_update_enabled": True,
+            "violation_update_min_confidence": 0.82,
+            "violation_update_consensus_min_hits": 3,
+            "violation_update_window_ms": 4200,
+            "require_clean_track_for_violation_update": True,
+            "prioritize_pending_violation_ocr": True,
+            "violation_update_track_max_gap_ms": 880,
+            "violation_update_track_min_observations": 4,
+            "violation_update_track_max_center_jump": 1.6,
+            "violation_update_track_overlap_risk_iou": 0.4,
+            "violation_update_track_overlap_risk_distance": 0.5,
         },
     }
     (config_dir / "settings.json").write_text(json.dumps(settings, ensure_ascii=False), encoding="utf-8")
@@ -199,6 +210,17 @@ def test_load_app_config_reads_grouped_settings_schema(tmp_path: Path) -> None:
     assert cfg.license_plate.paddle_use_gpu is False
     assert cfg.license_plate.read_interval_ms == 650
     assert cfg.license_plate.consensus_min_hits == 3
+    assert cfg.license_plate.violation_update_enabled is True
+    assert cfg.license_plate.violation_update_min_confidence == 0.82
+    assert cfg.license_plate.violation_update_consensus_min_hits == 3
+    assert cfg.license_plate.violation_update_window_ms == 4200
+    assert cfg.license_plate.require_clean_track_for_violation_update is True
+    assert cfg.license_plate.prioritize_pending_violation_ocr is True
+    assert cfg.license_plate.violation_update_track_max_gap_ms == 880
+    assert cfg.license_plate.violation_update_track_min_observations == 4
+    assert cfg.license_plate.violation_update_track_max_center_jump == 1.6
+    assert cfg.license_plate.violation_update_track_overlap_risk_iou == 0.4
+    assert cfg.license_plate.violation_update_track_overlap_risk_distance == 0.5
 
 
 def test_lane_config_keeps_only_direction_geometry_and_strips_legacy_thresholds(tmp_path: Path) -> None:

@@ -24,6 +24,8 @@ def _build_minimal_context_for_queue_tests() -> CameraContext:
     ctx._license_plate_worker_max_pending_jobs = 3
     ctx._license_plate_worker_batch_size = 8
     ctx._license_plate_worker_stop_event = threading.Event()
+    ctx._license_plate_prioritize_pending_violation_ocr = True
+    ctx._pending_violation_vehicle_ids = set()
     return ctx
 
 
@@ -90,3 +92,35 @@ def test_license_plate_job_queue_is_bounded() -> None:
     jobs = ctx._dequeue_license_plate_jobs()
 
     assert [job.vehicle_id for job in jobs] == [2, 3]
+
+
+def test_license_plate_job_queue_prioritizes_pending_violation_vehicle() -> None:
+    ctx = _build_minimal_context_for_queue_tests()
+    ts = datetime(2026, 5, 8, 8, 0, 0, tzinfo=timezone.utc)
+    ctx._pending_violation_vehicle_ids = {2}
+
+    ctx._queue_license_plate_job(
+        vehicle_id=1,
+        ts_dt=ts,
+        frame_timestamp_utc_ms=1000,
+        bbox_xyxy=[1.0, 1.0, 2.0, 2.0],
+        vehicle_crop_bgr=np.zeros((10, 10, 3), dtype=np.uint8),
+    )
+    ctx._queue_license_plate_job(
+        vehicle_id=2,
+        ts_dt=ts,
+        frame_timestamp_utc_ms=1001,
+        bbox_xyxy=[2.0, 2.0, 3.0, 3.0],
+        vehicle_crop_bgr=np.zeros((10, 10, 3), dtype=np.uint8),
+    )
+    ctx._queue_license_plate_job(
+        vehicle_id=3,
+        ts_dt=ts,
+        frame_timestamp_utc_ms=1002,
+        bbox_xyxy=[3.0, 3.0, 4.0, 4.0],
+        vehicle_crop_bgr=np.zeros((10, 10, 3), dtype=np.uint8),
+    )
+
+    jobs = ctx._dequeue_license_plate_jobs()
+
+    assert [job.vehicle_id for job in jobs] == [2, 1, 3]
