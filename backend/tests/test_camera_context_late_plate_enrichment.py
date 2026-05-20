@@ -45,8 +45,12 @@ def _build_context_for_late_plate_tests() -> CameraContext:
     ctx._license_plate_violation_update_window_ms = 5000
     ctx._license_plate_violation_require_clean_track = True
     ctx._license_plate_violation_track_min_observations = 3
+    ctx._license_plate_violation_track_max_gap_ms = 900
     ctx._license_plate_image_jpeg_quality = 90
     ctx._license_plate_enabled = True
+    ctx._license_plate_last_read_ms = {}
+    ctx._license_plate_resolver = None
+    ctx._license_plate_resolver_lock = threading.Lock()
     return ctx
 
 
@@ -98,7 +102,8 @@ def test_late_plate_enrichment_updates_pending_violation(monkeypatch) -> None:
     assert captured["kwargs"]["camera_id"] == "cam_test"
     assert captured["kwargs"]["track_session_id"] == "cam_test-session"
     assert captured["kwargs"]["vehicle_id"] == vehicle_id
-    assert vehicle_id not in ctx._pending_violation_vehicle_ids
+    assert vehicle_id in ctx._pending_violation_vehicle_ids
+    assert ctx._pending_violation_plate_states[vehicle_id].has_committed_plate is True
 
 
 def test_late_plate_enrichment_rejects_dirty_track(monkeypatch) -> None:
@@ -277,7 +282,54 @@ def test_late_plate_enrichment_keeps_pending_when_repository_updates_zero_rows(m
     assert vehicle_id in ctx._pending_violation_vehicle_ids
 
 
-def test_late_plate_enrichment_can_update_without_new_plate_crop(monkeypatch) -> None:
+def test_late_plate_enrichment_skips_update_when_crop_quality_not_better(monkeypatch) -> None:
+    ctx = _build_context_for_late_plate_tests()
+    ts = datetime(2026, 5, 21, 12, 0, 0, tzinfo=timezone.utc)
+    vehicle_id = 25
+
+    ctx._pending_violation_plate_states[vehicle_id] = _PendingViolationPlateState(
+        first_pending_ts=ts - timedelta(milliseconds=400),
+        last_pending_ts=ts - timedelta(milliseconds=200),
+        pending_count=1,
+        last_lane_id=2,
+        has_committed_plate=True,
+        best_plate_image_quality=9.5,
+        best_plate_image_path="config/evidence_images/cam_test/old.jpg",
+    )
+    ctx._pending_violation_vehicle_ids.add(vehicle_id)
+    ctx._track_continuity_states[vehicle_id] = _TrackContinuityState(
+        first_seen_ts=ts - timedelta(seconds=1),
+        last_seen_ts=ts - timedelta(milliseconds=100),
+        last_bbox_xyxy=[10.0, 10.0, 30.0, 30.0],
+        observation_count=6,
+        dirty=False,
+    )
+    ctx._license_plate_snapshot_for = lambda **_: LicensePlateSnapshot(
+        license_plate="51A12345",
+        status="confirmed",
+        confidence=0.91,
+        consensus_hits=3,
+        attempt_count=6,
+        confirmed_ts=ts,
+    )
+    captured = {"calls": 0}
+    monkeypatch.setattr(
+        camera_context_module,
+        "update_pending_violation_plate",
+        lambda *args, **kwargs: captured.__setitem__("calls", captured["calls"] + 1),
+    )
+
+    # Crop nhỏ/mờ => score thấp hơn best_plate_image_quality hiện tại.
+    ctx._attempt_late_plate_enrichment(
+        vehicle_id=vehicle_id,
+        ts_dt=ts,
+        plate_crop_bgr=np.zeros((8, 20, 3), dtype=np.uint8),
+    )
+
+    assert captured["calls"] == 0
+
+
+def test_late_plate_enrichment_keeps_pending_without_plate_crop(monkeypatch) -> None:
     ctx = _build_context_for_late_plate_tests()
     ts = datetime(2026, 5, 21, 12, 0, 0, tzinfo=timezone.utc)
     vehicle_id = 19
@@ -374,6 +426,41 @@ def test_violation_event_does_not_confirm_plate_without_plate_image() -> None:
     assert emitted[0].license_plate_status == "pending"
     assert emitted[0].license_plate_image_path is None
     assert len(registered) == 1
+
+
+def test_track_lost_without_crop_cancels_runtime_plate_state() -> None:
+    class _Resolver:
+        def __init__(self):
+            self.discarded = []
+
+        def discard(self, *, vehicle_id: int):
+            self.discarded.append(int(vehicle_id))
+
+    ctx = _build_context_for_late_plate_tests()
+    resolver = _Resolver()
+    ctx._license_plate_resolver = resolver
+    ts = datetime(2026, 5, 21, 12, 0, 0, tzinfo=timezone.utc)
+    vehicle_id = 31
+    ctx._pending_violation_plate_states[vehicle_id] = _PendingViolationPlateState(
+        first_pending_ts=ts - timedelta(seconds=2),
+        last_pending_ts=ts - timedelta(seconds=2),
+        pending_count=1,
+        last_lane_id=1,
+        has_committed_plate=False,
+    )
+    ctx._pending_violation_vehicle_ids.add(vehicle_id)
+    ctx._track_continuity_states[vehicle_id] = _TrackContinuityState(
+        first_seen_ts=ts - timedelta(seconds=2),
+        last_seen_ts=ts - timedelta(seconds=2),
+        last_bbox_xyxy=[10.0, 10.0, 30.0, 30.0],
+        observation_count=3,
+        dirty=False,
+    )
+
+    ctx._update_late_plate_track_continuity(tracks=[], ts_dt=ts)
+
+    assert vehicle_id not in ctx._pending_violation_vehicle_ids
+    assert resolver.discarded == [vehicle_id]
 
 
 def test_violation_is_emitted_immediately_even_when_plate_is_pending() -> None:

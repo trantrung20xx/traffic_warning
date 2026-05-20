@@ -160,6 +160,10 @@ class LicensePlateTemporalResolver:
         for vehicle_id in stale_vehicle_ids:
             del self._states[vehicle_id]
 
+    def discard(self, *, vehicle_id: int) -> None:
+        # Hủy toàn bộ state OCR của vehicle khi track đã kết thúc/không còn hợp lệ.
+        self._states.pop(int(vehicle_id), None)
+
     def _recompute_state(self, *, state: LicensePlateState, reference_ts: datetime) -> None:
         # Bước 1: loại candidate nằm ngoài cửa sổ thời gian.
         self._prune_candidates(state=state, reference_ts=reference_ts)

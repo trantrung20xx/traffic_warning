@@ -168,6 +168,7 @@ class RepositoryTimezoneTests(unittest.TestCase):
                         license_plate="51A12345",
                         license_plate_status="confirmed",
                         license_plate_confidence=0.86,
+                        license_plate_image_path="config/evidence_images/cam_01/plate_1.jpg",
                         timestamp=datetime(2026, 4, 10, 9, 30, 15, tzinfo=timezone.utc).isoformat(),
                     ),
                 )
@@ -183,6 +184,7 @@ class RepositoryTimezoneTests(unittest.TestCase):
                         license_plate="30H99876",
                         license_plate_status="confirmed",
                         license_plate_confidence=0.79,
+                        license_plate_image_path="config/evidence_images/cam_01/plate_2.jpg",
                         timestamp=datetime(2026, 4, 10, 9, 31, 15, tzinfo=timezone.utc).isoformat(),
                     ),
                 )

@@ -36,6 +36,30 @@ export function hasViolationCoreDetails(violation) {
   );
 }
 
+export function sanitizeViolationPlateForDisplay(violation) {
+  if (!violation || typeof violation !== "object") {
+    return violation;
+  }
+  const hasPlateImage = Boolean(violation.license_plate_image_url || violation.license_plate_image_path);
+  if (hasPlateImage) {
+    return violation;
+  }
+  const nextStatus = violation.license_plate_status === "confirmed" ? "pending" : violation.license_plate_status;
+  if (
+    violation.license_plate == null &&
+    violation.license_plate_confidence == null &&
+    violation.license_plate_status === nextStatus
+  ) {
+    return violation;
+  }
+  return {
+    ...violation,
+    license_plate: null,
+    license_plate_confidence: null,
+    license_plate_status: nextStatus,
+  };
+}
+
 export function buildViolationSections(violation) {
   // Chia dữ liệu thành các section cố định để UI render nhất quán giữa nhiều loại vi phạm.
   const location = violation?.location || {};

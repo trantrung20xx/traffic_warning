@@ -18,6 +18,7 @@ import {
 	getVehicleTypeLabel,
 	getViolationLabel,
 } from "../utils";
+import { sanitizeViolationPlateForDisplay } from "../violationDetails";
 
 const DEFAULT_MONITORING_UI_CONFIG = {
 	trajectory: {
@@ -418,13 +419,14 @@ export default function MonitoringView({
 			selectedCameraId,
 			(event) => {
 				if (!active || event?.camera_id !== selectedCameraId) return;
+				const normalizedEvent = sanitizeViolationPlateForDisplay(event);
 				// Đánh dấu "xe đang vi phạm" trong một khoảng thời gian highlight ngắn.
 				violatingVehicleIdsRef.current.set(
-					event.vehicle_id,
+					normalizedEvent.vehicle_id,
 					Date.now() + violationUi.highlight_duration_ms,
 				);
 				setViolations((prev) =>
-					[event, ...prev].slice(0, violationUi.list_max_rows),
+					[normalizedEvent, ...prev].slice(0, violationUi.list_max_rows),
 				);
 			},
 			{

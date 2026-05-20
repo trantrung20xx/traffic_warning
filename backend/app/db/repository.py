@@ -13,6 +13,22 @@ from app.db.models import Violation
 from app.schemas.events import ViolationEvent
 
 
+def _normalize_plate_fields_for_payload(
+    *,
+    license_plate: str | None,
+    license_plate_status: str | None,
+    license_plate_confidence: float | None,
+    license_plate_image_path: str | None,
+) -> tuple[str | None, str | None, float | None, str | None]:
+    normalized_image_path = str(license_plate_image_path or "").strip() or None
+    normalized_status = str(license_plate_status or "").strip().lower() or None
+    if not normalized_image_path:
+        # Không có ảnh crop biển số thì không được coi là plate evidence hợp lệ để hiển thị.
+        safe_status = "pending" if normalized_status == "confirmed" else normalized_status
+        return None, safe_status, None, None
+    return license_plate, normalized_status or license_plate_status, license_plate_confidence, normalized_image_path
+
+
 def insert_violation(session, event: ViolationEvent) -> int:
     # Đổi chuỗi timestamp của event về `datetime` để lưu đúng kiểu trong DB.
     ts = ensure_utc_datetime(datetime.fromisoformat(event.timestamp))
@@ -109,6 +125,7 @@ def update_pending_violation_plate(
             continue
 
         changed = False
+        current_image_path = str(row.license_plate_image_path or "").strip()
         if (not current_plate) or is_pending_like:
             if current_plate != normalized_plate:
                 row.license_plate = normalized_plate
@@ -122,7 +139,8 @@ def update_pending_violation_plate(
         ):
             row.license_plate_confidence = normalized_confidence
             changed = True
-        if normalized_image_path and not str(row.license_plate_image_path or "").strip():
+        # Caller chỉ truyền vào khi đã thỏa gate "ảnh mới tốt hơn" hoặc chưa có ảnh.
+        if current_image_path != normalized_image_path:
             row.license_plate_image_path = normalized_image_path
             changed = True
 
@@ -135,6 +153,17 @@ def update_pending_violation_plate(
 
 
 def _violation_row_to_payload(row: Violation) -> dict:
+    (
+        display_license_plate,
+        display_license_plate_status,
+        display_license_plate_confidence,
+        display_license_plate_image_path,
+    ) = _normalize_plate_fields_for_payload(
+        license_plate=row.license_plate,
+        license_plate_status=row.license_plate_status,
+        license_plate_confidence=row.license_plate_confidence,
+        license_plate_image_path=row.license_plate_image_path,
+    )
     return {
         "id": row.id,
         "camera_id": row.camera_id,
@@ -150,11 +179,11 @@ def _violation_row_to_payload(row: Violation) -> dict:
         "violation": row.violation,
         "image_path": row.evidence_image_path,
         "image_url": build_evidence_image_url(row.evidence_image_path),
-        "license_plate": row.license_plate,
-        "license_plate_status": row.license_plate_status,
-        "license_plate_confidence": row.license_plate_confidence,
-        "license_plate_image_path": row.license_plate_image_path,
-        "license_plate_image_url": build_evidence_image_url(row.license_plate_image_path),
+        "license_plate": display_license_plate,
+        "license_plate_status": display_license_plate_status,
+        "license_plate_confidence": display_license_plate_confidence,
+        "license_plate_image_path": display_license_plate_image_path,
+        "license_plate_image_url": build_evidence_image_url(display_license_plate_image_path),
         "track_session_id": row.track_session_id,
         "timestamp": to_vietnam_isoformat(row.timestamp_utc),
     }
@@ -233,7 +262,11 @@ def _base_violation_query(
     if license_plate:
         normalized = str(license_plate).strip().lower()
         # So khớp không phân biệt hoa/thường để tìm biển số linh hoạt.
-        q = q.where(func.lower(Violation.license_plate).like(f"%{normalized}%"))
+        q = (
+            q.where(func.lower(Violation.license_plate).like(f"%{normalized}%"))
+            .where(Violation.license_plate_image_path.is_not(None))
+            .where(func.length(func.trim(Violation.license_plate_image_path)) > 0)
+        )
     return q
 
 

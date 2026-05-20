@@ -55,6 +55,9 @@ class _PendingViolationPlateState:
     last_pending_ts: datetime
     pending_count: int = 1
     last_lane_id: int = 0
+    has_committed_plate: bool = False
+    best_plate_image_quality: float = 0.0
+    best_plate_image_path: Optional[str] = None
 
 
 @dataclass(slots=True)
@@ -886,12 +889,44 @@ class CameraContext:
                     dirty=False,
                 )
 
-    def _clear_pending_violation_for_late_plate(self, *, vehicle_id: int) -> None:
+    def _clear_pending_violation_for_late_plate(
+        self,
+        *,
+        vehicle_id: int,
+        drop_license_plate_runtime: bool = False,
+    ) -> None:
         normalized_vehicle_id = int(vehicle_id)
         with self._late_plate_state_lock:
             self._pending_violation_vehicle_ids.discard(normalized_vehicle_id)
             self._pending_violation_plate_states.pop(normalized_vehicle_id, None)
             self._track_continuity_states.pop(normalized_vehicle_id, None)
+        self._license_plate_last_read_ms.pop(normalized_vehicle_id, None)
+        if not drop_license_plate_runtime:
+            return
+        resolver = self._license_plate_resolver
+        if resolver is None:
+            return
+        with self._license_plate_resolver_lock:
+            resolver.discard(vehicle_id=normalized_vehicle_id)
+
+    def _plate_crop_quality_score(self, plate_crop_bgr) -> float:
+        if plate_crop_bgr is None or getattr(plate_crop_bgr, "size", 0) == 0:
+            return 0.0
+        try:
+            height, width = plate_crop_bgr.shape[:2]
+        except Exception:
+            return 0.0
+        if height <= 0 or width <= 0:
+            return 0.0
+
+        area_score = min((float(height * width) / 6000.0), 4.0)
+        try:
+            gray = cv2.cvtColor(plate_crop_bgr, cv2.COLOR_BGR2GRAY)
+            sharpness = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+        except Exception:
+            sharpness = 0.0
+        sharpness_score = min(max(sharpness, 0.0) / 300.0, 4.0)
+        return float(area_score + sharpness_score)
 
     def _update_late_plate_track_continuity(self, *, tracks, ts_dt: datetime) -> None:
         if not self._license_plate_violation_update_enabled:
@@ -911,6 +946,24 @@ class CameraContext:
         for vehicle_id in pending_vehicle_ids:
             track = track_map.get(vehicle_id)
             if track is None:
+                with self._late_plate_state_lock:
+                    pending_state = self._pending_violation_plate_states.get(vehicle_id)
+                    continuity_state = self._track_continuity_states.get(vehicle_id)
+                if pending_state is None:
+                    continue
+                reference_ts = (
+                    continuity_state.last_seen_ts
+                    if continuity_state is not None
+                    else pending_state.last_pending_ts
+                )
+                gap_ms = (ts_dt - reference_ts).total_seconds() * 1000.0
+                if gap_ms <= float(self._license_plate_violation_track_max_gap_ms):
+                    continue
+                # Track đã mất đủ lâu: kết thúc phiên enrich cho vehicle này.
+                self._clear_pending_violation_for_late_plate(
+                    vehicle_id=vehicle_id,
+                    drop_license_plate_runtime=not pending_state.has_committed_plate,
+                )
                 continue
 
             normalized_bbox = [float(value) for value in track.bbox_xyxy]
@@ -1033,14 +1086,24 @@ class CameraContext:
             return
 
         frame_timestamp_utc_ms = int(ts_dt.timestamp() * 1000.0)
-        license_plate_image_path = None
-        if plate_crop_bgr is not None and getattr(plate_crop_bgr, "size", 0) > 0:
-            license_plate_image_path = self._save_late_plate_evidence_from_crop(
-                plate_crop_bgr=plate_crop_bgr,
-                frame_timestamp_utc_ms=frame_timestamp_utc_ms,
-                vehicle_id=int(vehicle_id),
-                lane_id=int(pending_state.last_lane_id),
-            )
+        if plate_crop_bgr is None or getattr(plate_crop_bgr, "size", 0) == 0:
+            return
+        candidate_quality = self._plate_crop_quality_score(plate_crop_bgr)
+        quality_delta_min = 0.35
+        should_commit = (
+            not pending_state.has_committed_plate
+            or pending_state.best_plate_image_path is None
+            or candidate_quality > (float(pending_state.best_plate_image_quality) + quality_delta_min)
+        )
+        if not should_commit:
+            return
+
+        license_plate_image_path = self._save_late_plate_evidence_from_crop(
+            plate_crop_bgr=plate_crop_bgr,
+            frame_timestamp_utc_ms=frame_timestamp_utc_ms,
+            vehicle_id=int(vehicle_id),
+            lane_id=int(pending_state.last_lane_id),
+        )
         if not license_plate_image_path:
             return
 
@@ -1063,7 +1126,16 @@ class CameraContext:
             )
 
         if updated_rows > 0:
-            self._clear_pending_violation_for_late_plate(vehicle_id=int(vehicle_id))
+            with self._late_plate_state_lock:
+                state = self._pending_violation_plate_states.get(int(vehicle_id))
+                if state is not None:
+                    state.has_committed_plate = True
+                    state.best_plate_image_quality = max(
+                        float(state.best_plate_image_quality),
+                        float(candidate_quality),
+                    )
+                    state.best_plate_image_path = str(license_plate_image_path)
+                    state.last_pending_ts = ts_dt
 
     def _prune_late_plate_state(self, *, current_ts: datetime) -> None:
         if not self._license_plate_violation_update_enabled:
@@ -1074,13 +1146,21 @@ class CameraContext:
         cutoff_ts = current_ts.timestamp() - (
             float(self._license_plate_violation_update_window_ms) / 1000.0
         )
-        stale_vehicle_ids: list[int] = []
+        stale_vehicle_ids: list[tuple[int, bool]] = []
         with self._late_plate_state_lock:
             for vehicle_id, pending_state in self._pending_violation_plate_states.items():
                 if pending_state.last_pending_ts.timestamp() < cutoff_ts:
-                    stale_vehicle_ids.append(int(vehicle_id))
-        for vehicle_id in stale_vehicle_ids:
-            self._clear_pending_violation_for_late_plate(vehicle_id=vehicle_id)
+                    stale_vehicle_ids.append(
+                        (
+                            int(vehicle_id),
+                            bool(pending_state.has_committed_plate),
+                        )
+                    )
+        for vehicle_id, has_committed_plate in stale_vehicle_ids:
+            self._clear_pending_violation_for_late_plate(
+                vehicle_id=vehicle_id,
+                drop_license_plate_runtime=not has_committed_plate,
+            )
 
     def _maybe_update_preview(self, frame_bgr, *, source_timestamp_utc_ms: int = 0) -> None:
         """Mã hóa JPEG theo nhịp giới hạn để giao diện web xem được ảnh camera trực tiếp."""
@@ -1444,8 +1524,13 @@ class CameraContext:
         if not detections:
             return None
 
-        # Lấy bbox plate confidence cao nhất trong vehicle crop.
-        return self._extract_plate_crop_from_vehicle_crop(vehicle_crop, detections[0].bbox_xyxy)
+        # Thử nhiều bbox plate theo thứ tự confidence để tăng xác suất lấy được crop hợp lệ.
+        scan_limit = max(int(self._license_plate_ocr_detection_scan_limit), 1)
+        for detection in list(detections)[:scan_limit]:
+            crop = self._extract_plate_crop_from_vehicle_crop(vehicle_crop, detection.bbox_xyxy)
+            if crop is not None:
+                return crop
+        return None
 
     def _create_license_plate_evidence(
         self,
@@ -1621,7 +1706,7 @@ class CameraContext:
         if local_x2 <= local_x1 or local_y2 <= local_y1:
             return evidence_bgr
 
-        thickness = max(int(round(min(frame_h, frame_w) * 0.012)), 2)
+        thickness = max(int(round(min(frame_h, frame_w) * 0.0056)), 1)
         cv2.rectangle(
             evidence_bgr,
             (local_x1, local_y1),

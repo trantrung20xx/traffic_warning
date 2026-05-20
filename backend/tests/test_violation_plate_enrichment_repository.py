@@ -24,6 +24,7 @@ def _event(
     license_plate: str | None = None,
     license_plate_status: str | None = "pending",
     license_plate_confidence: float | None = None,
+    license_plate_image_path: str | None = None,
     ts: datetime | None = None,
 ) -> ViolationEvent:
     timestamp = ts or datetime(2026, 5, 21, 10, 0, 0, tzinfo=timezone.utc)
@@ -37,6 +38,7 @@ def _event(
         license_plate=license_plate,
         license_plate_status=license_plate_status,
         license_plate_confidence=license_plate_confidence,
+        license_plate_image_path=license_plate_image_path,
         track_session_id=track_session_id,
         timestamp=timestamp.isoformat(),
     )
@@ -172,6 +174,7 @@ class ViolationPlateEnrichmentRepositoryTests(unittest.TestCase):
                         license_plate="30H99876",
                         license_plate_status="confirmed",
                         license_plate_confidence=0.88,
+                        license_plate_image_path="config/evidence_images/cam_01/original.jpg",
                     ),
                 )
                 updated = update_pending_violation_plate(
@@ -257,7 +260,60 @@ class ViolationPlateEnrichmentRepositoryTests(unittest.TestCase):
         self.assertEqual(rows[0]["license_plate_image_path"], "config/evidence_images/cam_01/late_lp.jpg")
         self.assertAlmostEqual(rows[0]["license_plate_confidence"], 0.91, places=3)
 
-    def test_updates_pending_even_when_new_plate_image_is_missing(self) -> None:
+    def test_replaces_plate_image_for_confirmed_same_text(self) -> None:
+        engine = None
+        try:
+            engine, session_factory = self._create_session_factory()
+            with session_factory() as session:
+                insert_violation(
+                    session,
+                    _event(
+                        license_plate="51A12345",
+                        license_plate_status="confirmed",
+                        license_plate_confidence=0.9,
+                        track_session_id="cam_01-session",
+                    ),
+                )
+                row = query_violation_history(session)[0]
+                self.assertIsNone(row["license_plate_image_path"])
+
+                # Lần 1: gắn ảnh đầu tiên.
+                updated_first = update_pending_violation_plate(
+                    session,
+                    camera_id="cam_01",
+                    track_session_id="cam_01-session",
+                    vehicle_id=10,
+                    license_plate="51A12345",
+                    license_plate_status="confirmed",
+                    license_plate_confidence=0.9,
+                    license_plate_image_path="config/evidence_images/cam_01/plate_v1.jpg",
+                    min_confidence=0.8,
+                )
+                # Lần 2: thay bằng ảnh tốt hơn (gate chất lượng nằm ở tầng camera context).
+                updated_second = update_pending_violation_plate(
+                    session,
+                    camera_id="cam_01",
+                    track_session_id="cam_01-session",
+                    vehicle_id=10,
+                    license_plate="51A12345",
+                    license_plate_status="confirmed",
+                    license_plate_confidence=0.9,
+                    license_plate_image_path="config/evidence_images/cam_01/plate_v2.jpg",
+                    min_confidence=0.8,
+                )
+                rows = query_violation_history(session)
+        finally:
+            if engine is not None:
+                engine.dispose()
+
+        self.assertEqual(updated_first, 1)
+        self.assertEqual(updated_second, 1)
+        self.assertEqual(rows[0]["license_plate"], "51A12345")
+        self.assertEqual(rows[0]["license_plate_status"], "confirmed")
+        self.assertEqual(rows[0]["license_plate_image_path"], "config/evidence_images/cam_01/plate_v2.jpg")
+        self.assertAlmostEqual(rows[0]["license_plate_confidence"], 0.9, places=3)
+
+    def test_rejects_update_when_new_plate_image_is_missing(self) -> None:
         engine = None
         try:
             engine, session_factory = self._create_session_factory()
@@ -282,6 +338,31 @@ class ViolationPlateEnrichmentRepositoryTests(unittest.TestCase):
         self.assertEqual(updated, 0)
         self.assertIsNone(rows[0]["license_plate"])
         self.assertEqual(rows[0]["license_plate_status"], "pending")
+        self.assertIsNone(rows[0]["license_plate_image_path"])
+
+    def test_payload_hides_confirmed_plate_without_crop_image(self) -> None:
+        engine = None
+        try:
+            engine, session_factory = self._create_session_factory()
+            with session_factory() as session:
+                insert_violation(
+                    session,
+                    _event(
+                        license_plate="51A12345",
+                        license_plate_status="confirmed",
+                        license_plate_confidence=0.93,
+                        license_plate_image_path=None,
+                    ),
+                )
+                rows = query_violation_history(session)
+        finally:
+            if engine is not None:
+                engine.dispose()
+
+        self.assertEqual(len(rows), 1)
+        self.assertIsNone(rows[0]["license_plate"])
+        self.assertEqual(rows[0]["license_plate_status"], "pending")
+        self.assertIsNone(rows[0]["license_plate_confidence"])
         self.assertIsNone(rows[0]["license_plate_image_path"])
 
 

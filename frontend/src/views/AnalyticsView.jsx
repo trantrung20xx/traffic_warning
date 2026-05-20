@@ -23,6 +23,7 @@ import {
   startOfDayLocalInput,
   toIsoOrNull,
 } from "../utils";
+import { sanitizeViolationPlateForDisplay } from "../violationDetails";
 
 export default function AnalyticsView({ cameras, selectedCameraId, onSelectCamera }) {
   const [cameraFilter, setCameraFilter] = useState("");
@@ -72,7 +73,7 @@ export default function AnalyticsView({ cameras, selectedCameraId, onSelectCamer
         const [dashboardRes, historyRes] = await fetchAnalyticsData();
         if (!active) return;
         setDashboard(dashboardRes);
-        setHistory(historyRes.rows || []);
+        setHistory((historyRes.rows || []).map((row) => sanitizeViolationPlateForDisplay(row)));
       } finally {
         if (active) setLoading(false);
       }
@@ -127,7 +128,7 @@ export default function AnalyticsView({ cameras, selectedCameraId, onSelectCamer
         try {
           const [dashboardRes, historyRes] = await fetchAnalyticsData();
           setDashboard(dashboardRes);
-          setHistory(historyRes.rows || []);
+          setHistory((historyRes.rows || []).map((row) => sanitizeViolationPlateForDisplay(row)));
         } finally {
           setLoading(false);
         }
