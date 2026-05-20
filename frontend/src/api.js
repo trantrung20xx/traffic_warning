@@ -173,6 +173,10 @@ export async function fetchViolationHistory({ cameraId, licensePlate, fromTs, to
   return await request(withQuery("/api/violations/history", params));
 }
 
+export async function fetchViolationDetail(violationId) {
+  return await request(`/api/violations/detail/${encodeURIComponent(String(violationId))}`);
+}
+
 export async function exportViolationHistory({ format, cameraId, licensePlate, fromTs, toTs }) {
   const extension = format === "xlsx" ? "xlsx" : "csv";
   const params = {

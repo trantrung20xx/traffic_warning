@@ -238,6 +238,92 @@ def test_late_plate_enrichment_rejects_when_consensus_hits_are_insufficient(monk
     assert captured["calls"] == 0
 
 
+def test_late_plate_enrichment_keeps_pending_when_repository_updates_zero_rows(monkeypatch) -> None:
+    ctx = _build_context_for_late_plate_tests()
+    ts = datetime(2026, 5, 21, 12, 0, 0, tzinfo=timezone.utc)
+    vehicle_id = 18
+
+    ctx._pending_violation_plate_states[vehicle_id] = _PendingViolationPlateState(
+        first_pending_ts=ts - timedelta(milliseconds=400),
+        last_pending_ts=ts - timedelta(milliseconds=200),
+        pending_count=1,
+        last_lane_id=2,
+    )
+    ctx._pending_violation_vehicle_ids.add(vehicle_id)
+    ctx._track_continuity_states[vehicle_id] = _TrackContinuityState(
+        first_seen_ts=ts - timedelta(seconds=1),
+        last_seen_ts=ts - timedelta(milliseconds=100),
+        last_bbox_xyxy=[10.0, 10.0, 30.0, 30.0],
+        observation_count=6,
+        dirty=False,
+    )
+    ctx._license_plate_snapshot_for = lambda **_: LicensePlateSnapshot(
+        license_plate="51A12345",
+        status="confirmed",
+        confidence=0.91,
+        consensus_hits=3,
+        attempt_count=6,
+        confirmed_ts=ts,
+    )
+    ctx._save_late_plate_evidence_from_crop = lambda **_: None
+    monkeypatch.setattr(camera_context_module, "update_pending_violation_plate", lambda *args, **kwargs: 0)
+
+    ctx._attempt_late_plate_enrichment(
+        vehicle_id=vehicle_id,
+        ts_dt=ts,
+        plate_crop_bgr=np.ones((20, 80, 3), dtype=np.uint8),
+    )
+
+    assert vehicle_id in ctx._pending_violation_vehicle_ids
+
+
+def test_late_plate_enrichment_can_update_without_new_plate_crop(monkeypatch) -> None:
+    ctx = _build_context_for_late_plate_tests()
+    ts = datetime(2026, 5, 21, 12, 0, 0, tzinfo=timezone.utc)
+    vehicle_id = 19
+
+    ctx._pending_violation_plate_states[vehicle_id] = _PendingViolationPlateState(
+        first_pending_ts=ts - timedelta(milliseconds=400),
+        last_pending_ts=ts - timedelta(milliseconds=200),
+        pending_count=1,
+        last_lane_id=2,
+    )
+    ctx._pending_violation_vehicle_ids.add(vehicle_id)
+    ctx._track_continuity_states[vehicle_id] = _TrackContinuityState(
+        first_seen_ts=ts - timedelta(seconds=1),
+        last_seen_ts=ts - timedelta(milliseconds=100),
+        last_bbox_xyxy=[10.0, 10.0, 30.0, 30.0],
+        observation_count=6,
+        dirty=False,
+    )
+    ctx._license_plate_snapshot_for = lambda **_: LicensePlateSnapshot(
+        license_plate="51A12345",
+        status="confirmed",
+        confidence=0.91,
+        consensus_hits=3,
+        attempt_count=6,
+        confirmed_ts=ts,
+    )
+    captured = {"calls": 0, "image_path": "unset"}
+
+    def _fake_update(*args, **kwargs):
+        captured["calls"] += 1
+        captured["image_path"] = kwargs.get("license_plate_image_path")
+        return 1
+
+    monkeypatch.setattr(camera_context_module, "update_pending_violation_plate", _fake_update)
+
+    ctx._attempt_late_plate_enrichment(
+        vehicle_id=vehicle_id,
+        ts_dt=ts,
+        plate_crop_bgr=None,
+    )
+
+    assert captured["calls"] == 1
+    assert captured["image_path"] is None
+    assert vehicle_id not in ctx._pending_violation_vehicle_ids
+
+
 def test_violation_is_emitted_immediately_even_when_plate_is_pending() -> None:
     ctx = object.__new__(CameraContext)
     ctx.camera_config = SimpleNamespace(

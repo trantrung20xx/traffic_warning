@@ -324,6 +324,13 @@ def create_api_router(manager: CameraManager, edge_discovery: EdgeDiscoveryServi
         )
         return {"rows": rows}
 
+    @router.get("/api/violations/detail/{violation_id}")
+    def violation_detail(violation_id: int):
+        row = manager.query_violation_detail(violation_id=violation_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Violation not found")
+        return row
+
     @router.get("/api/violations/export")
     def export_violation_history(
         request: Request,

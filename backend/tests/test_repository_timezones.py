@@ -9,7 +9,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.db.database import create_engine_and_session
 from app.core.config import AnalyticsChartConfig
-from app.db.repository import insert_violation, query_dashboard_analytics, query_violation_history
+from app.db.repository import (
+    insert_violation,
+    query_dashboard_analytics,
+    query_violation_detail_by_id,
+    query_violation_history,
+)
 from app.schemas.events import ViolationEvent, ViolationLocation
 
 
@@ -189,6 +194,35 @@ class RepositoryTimezoneTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["license_plate"], "51A12345")
         self.assertEqual(rows[0]["license_plate_status"], "confirmed")
+
+    def test_query_violation_detail_by_id_returns_latest_db_state(self) -> None:
+        engine = None
+        try:
+            engine, session_factory = self._create_session_factory()
+
+            with session_factory() as session:
+                event = ViolationEvent(
+                    camera_id="cam_01",
+                    location=ViolationLocation(road_name="Vo Van Kiet"),
+                    vehicle_id=1,
+                    vehicle_type="car",
+                    lane_id=1,
+                    violation="wrong_lane",
+                    license_plate=None,
+                    license_plate_status="pending",
+                    timestamp=datetime(2026, 4, 10, 9, 30, 15, tzinfo=timezone.utc).isoformat(),
+                )
+                violation_id = insert_violation(session, event)
+                detail = query_violation_detail_by_id(session, violation_id=violation_id)
+        finally:
+            if engine is not None:
+                engine.dispose()
+
+        self.assertIsNotNone(detail)
+        assert detail is not None
+        self.assertEqual(detail["id"], violation_id)
+        self.assertEqual(detail["camera_id"], "cam_01")
+        self.assertEqual(detail["license_plate_status"], "pending")
 
 
 if __name__ == "__main__":

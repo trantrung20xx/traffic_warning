@@ -5,6 +5,7 @@ import os
 from typing import Optional
 
 import cv2
+import numpy as np
 
 
 @dataclass(frozen=True)
@@ -226,6 +227,22 @@ class LicensePlateOcr:
             return None
         if image_bgr is None or getattr(image_bgr, "size", 0) == 0:
             return None
+        primary = self._read_backend_from_bgr(image_bgr)
+        if primary is not None and float(primary.confidence) >= 0.82:
+            return primary
+
+        best = primary
+        for variant_bgr in self._generate_ocr_variants(image_bgr):
+            candidate = self._read_backend_from_bgr(variant_bgr)
+            if candidate is None:
+                continue
+            if best is None or float(candidate.confidence) > float(best.confidence):
+                best = candidate
+            if best is not None and float(best.confidence) >= 0.90:
+                break
+        return best
+
+    def _read_backend_from_bgr(self, image_bgr) -> Optional[OcrReadout]:
         try:
             # Chuẩn hóa input sang RGB vì đa số OCR backend kỳ vọng RGB.
             image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
@@ -242,8 +259,72 @@ class LicensePlateOcr:
             return None
         return None
 
+    def _generate_ocr_variants(self, image_bgr) -> list:
+        variants: list = []
+        try:
+            height, width = image_bgr.shape[:2]
+        except Exception:
+            return variants
+        if height <= 0 or width <= 0:
+            return variants
+
+        if height < 64 or width < 192:
+            scale = 2.0 if max(height, width) < 420 else 1.6
+            scaled_w = max(int(round(width * scale)), 1)
+            scaled_h = max(int(round(height * scale)), 1)
+            try:
+                variants.append(
+                    cv2.resize(
+                        image_bgr,
+                        (scaled_w, scaled_h),
+                        interpolation=cv2.INTER_CUBIC,
+                    )
+                )
+            except Exception:
+                pass
+
+        try:
+            gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(gray)
+            variants.append(cv2.cvtColor(clahe, cv2.COLOR_GRAY2BGR))
+
+            denoised = cv2.bilateralFilter(clahe, 5, 35, 35)
+            threshold = cv2.adaptiveThreshold(
+                denoised,
+                255,
+                cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                cv2.THRESH_BINARY,
+                31,
+                8,
+            )
+            variants.append(cv2.cvtColor(threshold, cv2.COLOR_GRAY2BGR))
+        except Exception:
+            pass
+
+        try:
+            sharpen_kernel = np.array(
+                [
+                    [0.0, -1.0, 0.0],
+                    [-1.0, 5.0, -1.0],
+                    [0.0, -1.0, 0.0],
+                ],
+                dtype=np.float32,
+            )
+            variants.append(cv2.filter2D(image_bgr, -1, sharpen_kernel))
+        except Exception:
+            pass
+        return variants
+
     def _read_easyocr(self, image_rgb) -> Optional[OcrReadout]:
-        results = self._engine.readtext(image_rgb, detail=1, paragraph=False)
+        try:
+            results = self._engine.readtext(
+                image_rgb,
+                detail=1,
+                paragraph=False,
+                allowlist="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+            )
+        except TypeError:
+            results = self._engine.readtext(image_rgb, detail=1, paragraph=False)
         if not results:
             return None
 

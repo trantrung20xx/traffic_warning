@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import AppIcon from "../components/AppIcon";
 import CameraCanvas from "../components/CameraCanvas";
 import StatPill from "../components/StatPill";
@@ -7,6 +7,7 @@ import {
 	connectTracks,
 	connectViolations,
 	fetchCameraDetail,
+	fetchViolationDetail,
 	getCameraPreviewUrl,
 } from "../api";
 import {
@@ -513,6 +514,10 @@ export default function MonitoringView({
 		}
 	};
 
+	const loadViolationDetail = useCallback(async (violationId) => {
+		return await fetchViolationDetail(violationId);
+	}, []);
+
 	return (
 		<>
 			<div className="monitor-layout">
@@ -814,6 +819,7 @@ export default function MonitoringView({
 				open={Boolean(selectedViolation)}
 				violation={selectedViolation}
 				onClose={() => setSelectedViolation(null)}
+				loadViolationDetail={loadViolationDetail}
 			/>
 		</>
 	);

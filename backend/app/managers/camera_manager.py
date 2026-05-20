@@ -27,7 +27,11 @@ from app.core.config import (
     validate_no_shared_lanes_across_cameras,
 )
 from app.core.camera_runtime import has_camera_runtime_source
-from app.db.repository import query_dashboard_analytics, query_violation_history
+from app.db.repository import (
+    query_dashboard_analytics,
+    query_violation_detail_by_id,
+    query_violation_history,
+)
 from app.db.database import create_engine_and_session
 from app.managers.camera_context import CameraContext
 from app.logic.direction_logic import DirectionDetectionSettings
@@ -200,6 +204,10 @@ class CameraManager:
                 camera_id=camera_id,
                 chart_config=self.cfg.analytics_chart,
             )
+
+    def query_violation_detail(self, *, violation_id: int) -> dict | None:
+        with self._SessionLocal() as session:
+            return query_violation_detail_by_id(session, violation_id=int(violation_id))
 
     def _on_track(self, msg: TrackMessage) -> None:
         # Hàm này chạy trong event loop của CameraContext nên chỉ dùng thao tác không chặn.

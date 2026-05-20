@@ -1,10 +1,16 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import AppIcon from "../components/AppIcon";
 import SimpleBarChart from "../components/SimpleBarChart";
 import StatPill from "../components/StatPill";
 import TimeSeriesChart from "../components/TimeSeriesChart";
 import ViolationDetailModal from "../components/ViolationDetailModal";
-import { connectViolations, exportViolationHistory, fetchDashboard, fetchViolationHistory } from "../api";
+import {
+  connectViolations,
+  exportViolationHistory,
+  fetchDashboard,
+  fetchViolationDetail,
+  fetchViolationHistory,
+} from "../api";
 import {
   determineTimeSeriesGranularity,
   formatLicensePlateValue,
@@ -179,6 +185,10 @@ export default function AnalyticsView({ cameras, selectedCameraId, onSelectCamer
       openViolationDetail(violation);
     }
   };
+
+  const loadViolationDetail = useCallback(async (violationId) => {
+    return await fetchViolationDetail(violationId);
+  }, []);
 
   const handleExport = async (format) => {
     setExportMessage("");
@@ -397,7 +407,12 @@ export default function AnalyticsView({ cameras, selectedCameraId, onSelectCamer
         </section>
       </div>
 
-      <ViolationDetailModal open={Boolean(selectedViolation)} violation={selectedViolation} onClose={() => setSelectedViolation(null)} />
+      <ViolationDetailModal
+        open={Boolean(selectedViolation)}
+        violation={selectedViolation}
+        onClose={() => setSelectedViolation(null)}
+        loadViolationDetail={loadViolationDetail}
+      />
     </>
   );
 }

@@ -4,7 +4,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Optional
 
-from sqlalchemy import desc, func, or_, select, update
+from sqlalchemy import desc, func, or_, select
 
 from app.core.config import AnalyticsChartConfig
 from app.core.evidence_images import build_evidence_image_url
@@ -50,7 +50,7 @@ def update_pending_violation_plate(
     license_plate: str,
     license_plate_status: str,
     license_plate_confidence: float,
-    license_plate_image_path: str,
+    license_plate_image_path: str | None,
     min_confidence: float,
     allowed_current_statuses: tuple[str, ...] = ("pending", "unreadable"),
     violation_not_before_ts: datetime | None = None,
@@ -74,32 +74,87 @@ def update_pending_violation_plate(
     )
     if not normalized_allowed_statuses:
         normalized_allowed_statuses = ("pending", "unreadable")
+    normalized_image_path = str(license_plate_image_path or "").strip() or None
 
-    stmt = (
-        update(Violation)
+    query = (
+        select(Violation)
         .where(Violation.camera_id == str(camera_id))
         .where(Violation.track_session_id == str(track_session_id))
         .where(Violation.vehicle_id == int(vehicle_id))
-        .where(
-            or_(
-                Violation.license_plate_status.is_(None),
-                func.lower(Violation.license_plate_status).in_(normalized_allowed_statuses),
-            )
-        )
-        .values(
-            license_plate=normalized_plate,
-            license_plate_status="confirmed",
-            license_plate_confidence=normalized_confidence,
-            license_plate_image_path=str(license_plate_image_path),
-        )
     )
-
     if violation_not_before_ts is not None:
-        stmt = stmt.where(Violation.timestamp_utc >= ensure_utc_datetime(violation_not_before_ts))
+        query = query.where(Violation.timestamp_utc >= ensure_utc_datetime(violation_not_before_ts))
 
-    result = session.execute(stmt)
-    session.commit()
-    return int(result.rowcount or 0)
+    rows = session.execute(query).scalars().all()
+    updated_rows = 0
+    for row in rows:
+        current_status = str(row.license_plate_status or "").strip().lower()
+        current_plate = str(row.license_plate or "").strip().upper()
+
+        is_pending_like = (
+            not current_status
+            or current_status in normalized_allowed_statuses
+        )
+        is_confirmed_backfillable = (
+            current_status == "confirmed"
+            and ((not current_plate) or current_plate == normalized_plate)
+        )
+        if not (is_pending_like or is_confirmed_backfillable):
+            continue
+
+        if current_status == "confirmed" and current_plate and current_plate != normalized_plate:
+            continue
+
+        changed = False
+        if (not current_plate) or is_pending_like:
+            if current_plate != normalized_plate:
+                row.license_plate = normalized_plate
+                changed = True
+        if current_status != "confirmed":
+            row.license_plate_status = "confirmed"
+            changed = True
+        if (
+            row.license_plate_confidence is None
+            or float(row.license_plate_confidence) < normalized_confidence
+        ):
+            row.license_plate_confidence = normalized_confidence
+            changed = True
+        if normalized_image_path and not str(row.license_plate_image_path or "").strip():
+            row.license_plate_image_path = normalized_image_path
+            changed = True
+
+        if changed:
+            updated_rows += 1
+
+    if updated_rows > 0:
+        session.commit()
+    return updated_rows
+
+
+def _violation_row_to_payload(row: Violation) -> dict:
+    return {
+        "id": row.id,
+        "camera_id": row.camera_id,
+        "location": {
+            "road_name": row.road_name,
+            "intersection": row.intersection,
+            "gps_lat": row.gps_lat,
+            "gps_lng": row.gps_lng,
+        },
+        "vehicle_id": row.vehicle_id,
+        "vehicle_type": row.vehicle_type,
+        "lane_id": row.lane_id,
+        "violation": row.violation,
+        "image_path": row.evidence_image_path,
+        "image_url": build_evidence_image_url(row.evidence_image_path),
+        "license_plate": row.license_plate,
+        "license_plate_status": row.license_plate_status,
+        "license_plate_confidence": row.license_plate_confidence,
+        "license_plate_image_path": row.license_plate_image_path,
+        "license_plate_image_url": build_evidence_image_url(row.license_plate_image_path),
+        "track_session_id": row.track_session_id,
+        "timestamp": to_vietnam_isoformat(row.timestamp_utc),
+    }
 
 
 def query_violation_counts(
@@ -348,32 +403,14 @@ def query_violation_history(
         # Limit ở mức query để tránh kéo toàn bộ lịch sử lên bộ nhớ.
         q = q.limit(int(limit))
     rows = session.execute(q).scalars().all()
-    return [
-        {
-            "id": row.id,
-            "camera_id": row.camera_id,
-            "location": {
-                "road_name": row.road_name,
-                "intersection": row.intersection,
-                "gps_lat": row.gps_lat,
-                "gps_lng": row.gps_lng,
-            },
-            "vehicle_id": row.vehicle_id,
-            "vehicle_type": row.vehicle_type,
-            "lane_id": row.lane_id,
-            "violation": row.violation,
-            "image_path": row.evidence_image_path,
-            "image_url": build_evidence_image_url(row.evidence_image_path),
-            "license_plate": row.license_plate,
-            "license_plate_status": row.license_plate_status,
-            "license_plate_confidence": row.license_plate_confidence,
-            "license_plate_image_path": row.license_plate_image_path,
-            "license_plate_image_url": build_evidence_image_url(row.license_plate_image_path),
-            "track_session_id": row.track_session_id,
-            "timestamp": to_vietnam_isoformat(row.timestamp_utc),
-        }
-        for row in rows
-    ]
+    return [_violation_row_to_payload(row) for row in rows]
+
+
+def query_violation_detail_by_id(session, *, violation_id: int) -> dict | None:
+    row = session.get(Violation, int(violation_id))
+    if row is None:
+        return None
+    return _violation_row_to_payload(row)
 
 
 def query_dashboard_analytics(

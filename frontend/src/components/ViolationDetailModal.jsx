@@ -96,10 +96,9 @@ export default function ViolationDetailModal({ open, violation, imageSrc = null,
       return undefined;
     }
 
-    const inlineDetail = hasViolationCoreDetails(violation) ? violation : null;
     const violationId = violation?.id ?? null;
 
-    if (inlineDetail || !loadViolationDetail || violationId == null) {
+    if (!loadViolationDetail || violationId == null) {
       setDetail(violation || null);
       setLoading(false);
       setError("");
@@ -107,27 +106,37 @@ export default function ViolationDetailModal({ open, violation, imageSrc = null,
     }
 
     let cancelled = false;
-    setDetail(null);
-    setLoading(true);
+    const hasInlineDetail = hasViolationCoreDetails(violation);
+    setDetail(violation || null);
+    setLoading(!hasInlineDetail);
     setError("");
 
-    loadViolationDetail(violationId)
-      .then((nextDetail) => {
+    const fetchLatestDetail = async ({ silent }) => {
+      try {
+        const nextDetail = await loadViolationDetail(violationId);
         if (cancelled) return;
-        setDetail(nextDetail || null);
-      })
-      .catch((loadError) => {
-        if (cancelled) return;
+        if (nextDetail) {
+          setDetail(nextDetail);
+        }
+      } catch (loadError) {
+        if (cancelled || silent) return;
         setError(loadError?.message || "Không thể tải chi tiết vi phạm.");
-      })
-      .finally(() => {
-        if (!cancelled) {
+      } finally {
+        if (!cancelled && !silent) {
           setLoading(false);
         }
-      });
+      }
+    };
+
+    fetchLatestDetail({ silent: false });
+    const refreshIntervalMs = 1000;
+    const timer = window.setInterval(() => {
+      fetchLatestDetail({ silent: true });
+    }, refreshIntervalMs);
 
     return () => {
       cancelled = true;
+      window.clearInterval(timer);
     };
   }, [open, violation, loadViolationDetail]);
 

@@ -221,6 +221,69 @@ class ViolationPlateEnrichmentRepositoryTests(unittest.TestCase):
         self.assertEqual(updated, 0)
         self.assertEqual(rows[0]["license_plate_status"], "pending")
 
+    def test_backfills_missing_plate_image_for_confirmed_same_text(self) -> None:
+        engine = None
+        try:
+            engine, session_factory = self._create_session_factory()
+            with session_factory() as session:
+                insert_violation(
+                    session,
+                    _event(
+                        license_plate="51A12345",
+                        license_plate_status="confirmed",
+                        license_plate_confidence=0.83,
+                        track_session_id="cam_01-session",
+                    ),
+                )
+                updated = update_pending_violation_plate(
+                    session,
+                    camera_id="cam_01",
+                    track_session_id="cam_01-session",
+                    vehicle_id=10,
+                    license_plate="51A12345",
+                    license_plate_status="confirmed",
+                    license_plate_confidence=0.91,
+                    license_plate_image_path="config/evidence_images/cam_01/late_lp.jpg",
+                    min_confidence=0.8,
+                )
+                rows = query_violation_history(session)
+        finally:
+            if engine is not None:
+                engine.dispose()
+
+        self.assertEqual(updated, 1)
+        self.assertEqual(rows[0]["license_plate"], "51A12345")
+        self.assertEqual(rows[0]["license_plate_status"], "confirmed")
+        self.assertEqual(rows[0]["license_plate_image_path"], "config/evidence_images/cam_01/late_lp.jpg")
+        self.assertAlmostEqual(rows[0]["license_plate_confidence"], 0.91, places=3)
+
+    def test_updates_pending_even_when_new_plate_image_is_missing(self) -> None:
+        engine = None
+        try:
+            engine, session_factory = self._create_session_factory()
+            with session_factory() as session:
+                insert_violation(session, _event(license_plate_status="pending"))
+                updated = update_pending_violation_plate(
+                    session,
+                    camera_id="cam_01",
+                    track_session_id="cam_01-session",
+                    vehicle_id=10,
+                    license_plate="51A12345",
+                    license_plate_status="confirmed",
+                    license_plate_confidence=0.88,
+                    license_plate_image_path=None,
+                    min_confidence=0.8,
+                )
+                rows = query_violation_history(session)
+        finally:
+            if engine is not None:
+                engine.dispose()
+
+        self.assertEqual(updated, 1)
+        self.assertEqual(rows[0]["license_plate"], "51A12345")
+        self.assertEqual(rows[0]["license_plate_status"], "confirmed")
+        self.assertIsNone(rows[0]["license_plate_image_path"])
+
 
 if __name__ == "__main__":
     unittest.main()

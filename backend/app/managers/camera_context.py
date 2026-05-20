@@ -367,6 +367,13 @@ class CameraContext:
         self._license_plate_last_read_ms: dict[int, int] = {}
         # Áp ngưỡng tối thiểu 100ms để tránh cấu hình quá nhỏ gây quá tải OCR.
         self._license_plate_read_interval_ms = max(int(license_plate_read_interval_ms), 100)
+        # Xe đang có violation pending được OCR dày hơn để enrich nhanh nhưng vẫn giới hạn CPU.
+        self._license_plate_pending_read_interval_ms = max(
+            min(self._license_plate_read_interval_ms, 180),
+            100,
+        )
+        self._license_plate_min_ocr_confidence = max(float(license_plate_min_ocr_confidence), 0.0)
+        self._license_plate_ocr_detection_scan_limit = 3
         self._license_plate_crop_expand_x_ratio = float(license_plate_crop_expand_x_ratio)
         self._license_plate_crop_expand_y_ratio = float(license_plate_crop_expand_y_ratio)
         self._license_plate_image_jpeg_quality = int(license_plate_image_jpeg_quality)
@@ -723,6 +730,43 @@ class CameraContext:
             return None
         return plate_crop.copy()
 
+    def _select_best_plate_crop_and_readout(
+        self,
+        *,
+        vehicle_crop_bgr,
+        detections,
+        ocr: LicensePlateOcr,
+    ):
+        best_readout = None
+        best_plate_crop = None
+        fallback_plate_crop = None
+        scan_limit = max(int(self._license_plate_ocr_detection_scan_limit), 1)
+
+        for detection in list(detections)[:scan_limit]:
+            plate_crop = self._extract_plate_crop_from_vehicle_crop(
+                vehicle_crop_bgr,
+                detection.bbox_xyxy,
+            )
+            if plate_crop is None:
+                continue
+            if fallback_plate_crop is None:
+                fallback_plate_crop = plate_crop
+
+            readout = ocr.read_best(plate_crop)
+            if readout is None:
+                continue
+            if best_readout is None or float(readout.confidence) > float(best_readout.confidence):
+                best_readout = readout
+                best_plate_crop = plate_crop
+
+            # Khi đã có kết quả rất chắc thì dừng sớm để tiết kiệm CPU.
+            if float(readout.confidence) >= max(float(self._license_plate_min_ocr_confidence) + 0.18, 0.88):
+                break
+
+        if best_plate_crop is None:
+            best_plate_crop = fallback_plate_crop
+        return best_readout, best_plate_crop
+
     def _process_license_plate_jobs(self, jobs: list[_LicensePlateJob]) -> None:
         resolver = self._license_plate_resolver
         detector = self._license_plate_detector
@@ -749,9 +793,7 @@ class CameraContext:
 
         for index, job in enumerate(valid_jobs):
             detections = detection_batches[index] if index < len(detection_batches) else []
-            # Detector đã sort theo confidence giảm dần, lấy bbox đầu tiên làm đại diện.
-            best_detection = detections[0] if detections else None
-            if best_detection is None:
+            if not detections:
                 self._observe_license_plate_attempt(
                     vehicle_id=job.vehicle_id,
                     ts_dt=job.ts_dt,
@@ -760,9 +802,10 @@ class CameraContext:
                 )
                 continue
 
-            plate_crop = self._extract_plate_crop_from_vehicle_crop(
-                job.vehicle_crop_bgr,
-                best_detection.bbox_xyxy,
+            readout, plate_crop = self._select_best_plate_crop_and_readout(
+                vehicle_crop_bgr=job.vehicle_crop_bgr,
+                detections=detections,
+                ocr=ocr,
             )
             if plate_crop is None:
                 self._observe_license_plate_attempt(
@@ -773,7 +816,6 @@ class CameraContext:
                 )
                 continue
 
-            readout = ocr.read_best(plate_crop)
             # readout có thể None nếu OCR fail; resolver sẽ tự xử lý theo luật temporal voting.
             self._observe_license_plate_attempt(
                 vehicle_id=job.vehicle_id,
@@ -960,8 +1002,6 @@ class CameraContext:
             return
         if not self._license_plate_enabled:
             return
-        if plate_crop_bgr is None or plate_crop_bgr.size == 0:
-            return
 
         with self._late_plate_state_lock:
             pending_state = self._pending_violation_plate_states.get(int(vehicle_id))
@@ -986,14 +1026,14 @@ class CameraContext:
             return
 
         frame_timestamp_utc_ms = int(ts_dt.timestamp() * 1000.0)
-        license_plate_image_path = self._save_late_plate_evidence_from_crop(
-            plate_crop_bgr=plate_crop_bgr,
-            frame_timestamp_utc_ms=frame_timestamp_utc_ms,
-            vehicle_id=int(vehicle_id),
-            lane_id=int(pending_state.last_lane_id),
-        )
-        if not license_plate_image_path:
-            return
+        license_plate_image_path = None
+        if plate_crop_bgr is not None and getattr(plate_crop_bgr, "size", 0) > 0:
+            license_plate_image_path = self._save_late_plate_evidence_from_crop(
+                plate_crop_bgr=plate_crop_bgr,
+                frame_timestamp_utc_ms=frame_timestamp_utc_ms,
+                vehicle_id=int(vehicle_id),
+                lane_id=int(pending_state.last_lane_id),
+            )
 
         violation_not_before_ts = ts_dt - timedelta(
             milliseconds=int(self._license_plate_violation_update_window_ms)
@@ -1013,7 +1053,7 @@ class CameraContext:
                 violation_not_before_ts=violation_not_before_ts,
             )
 
-        if updated_rows >= 0:
+        if updated_rows > 0:
             self._clear_pending_violation_for_late_plate(vehicle_id=int(vehicle_id))
 
     def _prune_late_plate_state(self, *, current_ts: datetime) -> None:
@@ -1293,13 +1333,20 @@ class CameraContext:
 
     def _should_attempt_license_plate_read(self, *, vehicle_id: int, frame_timestamp_utc_ms: int) -> bool:
         # Throttle theo từng vehicle_id để không OCR mọi frame.
-        if self._license_plate_read_interval_ms <= 0:
+        effective_interval_ms = int(self._license_plate_read_interval_ms)
+        if effective_interval_ms <= 0:
             return True
+        with self._late_plate_state_lock:
+            if int(vehicle_id) in self._pending_violation_vehicle_ids:
+                effective_interval_ms = min(
+                    effective_interval_ms,
+                    int(self._license_plate_pending_read_interval_ms),
+                )
         last_read_ms = self._license_plate_last_read_ms.get(vehicle_id)
         if last_read_ms is None:
             return True
         # Chỉ đọc lại khi đã qua khoảng interval cấu hình.
-        return int(frame_timestamp_utc_ms) - int(last_read_ms) >= self._license_plate_read_interval_ms
+        return int(frame_timestamp_utc_ms) - int(last_read_ms) >= effective_interval_ms
 
     def _prune_license_plate_read_schedule(self, *, current_ts: datetime) -> None:
         # Chuyển max_age từ giây sang mốc epoch để so sánh trực tiếp với timestamp_ms.
@@ -1525,15 +1572,42 @@ class CameraContext:
             expand_y_bottom_ratio=self._evidence_crop_expand_y_bottom_ratio,
         )
         if bounds is None:
-            return frame_bgr
+            return frame_bgr.copy()
         crop_x1, crop_y1, crop_x2, crop_y2 = bounds
 
         if (
             crop_x2 - crop_x1 < self._evidence_crop_min_size_px
             or crop_y2 - crop_y1 < self._evidence_crop_min_size_px
         ):
-            return frame_bgr
+            return frame_bgr.copy()
         return frame_bgr[crop_y1:crop_y2, crop_x1:crop_x2].copy()
+
+    def _draw_violation_highlight(self, evidence_bgr, bbox_xyxy: list[float], *, origin_x: int, origin_y: int):
+        if evidence_bgr is None or getattr(evidence_bgr, "size", 0) == 0:
+            return evidence_bgr
+
+        frame_h, frame_w = evidence_bgr.shape[:2]
+        if frame_h <= 0 or frame_w <= 0:
+            return evidence_bgr
+
+        x1, y1, x2, y2 = [float(value) for value in bbox_xyxy]
+        local_x1 = max(int(round(x1 - float(origin_x))), 0)
+        local_y1 = max(int(round(y1 - float(origin_y))), 0)
+        local_x2 = min(int(round(x2 - float(origin_x))), frame_w)
+        local_y2 = min(int(round(y2 - float(origin_y))), frame_h)
+        if local_x2 <= local_x1 or local_y2 <= local_y1:
+            return evidence_bgr
+
+        thickness = max(int(round(min(frame_h, frame_w) * 0.012)), 2)
+        cv2.rectangle(
+            evidence_bgr,
+            (local_x1, local_y1),
+            (local_x2 - 1, local_y2 - 1),
+            (0, 0, 255),
+            thickness=thickness,
+            lineType=cv2.LINE_AA,
+        )
+        return evidence_bgr
 
     def _create_violation_evidence(
         self,
@@ -1547,7 +1621,30 @@ class CameraContext:
     ) -> Optional[str]:
         """Tạo và lưu ảnh bằng chứng cho một vi phạm."""
         try:
+            bounds = self._expanded_bbox_bounds(
+                frame_bgr,
+                bbox_xyxy,
+                expand_x_ratio=self._evidence_crop_expand_x_ratio,
+                expand_y_top_ratio=self._evidence_crop_expand_y_top_ratio,
+                expand_y_bottom_ratio=self._evidence_crop_expand_y_bottom_ratio,
+            )
+            origin_x = 0
+            origin_y = 0
+            if bounds is not None:
+                crop_x1, crop_y1, crop_x2, crop_y2 = bounds
+                if (
+                    crop_x2 - crop_x1 >= self._evidence_crop_min_size_px
+                    and crop_y2 - crop_y1 >= self._evidence_crop_min_size_px
+                ):
+                    origin_x = int(crop_x1)
+                    origin_y = int(crop_y1)
             evidence_bgr = self._crop_violation_evidence(frame_bgr, bbox_xyxy)
+            evidence_bgr = self._draw_violation_highlight(
+                evidence_bgr,
+                bbox_xyxy,
+                origin_x=origin_x,
+                origin_y=origin_y,
+            )
             return save_evidence_image(
                 self.repo_root,
                 camera_id=self.camera_id,
