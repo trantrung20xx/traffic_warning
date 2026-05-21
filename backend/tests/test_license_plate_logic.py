@@ -57,7 +57,6 @@ class LicensePlateLogicTests(unittest.TestCase):
             consensus_min_hits=2,
             max_attempts_before_unreadable=6,
             candidate_window_ms=5000,
-            ambiguity_confidence_margin=0.08,
         )
         ts = datetime(2026, 5, 4, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -69,9 +68,7 @@ class LicensePlateLogicTests(unittest.TestCase):
         snapshot = resolver.snapshot_for(vehicle_id=4)
 
         self.assertEqual(snapshot.status, "uncertain")
-        self.assertTrue(snapshot.is_ambiguous)
         self.assertEqual(snapshot.consensus_hits, 2)
-        self.assertEqual(snapshot.runner_up_hits, 2)
 
     def test_dominant_consensus_can_confirm_despite_weaker_competitor(self) -> None:
         resolver = LicensePlateTemporalResolver(
@@ -79,7 +76,6 @@ class LicensePlateLogicTests(unittest.TestCase):
             consensus_min_hits=2,
             max_attempts_before_unreadable=6,
             candidate_window_ms=5000,
-            ambiguity_confidence_margin=0.08,
         )
         ts = datetime(2026, 5, 4, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -92,7 +88,6 @@ class LicensePlateLogicTests(unittest.TestCase):
         snapshot = resolver.snapshot_for(vehicle_id=5)
 
         self.assertEqual(snapshot.status, "confirmed")
-        self.assertFalse(snapshot.is_ambiguous)
         self.assertEqual(snapshot.license_plate, "51A12345")
 
     def test_unreadable_after_max_attempts_without_valid_read(self) -> None:

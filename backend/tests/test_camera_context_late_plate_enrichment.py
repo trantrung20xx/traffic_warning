@@ -330,7 +330,7 @@ def test_late_plate_enrichment_rejects_when_consensus_hits_are_insufficient(monk
     assert captured["calls"] == 0
 
 
-def test_late_plate_enrichment_updates_ambiguous_snapshot_as_uncertain(monkeypatch) -> None:
+def test_late_plate_enrichment_updates_uncertain_snapshot(monkeypatch) -> None:
     ctx = _build_context_for_late_plate_tests()
     ts = datetime(2026, 5, 21, 12, 0, 0, tzinfo=timezone.utc)
     vehicle_id = 16
@@ -351,15 +351,11 @@ def test_late_plate_enrichment_updates_ambiguous_snapshot_as_uncertain(monkeypat
     )
     ctx._license_plate_snapshot_for = lambda **_: LicensePlateSnapshot(
         license_plate="51A12345",
-        status="confirmed",
+        status="uncertain",
         confidence=0.92,
         consensus_hits=3,
         attempt_count=8,
         confirmed_ts=ts,
-        runner_up_license_plate="51A12845",
-        runner_up_confidence=0.91,
-        runner_up_hits=3,
-        is_ambiguous=True,
     )
     ctx._save_late_plate_evidence_from_crop = lambda **_: "config/evidence_images/cam_test/lp.jpg"
 

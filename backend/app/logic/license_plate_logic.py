@@ -35,10 +35,6 @@ class LicensePlateState:
     status: str = "pending"
     confidence: Optional[float] = None
     best_hits: int = 0
-    runner_up_text: Optional[str] = None
-    runner_up_confidence: Optional[float] = None
-    runner_up_hits: int = 0
-    is_ambiguous: bool = False
     # Danh sách candidate dùng để voting trong cửa sổ ngắn.
     candidates: list[PlateCandidate] = field(default_factory=list)
     first_seen_ts: Optional[datetime] = None
@@ -57,10 +53,6 @@ class LicensePlateSnapshot:
     consensus_hits: int = 0
     attempt_count: int = 0
     confirmed_ts: Optional[datetime] = None
-    runner_up_license_plate: Optional[str] = None
-    runner_up_confidence: Optional[float] = None
-    runner_up_hits: int = 0
-    is_ambiguous: bool = False
 
 
 class LicensePlateTemporalResolver:
@@ -75,7 +67,6 @@ class LicensePlateTemporalResolver:
         min_ocr_confidence: float = 0.65,
         consensus_min_hits: int = 2,
         max_attempts_before_unreadable: int = 6,
-        ambiguity_confidence_margin: float = 0.08,
     ):
         # candidate_window_ms là khoảng giữ candidate trước khi bị coi là quá cũ.
         self._candidate_window_ms = max(int(candidate_window_ms), 200)
@@ -85,8 +76,6 @@ class LicensePlateTemporalResolver:
         self._consensus_min_hits = max(int(consensus_min_hits), 1)
         # Quá nhiều lần thử không ra kết quả thì chuyển unreadable.
         self._max_attempts_before_unreadable = max(int(max_attempts_before_unreadable), 1)
-        # Nếu 2 text cùng số hit và confidence quá sát nhau, chưa dùng để enrich violation.
-        self._ambiguity_confidence_margin = max(float(ambiguity_confidence_margin), 0.0)
         # Map vehicle_id -> trạng thái OCR tích lũy.
         self._states: dict[int, LicensePlateState] = {}
 
@@ -145,10 +134,6 @@ class LicensePlateTemporalResolver:
                 consensus_hits=0,
                 attempt_count=0,
                 confirmed_ts=None,
-                runner_up_license_plate=None,
-                runner_up_confidence=None,
-                runner_up_hits=0,
-                is_ambiguous=False,
             )
         # Snapshot chỉ expose các trường cần cho pipeline/WS payload.
         return LicensePlateSnapshot(
@@ -158,10 +143,6 @@ class LicensePlateTemporalResolver:
             consensus_hits=max(int(state.best_hits), 0),
             attempt_count=max(int(state.attempt_count), 0),
             confirmed_ts=state.confirmed_ts,
-            runner_up_license_plate=state.runner_up_text,
-            runner_up_confidence=state.runner_up_confidence,
-            runner_up_hits=max(int(state.runner_up_hits), 0),
-            is_ambiguous=bool(state.is_ambiguous),
         )
 
     def prune(self, *, current_ts: datetime, max_age_s: float) -> None:
@@ -192,10 +173,6 @@ class LicensePlateTemporalResolver:
             state.best_text = None
             state.confidence = None
             state.best_hits = 0
-            state.runner_up_text = None
-            state.runner_up_confidence = None
-            state.runner_up_hits = 0
-            state.is_ambiguous = False
             state.status = (
                 "unreadable"
                 if state.attempt_count >= self._max_attempts_before_unreadable
@@ -220,30 +197,14 @@ class LicensePlateTemporalResolver:
         # reverse=True để cụm có chất lượng cao đứng đầu.
         ranked.sort(reverse=True)
         top_count, top_avg_conf, _, top_latest_ts, top_text = ranked[0]
-        runner_up = ranked[1] if len(ranked) >= 2 else None
 
         # Gán winner tạm thời theo bảng xếp hạng.
         state.best_text = top_text
         state.confidence = top_avg_conf
         state.best_hits = top_count
-        if runner_up is None:
-            state.runner_up_text = None
-            state.runner_up_confidence = None
-            state.runner_up_hits = 0
-            state.is_ambiguous = False
-        else:
-            runner_up_count, runner_up_avg_conf, _, _, runner_up_text = runner_up
-            state.runner_up_text = runner_up_text
-            state.runner_up_confidence = runner_up_avg_conf
-            state.runner_up_hits = runner_up_count
-            state.is_ambiguous = bool(
-                runner_up_count >= self._consensus_min_hits
-                and runner_up_count == top_count
-                and (top_avg_conf - runner_up_avg_conf) < self._ambiguity_confidence_margin
-            )
 
         if top_count >= self._consensus_min_hits and top_avg_conf >= self._min_ocr_confidence:
-            if state.is_ambiguous:
+            if self._has_close_competing_consensus(ranked=ranked):
                 state.status = "uncertain"
                 return
             # Đủ hit + đủ tin cậy thì chuyển confirmed.
@@ -268,7 +229,17 @@ class LicensePlateTemporalResolver:
             # unreadable thì không trả text để tránh UI hiểu nhầm đã đọc đúng.
             state.best_text = None
             state.confidence = None
-            state.is_ambiguous = False
+
+    def _has_close_competing_consensus(self, *, ranked: list[tuple[int, float, float, float, str]]) -> bool:
+        if len(ranked) < 2:
+            return False
+        top_count, top_avg_conf, *_ = ranked[0]
+        next_count, next_avg_conf, *_ = ranked[1]
+        return bool(
+            next_count >= self._consensus_min_hits
+            and next_count == top_count
+            and (top_avg_conf - next_avg_conf) < 0.08
+        )
 
     def _prune_candidates(self, *, state: LicensePlateState, reference_ts: datetime) -> None:
         # Chỉ giữ candidate trong cửa sổ [now - candidate_window, now].
