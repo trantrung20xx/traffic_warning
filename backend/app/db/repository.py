@@ -74,7 +74,7 @@ def update_pending_violation_plate(
     updated_violation_ids_out: list[int] | None = None,
 ) -> int:
     normalized_status = str(license_plate_status or "").strip().lower()
-    if normalized_status != "confirmed":
+    if normalized_status not in {"confirmed", "uncertain"}:
         return 0
 
     normalized_plate = str(license_plate or "").strip().upper()
@@ -119,7 +119,12 @@ def update_pending_violation_plate(
             current_status == "confirmed"
             and ((not current_plate) or current_plate == normalized_plate)
         )
-        if not (is_pending_like or is_confirmed_backfillable):
+        is_uncertain_backfillable = (
+            normalized_status == "uncertain"
+            and current_status == "uncertain"
+            and ((not current_plate) or current_plate == normalized_plate)
+        )
+        if not (is_pending_like or is_confirmed_backfillable or is_uncertain_backfillable):
             continue
 
         if current_status == "confirmed" and current_plate and current_plate != normalized_plate:
@@ -127,12 +132,13 @@ def update_pending_violation_plate(
 
         changed = False
         current_image_path = str(row.license_plate_image_path or "").strip()
-        if (not current_plate) or is_pending_like:
+        if (not current_plate) or is_pending_like or is_uncertain_backfillable:
             if current_plate != normalized_plate:
                 row.license_plate = normalized_plate
                 changed = True
-        if current_status != "confirmed":
-            row.license_plate_status = "confirmed"
+        next_status = "confirmed" if current_status == "confirmed" else normalized_status
+        if current_status != next_status:
+            row.license_plate_status = next_status
             changed = True
         if (
             row.license_plate_confidence is None

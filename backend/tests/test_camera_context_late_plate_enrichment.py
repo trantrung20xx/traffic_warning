@@ -330,7 +330,7 @@ def test_late_plate_enrichment_rejects_when_consensus_hits_are_insufficient(monk
     assert captured["calls"] == 0
 
 
-def test_late_plate_enrichment_rejects_ambiguous_confirmed_snapshot(monkeypatch) -> None:
+def test_late_plate_enrichment_updates_ambiguous_snapshot_as_uncertain(monkeypatch) -> None:
     ctx = _build_context_for_late_plate_tests()
     ts = datetime(2026, 5, 21, 12, 0, 0, tzinfo=timezone.utc)
     vehicle_id = 16
@@ -363,12 +363,18 @@ def test_late_plate_enrichment_rejects_ambiguous_confirmed_snapshot(monkeypatch)
     )
     ctx._save_late_plate_evidence_from_crop = lambda **_: "config/evidence_images/cam_test/lp.jpg"
 
-    captured = {"calls": 0}
-    monkeypatch.setattr(
-        camera_context_module,
-        "update_pending_violation_plate",
-        lambda *args, **kwargs: (captured.__setitem__("calls", captured["calls"] + 1) or 0),
-    )
+    captured = {"calls": 0, "status": None}
+
+    def _fake_update(*args, **kwargs):
+        captured["calls"] += 1
+        captured["status"] = kwargs.get("license_plate_status")
+        ids = kwargs.get("updated_violation_ids_out")
+        if isinstance(ids, list):
+            ids.append(616)
+        return 1
+
+    monkeypatch.setattr(camera_context_module, "update_pending_violation_plate", _fake_update)
+    monkeypatch.setattr(camera_context_module, "query_violation_payloads_by_ids", lambda *args, **kwargs: [])
 
     ctx._attempt_late_plate_enrichment(
         vehicle_id=vehicle_id,
@@ -376,8 +382,10 @@ def test_late_plate_enrichment_rejects_ambiguous_confirmed_snapshot(monkeypatch)
         plate_crop_bgr=np.ones((20, 80, 3), dtype=np.uint8),
     )
 
-    assert captured["calls"] == 0
+    assert captured["calls"] == 1
+    assert captured["status"] == "uncertain"
     assert vehicle_id in ctx._pending_violation_vehicle_ids
+    assert ctx._pending_violation_plate_states[vehicle_id].has_committed_plate is False
 
 
 def test_late_plate_enrichment_keeps_pending_when_repository_updates_zero_rows(monkeypatch) -> None:

@@ -152,7 +152,7 @@ class ViolationPlateEnrichmentRepositoryTests(unittest.TestCase):
                     track_session_id="cam_01-session",
                     vehicle_id=10,
                     license_plate="51A12345",
-                    license_plate_status="uncertain",
+                    license_plate_status="candidate",
                     license_plate_confidence=0.95,
                     license_plate_image_path="a.jpg",
                     min_confidence=0.8,
@@ -365,8 +365,68 @@ class ViolationPlateEnrichmentRepositoryTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertIsNone(rows[0]["license_plate"])
         self.assertEqual(rows[0]["license_plate_status"], "pending")
-        self.assertIsNone(rows[0]["license_plate_confidence"])
-        self.assertIsNone(rows[0]["license_plate_image_path"])
+
+    def test_updates_pending_violation_with_uncertain_plate_candidate(self) -> None:
+        engine = None
+        try:
+            engine, session_factory = self._create_session_factory()
+            with session_factory() as session:
+                insert_violation(session, _event(license_plate_status="pending"))
+                updated = update_pending_violation_plate(
+                    session,
+                    camera_id="cam_01",
+                    track_session_id="cam_01-session",
+                    vehicle_id=10,
+                    license_plate="51A12345",
+                    license_plate_status="uncertain",
+                    license_plate_confidence=0.91,
+                    license_plate_image_path="config/evidence_images/cam_01/plate_uncertain.jpg",
+                    min_confidence=0.8,
+                )
+                rows = query_violation_history(session)
+        finally:
+            if engine is not None:
+                engine.dispose()
+
+        self.assertEqual(updated, 1)
+        self.assertEqual(rows[0]["license_plate"], "51A12345")
+        self.assertEqual(rows[0]["license_plate_status"], "uncertain")
+        self.assertEqual(rows[0]["license_plate_image_path"], "config/evidence_images/cam_01/plate_uncertain.jpg")
+
+    def test_uncertain_plate_candidate_does_not_overwrite_confirmed_different_plate(self) -> None:
+        engine = None
+        try:
+            engine, session_factory = self._create_session_factory()
+            with session_factory() as session:
+                insert_violation(
+                    session,
+                    _event(
+                        license_plate="30H99876",
+                        license_plate_status="confirmed",
+                        license_plate_confidence=0.88,
+                        license_plate_image_path="config/evidence_images/cam_01/original.jpg",
+                    ),
+                )
+                updated = update_pending_violation_plate(
+                    session,
+                    camera_id="cam_01",
+                    track_session_id="cam_01-session",
+                    vehicle_id=10,
+                    license_plate="51A12345",
+                    license_plate_status="uncertain",
+                    license_plate_confidence=0.95,
+                    license_plate_image_path="config/evidence_images/cam_01/uncertain.jpg",
+                    min_confidence=0.8,
+                )
+                rows = query_violation_history(session)
+        finally:
+            if engine is not None:
+                engine.dispose()
+
+        self.assertEqual(updated, 0)
+        self.assertEqual(rows[0]["license_plate"], "30H99876")
+        self.assertEqual(rows[0]["license_plate_status"], "confirmed")
+        self.assertEqual(rows[0]["license_plate_image_path"], "config/evidence_images/cam_01/original.jpg")
 
     def test_updates_evidence_image_path_when_new_evidence_is_provided(self) -> None:
         engine = None
