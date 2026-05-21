@@ -19,6 +19,7 @@ def _build_minimal_context_for_queue_tests() -> CameraContext:
     ctx = object.__new__(CameraContext)
     ctx.camera_config = SimpleNamespace(camera_id="cam_test")
     ctx.track_session_id = "session_test"
+    ctx._late_plate_state_lock = threading.Lock()
     ctx._license_plate_jobs_cond = threading.Condition()
     ctx._license_plate_pending_jobs = OrderedDict()
     ctx._license_plate_worker_max_pending_jobs = 3
@@ -26,6 +27,7 @@ def _build_minimal_context_for_queue_tests() -> CameraContext:
     ctx._license_plate_worker_stop_event = threading.Event()
     ctx._license_plate_prioritize_pending_violation_ocr = True
     ctx._pending_violation_vehicle_ids = set()
+    ctx._pending_violation_plate_states = {}
     return ctx
 
 
@@ -98,6 +100,7 @@ def test_license_plate_job_queue_prioritizes_pending_violation_vehicle() -> None
     ctx = _build_minimal_context_for_queue_tests()
     ts = datetime(2026, 5, 8, 8, 0, 0, tzinfo=timezone.utc)
     ctx._pending_violation_vehicle_ids = {2}
+    ctx._pending_violation_plate_states[2] = SimpleNamespace(has_committed_plate=False)
 
     ctx._queue_license_plate_job(
         vehicle_id=1,

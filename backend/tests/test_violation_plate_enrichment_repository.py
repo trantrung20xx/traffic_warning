@@ -12,6 +12,7 @@ from app.db.repository import (
     insert_violation,
     query_violation_history,
     update_pending_violation_plate,
+    update_violation_evidence_image_if_better,
 )
 from app.schemas.events import ViolationEvent, ViolationLocation
 
@@ -403,6 +404,90 @@ class ViolationPlateEnrichmentRepositoryTests(unittest.TestCase):
         self.assertEqual(rows[0]["image_path"], "config/evidence_images/cam_01/evidence_new.jpg")
         self.assertEqual(rows[0]["evidence_image_path"], "config/evidence_images/cam_01/evidence_new.jpg")
         self.assertEqual(rows[0]["evidence_image_url"], rows[0]["image_url"])
+
+    def test_independent_evidence_update_does_not_require_plate_confirmation(self) -> None:
+        engine = None
+        try:
+            engine, session_factory = self._create_session_factory()
+            with session_factory() as session:
+                insert_violation(
+                    session,
+                    _event(
+                        license_plate=None,
+                        license_plate_status="pending",
+                        license_plate_image_path=None,
+                        image_path="config/evidence_images/cam_01/evidence_old.jpg",
+                    ),
+                )
+                updated = update_violation_evidence_image_if_better(
+                    session,
+                    camera_id="cam_01",
+                    track_session_id="cam_01-session",
+                    vehicle_id=10,
+                    evidence_image_path="config/evidence_images/cam_01/evidence_newer.jpg",
+                )
+                rows = query_violation_history(session)
+        finally:
+            if engine is not None:
+                engine.dispose()
+
+        self.assertEqual(updated, 1)
+        self.assertEqual(rows[0]["image_path"], "config/evidence_images/cam_01/evidence_newer.jpg")
+        self.assertEqual(rows[0]["license_plate_status"], "pending")
+        self.assertIsNone(rows[0]["license_plate"])
+
+    def test_independent_evidence_update_respects_scope_and_skips_same_path(self) -> None:
+        engine = None
+        try:
+            engine, session_factory = self._create_session_factory()
+            with session_factory() as session:
+                insert_violation(
+                    session,
+                    _event(
+                        camera_id="cam_a",
+                        vehicle_id=10,
+                        track_session_id="session_a",
+                        image_path="config/evidence_images/cam_a/evidence_keep.jpg",
+                    ),
+                )
+                updated_same = update_violation_evidence_image_if_better(
+                    session,
+                    camera_id="cam_a",
+                    track_session_id="session_a",
+                    vehicle_id=10,
+                    evidence_image_path="config/evidence_images/cam_a/evidence_keep.jpg",
+                )
+                updated_camera = update_violation_evidence_image_if_better(
+                    session,
+                    camera_id="cam_b",
+                    track_session_id="session_a",
+                    vehicle_id=10,
+                    evidence_image_path="config/evidence_images/cam_b/evidence_new.jpg",
+                )
+                updated_session = update_violation_evidence_image_if_better(
+                    session,
+                    camera_id="cam_a",
+                    track_session_id="session_b",
+                    vehicle_id=10,
+                    evidence_image_path="config/evidence_images/cam_a/evidence_new.jpg",
+                )
+                updated_vehicle = update_violation_evidence_image_if_better(
+                    session,
+                    camera_id="cam_a",
+                    track_session_id="session_a",
+                    vehicle_id=999,
+                    evidence_image_path="config/evidence_images/cam_a/evidence_new.jpg",
+                )
+                rows = query_violation_history(session)
+        finally:
+            if engine is not None:
+                engine.dispose()
+
+        self.assertEqual(updated_same, 0)
+        self.assertEqual(updated_camera, 0)
+        self.assertEqual(updated_session, 0)
+        self.assertEqual(updated_vehicle, 0)
+        self.assertEqual(rows[0]["image_path"], "config/evidence_images/cam_a/evidence_keep.jpg")
 
 
 if __name__ == "__main__":

@@ -8,7 +8,12 @@
 ## 2. Luồng backend sau khi sửa
 - Vẫn giữ nguyên `Violation first, plate later`.
 - Violation emit ngay trong `_handle_violations()` như cũ, không delay luồng phát hiện.
-- Khi OCR/resolver đủ điều kiện confirmed an toàn, `_attempt_late_plate_enrichment()` cập nhật DB và truy vấn lại payload mới nhất theo `violation_id`.
+- Tách thêm luồng độc lập `_attempt_evidence_upgrade()`:
+  - không phụ thuộc `license_plate_status == confirmed`;
+  - không cần `license_plate` text;
+  - không cần `license_plate_image_path`;
+  - chỉ cần candidate evidence tốt hơn baseline + qua gate an toàn track.
+- Khi OCR/resolver đủ điều kiện confirmed an toàn, `_attempt_late_plate_enrichment()` chỉ xử lý cập nhật plate.
 - Sau khi update thành công, backend emit lại event violation realtime với dữ liệu mới nhất.
 
 ## 3. Luồng frontend sau khi sửa
@@ -37,10 +42,10 @@
   - chỉ cho phép update tiếp (ví dụ nâng evidence) khi đã có plate image hợp lệ trước đó.
 
 ## 6. Điều kiện nâng cấp evidence image
-- Bổ sung baseline evidence vào pending state ngay khi tạo violation pending:
+- Bổ sung baseline evidence vào pending state ngay khi tạo violation (kể cả đã confirmed plate):
   - `best_violation_image_path`
   - `best_violation_image_quality`
-- Late enrichment chỉ thay `evidence_image_path` khi ảnh candidate mới có quality cao hơn baseline theo ngưỡng delta.
+- Luồng evidence độc lập (`_attempt_evidence_upgrade`) chỉ thay `evidence_image_path` khi ảnh candidate mới có quality cao hơn baseline theo ngưỡng delta.
 - Không tự động thay nếu ảnh mới kém hơn hoặc lưu ảnh mới thất bại.
 
 ## 7. Cách tránh gán nhầm xe/biển số
@@ -66,7 +71,7 @@
 
 ## 10. Test/build đã chạy
 - `python -m compileall backend/app` -> pass
-- `cd backend && python -m pytest tests -q` -> pass (`131 passed, 8 subtests passed`)
+- `cd backend && python -m pytest tests -q` -> pass (`136 passed, 8 subtests passed`)
 - `cd frontend && npm run build` -> pass
 
 ## 11. Rủi ro còn lại

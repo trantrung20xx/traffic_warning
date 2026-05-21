@@ -162,6 +162,45 @@ def update_pending_violation_plate(
     return updated_rows
 
 
+def update_violation_evidence_image_if_better(
+    session,
+    *,
+    camera_id: str,
+    track_session_id: str,
+    vehicle_id: int,
+    evidence_image_path: str,
+    violation_not_before_ts: datetime | None = None,
+    updated_violation_ids_out: list[int] | None = None,
+) -> int:
+    normalized_evidence_path = str(evidence_image_path or "").strip()
+    if not normalized_evidence_path:
+        return 0
+
+    query = (
+        select(Violation)
+        .where(Violation.camera_id == str(camera_id))
+        .where(Violation.track_session_id == str(track_session_id))
+        .where(Violation.vehicle_id == int(vehicle_id))
+    )
+    if violation_not_before_ts is not None:
+        query = query.where(Violation.timestamp_utc >= ensure_utc_datetime(violation_not_before_ts))
+
+    rows = session.execute(query).scalars().all()
+    updated_rows = 0
+    for row in rows:
+        current_evidence_path = str(row.evidence_image_path or "").strip()
+        if current_evidence_path == normalized_evidence_path:
+            continue
+        row.evidence_image_path = normalized_evidence_path
+        updated_rows += 1
+        if updated_violation_ids_out is not None:
+            updated_violation_ids_out.append(int(row.id))
+
+    if updated_rows > 0:
+        session.commit()
+    return updated_rows
+
+
 def _violation_row_to_payload(row: Violation) -> dict:
     (
         display_license_plate,
