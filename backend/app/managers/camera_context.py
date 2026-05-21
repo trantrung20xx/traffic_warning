@@ -1411,6 +1411,31 @@ class CameraContext:
             self._latest_preview_seq += 1
             self._preview_condition.notify_all()
 
+    def _track_and_assign_stable_ids(self, frame_bgr, *, ts_dt: datetime):
+        tracks = self.tracker.track(frame_bgr)
+        return self.stable_track_id_assigner.assign(raw_tracks=tracks, ts=ts_dt)
+
+    def _prune_runtime_state(self, *, current_ts: datetime) -> None:
+        self.violation_logic.prune(
+            current_ts=current_ts,
+            max_age_s=self._state_prune_max_age_s,
+        )
+        self.stable_track_id_assigner.prune(
+            current_ts=current_ts,
+            max_age_s=self._state_prune_max_age_s,
+        )
+        self.temporal_lane_assigner.prune(
+            current_ts=current_ts,
+            max_age_s=self._state_prune_max_age_s,
+        )
+        self.temporal_vehicle_type_assigner.prune(
+            current_ts=current_ts,
+            max_age_s=self._state_prune_max_age_s,
+        )
+        if self._license_plate_resolver is not None:
+            self._prune_license_plate_state(current_ts)
+        self._prune_late_plate_state(current_ts=current_ts)
+
     async def run_forever(self, *, stop_event: asyncio.Event) -> None:
         """Vòng lặp xử lý liên tục cho một camera cho đến khi nhận tín hiệu dừng."""
         try:
@@ -1428,16 +1453,23 @@ class CameraContext:
 
                 # ts_dt là timestamp chuẩn UTC dùng đồng nhất cho DB, WebSocket và state prune.
                 ts_dt = datetime.fromtimestamp(frame.timestamp_utc_ms / 1000.0, tz=timezone.utc)
-                # Các bước nặng CPU/GPU chạy qua thread để không block event loop FastAPI.
-                tracks = await asyncio.to_thread(self.tracker.track, frame.bgr)
-                tracks = await asyncio.to_thread(self.stable_track_id_assigner.assign, raw_tracks=tracks, ts=ts_dt)
+                # Gộp detect/track + stable-id assignment trong một worker để giảm hop thread mỗi frame.
+                tracks = await asyncio.to_thread(
+                    self._track_and_assign_stable_ids,
+                    frame.bgr,
+                    ts_dt=ts_dt,
+                )
                 self._update_late_plate_track_continuity(tracks=tracks, ts_dt=ts_dt)
+                should_push_tracks = (
+                    frame.timestamp_utc_ms - self._last_track_push_ts_ms >= self._track_push_interval_ms
+                )
                 # OCR snapshot chạy bất đồng bộ; tại frame hiện tại dùng snapshot đã hội tụ tới thời điểm này.
                 plate_snapshots = self._prepare_license_plate_snapshots_and_enqueue(
                     frame.bgr,
                     tracks,
                     ts_dt=ts_dt,
                     frame_timestamp_utc_ms=frame.timestamp_utc_ms,
+                    include_snapshot_payloads=should_push_tracks,
                 )
 
                 vehicles: list[TrackVehicle] = []
@@ -1464,19 +1496,6 @@ class CameraContext:
                         ts=ts_dt,
                         observation=lane_observation,
                     )
-                    plate_snapshot = plate_snapshots.get(tr.vehicle_id)
-                    vehicles.append(
-                        TrackVehicle(
-                            vehicle_id=tr.vehicle_id,
-                            vehicle_type=vehicle_type,
-                            lane_id=lane_id,
-                            raw_lane_id=raw_lane_id,
-                            license_plate=plate_snapshot.license_plate if plate_snapshot else None,
-                            license_plate_status=plate_snapshot.status if plate_snapshot else None,
-                            license_plate_confidence=plate_snapshot.confidence if plate_snapshot else None,
-                            bbox=BBox(x1=tr.bbox_xyxy[0], y1=tr.bbox_xyxy[1], x2=tr.bbox_xyxy[2], y2=tr.bbox_xyxy[3]),
-                        )
-                    )
 
                     candidates = self.violation_logic.update_and_maybe_generate_violation(
                         vehicle_id=tr.vehicle_id,
@@ -1486,17 +1505,30 @@ class CameraContext:
                         bbox_xyxy=tr.bbox_xyxy,
                         ts=ts_dt,
                     )
-                    direction_status, direction_dot = self.violation_logic.get_direction_status_for_vehicle(
-                        vehicle_id=tr.vehicle_id
-                    )
-                    # direction_* gắn vào payload xe để overlay realtime hiển thị ngược chiều tức thời.
-                    vehicles[-1].direction_status = direction_status
-                    vehicles[-1].direction_dot = direction_dot
+                    if should_push_tracks:
+                        plate_snapshot = plate_snapshots.get(tr.vehicle_id)
+                        track_vehicle = TrackVehicle(
+                            vehicle_id=tr.vehicle_id,
+                            vehicle_type=vehicle_type,
+                            lane_id=lane_id,
+                            raw_lane_id=raw_lane_id,
+                            license_plate=plate_snapshot.license_plate if plate_snapshot else None,
+                            license_plate_status=plate_snapshot.status if plate_snapshot else None,
+                            license_plate_confidence=plate_snapshot.confidence if plate_snapshot else None,
+                            bbox=BBox(x1=tr.bbox_xyxy[0], y1=tr.bbox_xyxy[1], x2=tr.bbox_xyxy[2], y2=tr.bbox_xyxy[3]),
+                        )
+                        direction_status, direction_dot = self.violation_logic.get_direction_status_for_vehicle(
+                            vehicle_id=tr.vehicle_id
+                        )
+                        # direction_* gắn vào payload xe để overlay realtime hiển thị ngược chiều tức thời.
+                        track_vehicle.direction_status = direction_status
+                        track_vehicle.direction_dot = direction_dot
+                        vehicles.append(track_vehicle)
                     for c in candidates:
                         # Gom candidate trước, xử lý lưu evidence/DB theo batch phía sau.
                         violation_candidates.append((tr.vehicle_id, vehicle_type, c, list(tr.bbox_xyxy)))
 
-                if frame.timestamp_utc_ms - self._last_track_push_ts_ms >= self._track_push_interval_ms:
+                if should_push_tracks:
                     # Chỉ push theo nhịp cấu hình để websocket không bị flood.
                     self._last_track_push_ts_ms = frame.timestamp_utc_ms
                     track_msg = TrackMessage(
@@ -1523,32 +1555,7 @@ class CameraContext:
                 ):
                     # Dọn state định kỳ để tránh phình bộ nhớ khi xe rời scene.
                     await asyncio.to_thread(
-                        self.violation_logic.prune,
-                        current_ts=ts_dt,
-                        max_age_s=self._state_prune_max_age_s,
-                    )
-                    await asyncio.to_thread(
-                        self.stable_track_id_assigner.prune,
-                        current_ts=ts_dt,
-                        max_age_s=self._state_prune_max_age_s,
-                    )
-                    await asyncio.to_thread(
-                        self.temporal_lane_assigner.prune,
-                        current_ts=ts_dt,
-                        max_age_s=self._state_prune_max_age_s,
-                    )
-                    await asyncio.to_thread(
-                        self.temporal_vehicle_type_assigner.prune,
-                        current_ts=ts_dt,
-                        max_age_s=self._state_prune_max_age_s,
-                    )
-                    if self._license_plate_resolver is not None:
-                        await asyncio.to_thread(
-                            self._prune_license_plate_state,
-                            ts_dt,
-                        )
-                    await asyncio.to_thread(
-                        self._prune_late_plate_state,
+                        self._prune_runtime_state,
                         current_ts=ts_dt,
                     )
                     # Lưu mốc prune gần nhất theo timestamp frame để tính chu kỳ lần sau.
@@ -1573,6 +1580,7 @@ class CameraContext:
         *,
         ts_dt: datetime,
         frame_timestamp_utc_ms: int,
+        include_snapshot_payloads: bool = True,
     ) -> dict[int, LicensePlateSnapshot]:
         # Trả snapshot OCR hiện có ngay trong frame hiện tại, đồng thời enqueue job mới
         # để snapshot các frame sau dần hội tụ về kết quả ổn định.
@@ -1614,9 +1622,10 @@ class CameraContext:
                         vehicle_crop_bgr=vehicle_crop,
                     )
 
-            with self._license_plate_resolver_lock:
-                # Snapshot trả ngay cho payload track của frame hiện tại.
-                snapshots[vehicle_id] = resolver.snapshot_for(vehicle_id=vehicle_id)
+            if include_snapshot_payloads:
+                with self._license_plate_resolver_lock:
+                    # Snapshot trả ngay cho payload track của frame hiện tại.
+                    snapshots[vehicle_id] = resolver.snapshot_for(vehicle_id=vehicle_id)
 
         stale_read_ids = [
             vehicle_id for vehicle_id in self._license_plate_last_read_ms.keys() if vehicle_id not in active_vehicle_ids
