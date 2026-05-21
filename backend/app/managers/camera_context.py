@@ -1149,8 +1149,17 @@ class CameraContext:
         if not payloads:
             return
         for payload in payloads:
+            normalized_payload = dict(payload)
+            normalized_payload["evidence_image_path"] = (
+                normalized_payload.get("evidence_image_path")
+                or normalized_payload.get("image_path")
+            )
+            normalized_payload["evidence_image_url"] = (
+                normalized_payload.get("evidence_image_url")
+                or normalized_payload.get("image_url")
+            )
             try:
-                event = ViolationEvent.model_validate(payload)
+                event = ViolationEvent.model_validate(normalized_payload)
             except Exception:
                 continue
             self.on_violation(event)

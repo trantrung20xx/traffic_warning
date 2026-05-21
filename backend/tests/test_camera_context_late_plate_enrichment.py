@@ -235,6 +235,8 @@ def test_late_plate_enrichment_emits_realtime_update_event(monkeypatch) -> None:
     assert emitted[0].id == 101
     assert emitted[0].license_plate == "51A12345"
     assert emitted[0].image_path == "config/evidence_images/cam_test/veh.jpg"
+    assert emitted[0].evidence_image_path == "config/evidence_images/cam_test/veh.jpg"
+    assert emitted[0].license_plate_image_path == "config/evidence_images/cam_test/lp.jpg"
 
 
 def test_late_plate_enrichment_rejects_outside_update_window(monkeypatch) -> None:
@@ -601,6 +603,9 @@ def test_evidence_upgrade_does_not_require_plate_confirmation(monkeypatch) -> No
     assert captured["calls"] == 1
     assert len(emitted) == 1
     assert emitted[0].id == 501
+    assert emitted[0].image_path == "config/evidence_images/cam_test/evidence_v3.jpg"
+    assert emitted[0].evidence_image_path == "config/evidence_images/cam_test/evidence_v3.jpg"
+    assert emitted[0].license_plate_status == "pending"
 
 
 def test_evidence_upgrade_rejects_dirty_track(monkeypatch) -> None:
@@ -825,8 +830,39 @@ def test_violation_event_with_confirmed_plate_still_registers_for_evidence_upgra
 
     assert len(emitted) == 1
     assert emitted[0].license_plate_status == "confirmed"
+    assert emitted[0].license_plate == "51A12345"
+    assert emitted[0].image_path == "config/evidence_images/cam_test/evidence_v1.jpg"
+    assert emitted[0].evidence_image_path == "config/evidence_images/cam_test/evidence_v1.jpg"
+    assert emitted[0].license_plate_image_path == "config/evidence_images/cam_test/lp_v1.jpg"
     assert len(registered) == 1
     assert registered[0]["has_committed_plate"] is True
+
+
+def test_skipping_track_payload_snapshot_still_enqueues_plate_ocr() -> None:
+    ctx = _build_context_for_late_plate_tests()
+    ts = datetime(2026, 5, 21, 12, 0, 0, tzinfo=timezone.utc)
+    vehicle_id = 41
+    queued = []
+
+    ctx._license_plate_resolver = camera_context_module.LicensePlateTemporalResolver()
+    ctx._license_plate_enabled = True
+    ctx._license_plate_last_read_ms = {}
+    ctx._should_attempt_license_plate_read = lambda **_: True
+    ctx._crop_vehicle_for_license_plate = lambda *_args, **_kwargs: np.ones((32, 64, 3), dtype=np.uint8)
+    ctx._queue_license_plate_job = lambda **kwargs: queued.append(kwargs)
+
+    snapshots = ctx._prepare_license_plate_snapshots_and_enqueue(
+        np.zeros((120, 160, 3), dtype=np.uint8),
+        [SimpleNamespace(vehicle_id=vehicle_id, bbox_xyxy=[10.0, 20.0, 90.0, 100.0])],
+        ts_dt=ts,
+        frame_timestamp_utc_ms=1716292800000,
+        include_snapshot_payloads=False,
+    )
+
+    assert snapshots == {}
+    assert len(queued) == 1
+    assert queued[0]["vehicle_id"] == vehicle_id
+    assert ctx._license_plate_resolver.snapshot_for(vehicle_id=vehicle_id).status == "pending"
 
 
 def test_violation_is_emitted_immediately_even_when_plate_is_pending() -> None:
