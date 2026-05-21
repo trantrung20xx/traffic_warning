@@ -330,6 +330,56 @@ def test_late_plate_enrichment_rejects_when_consensus_hits_are_insufficient(monk
     assert captured["calls"] == 0
 
 
+def test_late_plate_enrichment_rejects_ambiguous_confirmed_snapshot(monkeypatch) -> None:
+    ctx = _build_context_for_late_plate_tests()
+    ts = datetime(2026, 5, 21, 12, 0, 0, tzinfo=timezone.utc)
+    vehicle_id = 16
+
+    ctx._pending_violation_plate_states[vehicle_id] = _PendingViolationPlateState(
+        first_pending_ts=ts - timedelta(milliseconds=500),
+        last_pending_ts=ts - timedelta(milliseconds=200),
+        pending_count=1,
+        last_lane_id=1,
+    )
+    ctx._pending_violation_vehicle_ids.add(vehicle_id)
+    ctx._track_continuity_states[vehicle_id] = _TrackContinuityState(
+        first_seen_ts=ts - timedelta(seconds=1),
+        last_seen_ts=ts - timedelta(milliseconds=100),
+        last_bbox_xyxy=[10.0, 10.0, 30.0, 30.0],
+        observation_count=6,
+        dirty=False,
+    )
+    ctx._license_plate_snapshot_for = lambda **_: LicensePlateSnapshot(
+        license_plate="51A12345",
+        status="confirmed",
+        confidence=0.92,
+        consensus_hits=3,
+        attempt_count=8,
+        confirmed_ts=ts,
+        runner_up_license_plate="51A12845",
+        runner_up_confidence=0.91,
+        runner_up_hits=3,
+        is_ambiguous=True,
+    )
+    ctx._save_late_plate_evidence_from_crop = lambda **_: "config/evidence_images/cam_test/lp.jpg"
+
+    captured = {"calls": 0}
+    monkeypatch.setattr(
+        camera_context_module,
+        "update_pending_violation_plate",
+        lambda *args, **kwargs: (captured.__setitem__("calls", captured["calls"] + 1) or 0),
+    )
+
+    ctx._attempt_late_plate_enrichment(
+        vehicle_id=vehicle_id,
+        ts_dt=ts,
+        plate_crop_bgr=np.ones((20, 80, 3), dtype=np.uint8),
+    )
+
+    assert captured["calls"] == 0
+    assert vehicle_id in ctx._pending_violation_vehicle_ids
+
+
 def test_late_plate_enrichment_keeps_pending_when_repository_updates_zero_rows(monkeypatch) -> None:
     ctx = _build_context_for_late_plate_tests()
     ts = datetime(2026, 5, 21, 12, 0, 0, tzinfo=timezone.utc)

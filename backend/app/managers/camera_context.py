@@ -1267,6 +1267,8 @@ class CameraContext:
             return
         if snapshot.status != "confirmed":
             return
+        if bool(getattr(snapshot, "is_ambiguous", False)):
+            return
         if not snapshot.license_plate:
             return
         if snapshot.confidence is None:
