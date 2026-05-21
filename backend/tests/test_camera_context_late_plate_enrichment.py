@@ -627,6 +627,112 @@ def test_evidence_upgrade_skips_when_quality_is_not_better(monkeypatch) -> None:
     assert captured["calls"] == 0
 
 
+def test_plate_aware_evidence_upgrade_prioritizes_readable_plate(monkeypatch) -> None:
+    ctx = _build_context_for_late_plate_tests()
+    ts = datetime(2026, 5, 21, 12, 0, 0, tzinfo=timezone.utc)
+    vehicle_id = 271
+
+    ctx._pending_violation_plate_states[vehicle_id] = _PendingViolationPlateState(
+        first_pending_ts=ts - timedelta(milliseconds=400),
+        last_pending_ts=ts - timedelta(milliseconds=200),
+        pending_count=1,
+        last_lane_id=2,
+        has_committed_plate=False,
+        best_violation_image_quality=10.0,
+        best_violation_image_path="config/evidence_images/cam_test/evidence_v1.jpg",
+    )
+    ctx._pending_violation_vehicle_ids.add(vehicle_id)
+    ctx._track_continuity_states[vehicle_id] = _TrackContinuityState(
+        first_seen_ts=ts - timedelta(seconds=1),
+        last_seen_ts=ts - timedelta(milliseconds=80),
+        last_bbox_xyxy=[10.0, 10.0, 30.0, 30.0],
+        observation_count=7,
+        dirty=False,
+    )
+    ctx._vehicle_evidence_quality_score = lambda *_args, **_kwargs: 8.0
+    ctx._plate_crop_quality_score = lambda *_args, **_kwargs: 4.0
+    ctx._save_late_violation_evidence_from_vehicle_crop = (
+        lambda **_: "config/evidence_images/cam_test/evidence_plate_aware.jpg"
+    )
+
+    captured = {"calls": 0, "evidence_image_path": None}
+
+    def _fake_evidence_update(*args, **kwargs):
+        captured["calls"] += 1
+        captured["evidence_image_path"] = kwargs.get("evidence_image_path")
+        ids = kwargs.get("updated_violation_ids_out")
+        if isinstance(ids, list):
+            ids.append(271)
+        return 1
+
+    monkeypatch.setattr(
+        camera_context_module,
+        "update_violation_evidence_image_if_better",
+        _fake_evidence_update,
+    )
+    monkeypatch.setattr(
+        camera_context_module,
+        "query_violation_payloads_by_ids",
+        lambda *args, **kwargs: [],
+    )
+
+    ctx._attempt_evidence_upgrade(
+        vehicle_id=vehicle_id,
+        ts_dt=ts,
+        vehicle_crop_bgr=np.ones((80, 160, 3), dtype=np.uint8),
+        plate_crop_bgr=np.ones((24, 96, 3), dtype=np.uint8),
+        plate_text="51A12345",
+        plate_confidence=0.92,
+    )
+
+    assert captured["calls"] == 1
+    assert captured["evidence_image_path"] == "config/evidence_images/cam_test/evidence_plate_aware.jpg"
+
+
+def test_plate_aware_evidence_upgrade_ignores_low_confidence_plate(monkeypatch) -> None:
+    ctx = _build_context_for_late_plate_tests()
+    ts = datetime(2026, 5, 21, 12, 0, 0, tzinfo=timezone.utc)
+    vehicle_id = 272
+
+    ctx._pending_violation_plate_states[vehicle_id] = _PendingViolationPlateState(
+        first_pending_ts=ts - timedelta(milliseconds=400),
+        last_pending_ts=ts - timedelta(milliseconds=200),
+        pending_count=1,
+        last_lane_id=2,
+        has_committed_plate=False,
+        best_violation_image_quality=10.0,
+        best_violation_image_path="config/evidence_images/cam_test/evidence_v1.jpg",
+    )
+    ctx._pending_violation_vehicle_ids.add(vehicle_id)
+    ctx._track_continuity_states[vehicle_id] = _TrackContinuityState(
+        first_seen_ts=ts - timedelta(seconds=1),
+        last_seen_ts=ts - timedelta(milliseconds=80),
+        last_bbox_xyxy=[10.0, 10.0, 30.0, 30.0],
+        observation_count=7,
+        dirty=False,
+    )
+    ctx._vehicle_evidence_quality_score = lambda *_args, **_kwargs: 8.0
+    ctx._plate_crop_quality_score = lambda *_args, **_kwargs: 4.0
+
+    captured = {"calls": 0}
+    monkeypatch.setattr(
+        camera_context_module,
+        "update_violation_evidence_image_if_better",
+        lambda *args, **kwargs: (captured.__setitem__("calls", captured["calls"] + 1) or 0),
+    )
+
+    ctx._attempt_evidence_upgrade(
+        vehicle_id=vehicle_id,
+        ts_dt=ts,
+        vehicle_crop_bgr=np.ones((80, 160, 3), dtype=np.uint8),
+        plate_crop_bgr=np.ones((24, 96, 3), dtype=np.uint8),
+        plate_text="51A12345",
+        plate_confidence=0.4,
+    )
+
+    assert captured["calls"] == 0
+
+
 def test_evidence_upgrade_does_not_require_plate_confirmation(monkeypatch) -> None:
     ctx = _build_context_for_late_plate_tests()
     ts = datetime(2026, 5, 21, 12, 0, 0, tzinfo=timezone.utc)

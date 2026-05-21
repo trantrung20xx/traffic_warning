@@ -795,11 +795,6 @@ class CameraContext:
         detection_batches = detector.detect_batch([job.vehicle_crop_bgr for job in jobs])
 
         for index, job in enumerate(jobs):
-            self._attempt_evidence_upgrade(
-                vehicle_id=job.vehicle_id,
-                ts_dt=job.ts_dt,
-                vehicle_crop_bgr=job.vehicle_crop_bgr,
-            )
             detections = detection_batches[index] if index < len(detection_batches) else []
             if not detections:
                 self._observe_license_plate_attempt(
@@ -812,6 +807,11 @@ class CameraContext:
                     vehicle_id=job.vehicle_id,
                     ts_dt=job.ts_dt,
                     plate_crop_bgr=None,
+                )
+                self._attempt_evidence_upgrade(
+                    vehicle_id=job.vehicle_id,
+                    ts_dt=job.ts_dt,
+                    vehicle_crop_bgr=job.vehicle_crop_bgr,
                 )
                 continue
 
@@ -833,6 +833,11 @@ class CameraContext:
                     ts_dt=job.ts_dt,
                     plate_crop_bgr=None,
                 )
+                self._attempt_evidence_upgrade(
+                    vehicle_id=job.vehicle_id,
+                    ts_dt=job.ts_dt,
+                    vehicle_crop_bgr=job.vehicle_crop_bgr,
+                )
                 continue
 
             # readout có thể None nếu OCR fail; resolver sẽ tự xử lý theo luật temporal voting.
@@ -846,6 +851,14 @@ class CameraContext:
                 vehicle_id=job.vehicle_id,
                 ts_dt=job.ts_dt,
                 plate_crop_bgr=plate_crop,
+            )
+            self._attempt_evidence_upgrade(
+                vehicle_id=job.vehicle_id,
+                ts_dt=job.ts_dt,
+                vehicle_crop_bgr=job.vehicle_crop_bgr,
+                plate_crop_bgr=plate_crop,
+                plate_text=readout.text if readout is not None else None,
+                plate_confidence=readout.confidence if readout is not None else None,
             )
 
     def _license_plate_worker_loop(self) -> None:
@@ -1109,6 +1122,33 @@ class CameraContext:
         sharpness_score = min(max(sharpness, 0.0) / 350.0, 6.0)
         return float(area_score + sharpness_score)
 
+    def _plate_aware_vehicle_evidence_quality_score(
+        self,
+        vehicle_crop_bgr,
+        *,
+        plate_crop_bgr=None,
+        plate_text: Optional[str] = None,
+        plate_confidence: Optional[float] = None,
+    ) -> float:
+        base_quality = self._vehicle_evidence_quality_score(vehicle_crop_bgr)
+        if not str(plate_text or "").strip():
+            return base_quality
+        try:
+            normalized_confidence = float(plate_confidence)
+        except (TypeError, ValueError):
+            return base_quality
+        if normalized_confidence < float(self._license_plate_violation_update_min_confidence):
+            return base_quality
+        plate_quality = self._plate_crop_quality_score(plate_crop_bgr)
+        if plate_quality <= 0.0:
+            return base_quality
+
+        # Ảnh evidence có xe + biển số đọc được là bằng chứng tốt hơn ảnh chỉ rõ xe.
+        # Bonus bị giới hạn để không cho crop xe quá kém thay thế ảnh evidence tốt.
+        confidence_bonus = min(max(normalized_confidence, 0.0), 1.0) * 1.6
+        crop_bonus = min(float(plate_quality) * 0.45, 2.4)
+        return float(base_quality + 1.0 + confidence_bonus + crop_bonus)
+
     def _save_late_violation_evidence_from_vehicle_crop(
         self,
         *,
@@ -1170,6 +1210,9 @@ class CameraContext:
         vehicle_id: int,
         ts_dt: datetime,
         vehicle_crop_bgr,
+        plate_crop_bgr=None,
+        plate_text: Optional[str] = None,
+        plate_confidence: Optional[float] = None,
     ) -> None:
         if not self._license_plate_violation_update_enabled:
             return
@@ -1184,7 +1227,12 @@ class CameraContext:
         if vehicle_crop_bgr is None or getattr(vehicle_crop_bgr, "size", 0) == 0:
             return
 
-        evidence_candidate_quality = self._vehicle_evidence_quality_score(vehicle_crop_bgr)
+        evidence_candidate_quality = self._plate_aware_vehicle_evidence_quality_score(
+            vehicle_crop_bgr,
+            plate_crop_bgr=plate_crop_bgr,
+            plate_text=plate_text,
+            plate_confidence=plate_confidence,
+        )
         evidence_quality_delta_min = 0.45
         should_upgrade_evidence = bool(
             pending_state.best_violation_image_path is None
