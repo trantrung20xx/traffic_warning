@@ -1266,7 +1266,7 @@ class CameraContext:
         if snapshot is None:
             return
         snapshot_status = str(snapshot.status or "").strip().lower()
-        if snapshot_status not in {"confirmed", "uncertain"}:
+        if snapshot_status not in {"confirmed", "uncertain", "pending"}:
             return
         if not snapshot.license_plate:
             return
@@ -1274,7 +1274,10 @@ class CameraContext:
             return
         if float(snapshot.confidence) < float(self._license_plate_violation_update_min_confidence):
             return
-        if int(snapshot.consensus_hits) < int(self._license_plate_violation_update_consensus_min_hits):
+        storage_status = "confirmed" if snapshot_status == "confirmed" else "uncertain"
+        if storage_status == "confirmed" and int(snapshot.consensus_hits) < int(
+            self._license_plate_violation_update_consensus_min_hits
+        ):
             return
         if not self._is_late_plate_update_track_clean(vehicle_id=int(vehicle_id), ts_dt=ts_dt):
             return
@@ -1326,7 +1329,7 @@ class CameraContext:
                 track_session_id=self.track_session_id,
                 vehicle_id=int(vehicle_id),
                 license_plate=str(snapshot.license_plate),
-                license_plate_status=snapshot_status,
+                license_plate_status=storage_status,
                 license_plate_confidence=float(snapshot.confidence),
                 license_plate_image_path=license_plate_image_path,
                 min_confidence=float(self._license_plate_violation_update_min_confidence),
@@ -1344,7 +1347,7 @@ class CameraContext:
             with self._late_plate_state_lock:
                 state = self._pending_violation_plate_states.get(int(vehicle_id))
                 if state is not None:
-                    if snapshot_status == "confirmed":
+                    if storage_status == "confirmed":
                         state.has_committed_plate = True
                     if should_update_plate_image and license_plate_image_path:
                         state.best_plate_image_quality = max(

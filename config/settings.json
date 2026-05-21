@@ -213,7 +213,7 @@
 		"violation_update_enabled": true,
 		"violation_update_min_confidence": 0.75,
 		"violation_update_consensus_min_hits": 2,
-		"violation_update_window_ms": 2000,
+		"violation_update_window_ms": 5000,
 		"require_clean_track_for_violation_update": true,
 		"prioritize_pending_violation_ocr": true,
 		"violation_update_track_max_gap_ms": 900,

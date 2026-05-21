@@ -129,6 +129,15 @@ def update_pending_violation_plate(
 
         if current_status == "confirmed" and current_plate and current_plate != normalized_plate:
             continue
+        if (
+            current_status == "uncertain"
+            and normalized_status == "uncertain"
+            and current_plate
+            and current_plate != normalized_plate
+        ):
+            current_confidence = float(row.license_plate_confidence or 0.0)
+            if normalized_confidence <= current_confidence:
+                continue
 
         changed = False
         current_image_path = str(row.license_plate_image_path or "").strip()

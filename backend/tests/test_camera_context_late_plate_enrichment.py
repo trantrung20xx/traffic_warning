@@ -384,6 +384,60 @@ def test_late_plate_enrichment_updates_uncertain_snapshot(monkeypatch) -> None:
     assert ctx._pending_violation_plate_states[vehicle_id].has_committed_plate is False
 
 
+def test_late_plate_enrichment_persists_single_read_as_uncertain(monkeypatch) -> None:
+    ctx = _build_context_for_late_plate_tests()
+    ts = datetime(2026, 5, 21, 12, 0, 0, tzinfo=timezone.utc)
+    vehicle_id = 17
+
+    ctx._pending_violation_plate_states[vehicle_id] = _PendingViolationPlateState(
+        first_pending_ts=ts - timedelta(milliseconds=500),
+        last_pending_ts=ts - timedelta(milliseconds=200),
+        pending_count=1,
+        last_lane_id=1,
+    )
+    ctx._pending_violation_vehicle_ids.add(vehicle_id)
+    ctx._track_continuity_states[vehicle_id] = _TrackContinuityState(
+        first_seen_ts=ts - timedelta(seconds=1),
+        last_seen_ts=ts - timedelta(milliseconds=100),
+        last_bbox_xyxy=[10.0, 10.0, 30.0, 30.0],
+        observation_count=6,
+        dirty=False,
+    )
+    ctx._license_plate_snapshot_for = lambda **_: LicensePlateSnapshot(
+        license_plate="51A12345",
+        status="pending",
+        confidence=0.93,
+        consensus_hits=1,
+        attempt_count=1,
+        confirmed_ts=None,
+    )
+    ctx._save_late_plate_evidence_from_crop = lambda **_: "config/evidence_images/cam_test/lp_single.jpg"
+
+    captured = {"calls": 0, "status": None}
+
+    def _fake_update(*args, **kwargs):
+        captured["calls"] += 1
+        captured["status"] = kwargs.get("license_plate_status")
+        ids = kwargs.get("updated_violation_ids_out")
+        if isinstance(ids, list):
+            ids.append(617)
+        return 1
+
+    monkeypatch.setattr(camera_context_module, "update_pending_violation_plate", _fake_update)
+    monkeypatch.setattr(camera_context_module, "query_violation_payloads_by_ids", lambda *args, **kwargs: [])
+
+    ctx._attempt_late_plate_enrichment(
+        vehicle_id=vehicle_id,
+        ts_dt=ts,
+        plate_crop_bgr=np.ones((20, 80, 3), dtype=np.uint8),
+    )
+
+    assert captured["calls"] == 1
+    assert captured["status"] == "uncertain"
+    assert vehicle_id in ctx._pending_violation_vehicle_ids
+    assert ctx._pending_violation_plate_states[vehicle_id].has_committed_plate is False
+
+
 def test_late_plate_enrichment_keeps_pending_when_repository_updates_zero_rows(monkeypatch) -> None:
     ctx = _build_context_for_late_plate_tests()
     ts = datetime(2026, 5, 21, 12, 0, 0, tzinfo=timezone.utc)
