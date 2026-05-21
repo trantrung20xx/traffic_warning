@@ -2,7 +2,7 @@
 
 Traffic Warning là hệ thống giám sát giao thông bằng camera/video. Hệ thống đọc hình ảnh từ camera, nhận diện xe, theo dõi xe qua từng khung hình, xác định xe đang ở làn nào, kiểm tra các lỗi giao thông và hiển thị kết quả trên trình duyệt.
 
-Ngày cập nhật tài liệu: 2026-05-09.
+Ngày cập nhật tài liệu: 2026-05-21.
 
 ## Mục Lục
 
@@ -23,6 +23,7 @@ Ngày cập nhật tài liệu: 2026-05-09.
 |---|---|
 | `backend` | Đọc video, nhận diện xe, theo dõi xe, kiểm tra vi phạm, đọc biển số, lưu dữ liệu và gửi kết quả realtime. |
 | `frontend` | Hiển thị camera, vẽ làn/khung xe/quỹ đạo, xem vi phạm, thống kê và cấu hình camera/làn bằng giao diện web. |
+| `edge_camera_node` | Chạy trên Raspberry Pi 5 để phát RTSP ổn định, theo dõi sức khỏe stream, điều khiển nút/LED/TFT và Health API. |
 | `config` | Lưu cấu hình camera, cấu hình làn, tham số hệ thống, ảnh nền, ảnh bằng chứng và database SQLite. |
 
 Hệ thống hiện hỗ trợ:
@@ -31,7 +32,8 @@ Hệ thống hiện hỗ trợ:
 - Theo dõi xe qua nhiều khung hình bằng ByteTrack.
 - Gán xe vào làn bằng các vùng làn do người dùng vẽ.
 - Phát hiện sai làn, đi ngược chiều, xe sai loại làn và các hướng đi bị cấm.
-- Đọc biển số bằng detector biển số kết hợp PaddleOCR hoặc EasyOCR.
+- Đọc biển số bằng detector biển số kết hợp PaddleOCR hoặc EasyOCR, chạy worker riêng để không chặn luồng phát hiện.
+- Tạo vi phạm ngay khi đủ điều kiện; biển số và ảnh evidence tốt hơn có thể được cập nhật sau theo đúng xe/track.
 - Lưu lịch sử vi phạm, ảnh bằng chứng, ảnh crop biển số và xuất CSV/XLSX.
 - Cấu hình camera, làn, vùng rẽ, vạch kiểm tra và ảnh nền trên giao diện.
 
@@ -58,7 +60,10 @@ Xác định xe thuộc làn nào theo vùng làn đã vẽ
 Kiểm tra luật: sai làn, ngược chiều, sai loại xe, rẽ sai
         |
         v
-Lưu vi phạm + ảnh bằng chứng + biển số nếu đọc được
+Lưu vi phạm + ảnh bằng chứng ban đầu
+        |
+        v
+OCR/enrich biển số và ảnh evidence tốt hơn nếu có bằng chứng an toàn
         |
         v
 Frontend hiển thị realtime và thống kê
@@ -72,7 +77,8 @@ Frontend hiển thị realtime và thống kê
 3. Hệ thống nhìn phần đáy khung xe để xem xe đang nằm trong làn nào.
 4. Nếu xe chuyển làn, hệ thống chờ đủ lâu trước khi kết luận để tránh báo nhầm do khung hình rung.
 5. Nếu xe đi qua vùng/vạch đã cấu hình, hệ thống kiểm tra hướng đi và hướng rẽ.
-6. Nếu đủ điều kiện vi phạm, backend tạo sự kiện, lưu ảnh và gửi lên giao diện.
+6. Nếu đủ điều kiện vi phạm, backend tạo sự kiện, lưu ảnh và gửi lên giao diện ngay.
+7. OCR biển số tiếp tục chạy nền; khi có text + ảnh crop hợp lệ, backend cập nhật DB và UI realtime theo ID vi phạm.
 ```
 
 ### Dữ liệu đi qua hệ thống
@@ -82,7 +88,7 @@ Video input
   -> Track xe realtime
   -> Lane + hướng + biển số
   -> Violation event
-  -> SQLite + evidence images
+  -> SQLite + evidence images + late plate/evidence updates
   -> Dashboard + WebSocket + export file
 ```
 
@@ -103,15 +109,15 @@ Video input
 
 ## Edge Camera Node
 
-Edge camera node trên Raspberry Pi 5 phát RTSP cho backend và cung cấp Health API để frontend popup đọc trạng thái/điều khiển stream.
+Edge camera node trên Raspberry Pi 5 phát RTSP cho backend và cung cấp Health API để backend discovery/proxy trạng thái, identity và lệnh điều khiển stream.
 
 | Thành phần | Cổng/chuẩn hiện tại |
 |---|---|
 | RTSP stream | Sinh ổn định trong dải `8554-8654` nếu không cấu hình `fixed_rtsp_port`. |
-| Health API phần cứng | Cố định `8088`; frontend suy host từ `rtsp_url` rồi gọi `http://<rtsp-host>:8088`. |
+| Health API phần cứng | Cố định `8088`; backend suy host từ `rtsp_url`/discovery rồi proxy qua `/api/edge-cameras...`. |
 | mDNS hostname | Dạng `cam-<mac>.local`, ưu tiên dùng trong RTSP URL chính. |
 
-Health API edge dùng các endpoint `GET /health`, `GET /identity`, `GET /stream/start`, `GET /stream/stop` và `GET /restart-service`. Port Health API được cố định để tránh frontend gọi sai cổng khi quản lý nhiều edge camera.
+Health API edge hỗ trợ `GET /health`, `GET /api/health`, `GET /api/identity` và các lệnh `POST /api/stream/start`, `POST /api/stream/stop`, `POST /api/stream/restart`, `POST /api/image-tuning/cycle`. Frontend hiện gọi qua backend `/api/edge-cameras...`; backend proxy sang edge node để giữ cùng origin API và dễ quản lý nhiều camera.
 
 ## Chạy Hệ Thống
 
@@ -173,7 +179,7 @@ Hệ thống dùng YOLOv8. File model hiện đang được cấu hình trong `c
 ```json
 {
   "detection": {
-    "weights_path": "backend/yolov8m.pt"
+    "weights_path": "backend/yolov8s.pt"
   }
 }
 ```
@@ -188,10 +194,10 @@ Các model YOLOv8 phổ biến:
 | `yolov8l.pt` | [Tải](https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8l.pt) | Ưu tiên độ chính xác. |
 | `yolov8x.pt` | [Tải](https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8x.pt) | Nặng nhất, nên dùng GPU mạnh. |
 
-Ví dụ tải `yolov8m.pt`:
+Ví dụ tải `yolov8s.pt`:
 
 ```powershell
-Invoke-WebRequest -Uri "https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8m.pt" -OutFile ".\backend\yolov8m.pt"
+Invoke-WebRequest -Uri "https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8s.pt" -OutFile ".\backend\yolov8s.pt"
 ```
 
 ### Model biển số
@@ -247,6 +253,12 @@ Cấu hình chính:
   }
 }
 ```
+
+Lưu ý bằng chứng biển số hiện tại:
+
+- Vi phạm vẫn được tạo ngay cả khi chưa có biển số.
+- Biển số chỉ hiển thị như bằng chứng hợp lệ khi có text OCR và ảnh crop biển số; nếu OCR chưa đủ chắc, trạng thái vẫn là `uncertain` thay vì đánh tráo thành `confirmed`.
+- Nếu OCR cập nhật sau, backend phát WebSocket update để danh sách và modal chi tiết trên UI đổi ngay, không cần reload.
 
 Đổi OCR sang EasyOCR:
 
@@ -336,7 +348,7 @@ Các nhóm hay chỉnh trong `settings.json`:
 | `direction_detection` | Muốn chỉnh phát hiện ngược chiều. |
 | `turn_detection` | Muốn chỉnh nhận diện đi thẳng/rẽ/quay đầu. |
 | `evidence_fusion` | Muốn chỉnh cách gộp các dấu hiệu trước khi kết luận rẽ sai. |
-| `license_plate` | Bật/tắt biển số, đổi OCR, chỉnh tần suất đọc biển số. |
+| `license_plate` | Bật/tắt biển số, đổi OCR, chỉnh tần suất đọc, late plate enrichment và ngưỡng an toàn cập nhật vi phạm. |
 | `performance` | Chỉnh FPS preview hoặc cách tính FPS xử lý. |
 | `websocket` | Chỉnh tần suất gửi dữ liệu realtime lên frontend. |
 | `analytics` | Chỉnh cách chia mốc thời gian trên biểu đồ thống kê. |
@@ -357,13 +369,14 @@ Chi tiết từng trường nằm trong [Backend README](backend/README.md) và 
 
 ## API Và Màn Hình
 
-Frontend có 3 màn hình chính:
+Frontend có 4 màn hình chính:
 
 | Màn hình | Dùng để |
 |---|---|
-| `Giám sát` | Xem camera realtime, xe đang theo dõi, biển số, hướng đi và vi phạm mới. |
-| `Thống kê` | Xem biểu đồ, lịch sử vi phạm, lọc theo thời gian/camera/biển số, export CSV/XLSX. |
-| `Quản lý` | Thêm camera, upload ảnh nền, vẽ làn, vẽ vùng rẽ, đặt luật cho từng làn. |
+| `Giám sát` | Xem camera realtime, xe đang theo dõi, biển số, hướng đi, vi phạm mới và cập nhật evidence/plate realtime. |
+| `Thống kê` | Xem biểu đồ, lịch sử vi phạm, lọc theo thời gian/camera/biển số, mở chi tiết và export CSV/XLSX. |
+| `Quản lý camera` | Thêm camera, upload ảnh nền, vẽ làn, vẽ vùng rẽ, đặt luật cho từng làn. |
+| `Edge Cameras` | Xem edge node được phát hiện, health, identity, RTSP URL, bật/tắt/restart stream và đổi image tuning. |
 
 API chính:
 
@@ -371,9 +384,10 @@ API chính:
 |---|---|
 | Camera | `/api/cameras`, `/api/cameras/{camera_id}` |
 | Preview | `/api/cameras/{camera_id}/preview` |
-| Làn | `/api/cameras/{camera_id}/lanes` |
-| Vi phạm | `/api/violations/history`, `/api/violations/export`, `/api/violations/evidence/...` |
+| Làn | Đi kèm trong `/api/cameras/{camera_id}` dưới `lane_config`. |
+| Vi phạm | `/api/violations/history`, `/api/violations/detail/{id}`, `/api/violations/export`, `/api/violations/evidence/...` |
 | Thống kê | `/api/analytics/dashboard`, `/api/stats` |
+| Edge node | `/api/edge-cameras`, `/api/edge-cameras/{camera_id}/stream/...`, `/api/edge-cameras/{camera_id}/image-tuning/cycle` |
 | Realtime | `WS /ws/tracks`, `WS /ws/violations` |
 
 ## Kiểm Tra
@@ -396,6 +410,13 @@ Frontend:
 ```powershell
 cd frontend
 npm run build
+```
+
+Edge node:
+
+```bash
+cd edge_camera_node
+pytest -q
 ```
 
 ## Tài Liệu Chi Tiết

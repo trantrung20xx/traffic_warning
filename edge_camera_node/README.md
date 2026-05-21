@@ -2,7 +2,7 @@
 
 `edge_camera_node` là chương trình chạy trên Raspberry Pi 5 để lấy hình từ camera, mã hóa H.264 và phát RTSP ổn định cho server Traffic Warning đọc bằng OpenCV.
 
-Node này không chạy YOLO, OCR, tracking, logic vi phạm, database, WebSocket của server. Backend chỉ cần đọc RTSP URL như một camera thông thường; frontend popup quản lý edge node gọi trực tiếp Health API của Raspberry Pi qua host suy từ RTSP URL.
+Node này không chạy YOLO, OCR, tracking, logic vi phạm, database, WebSocket của server. Backend chỉ cần đọc RTSP URL như một camera thông thường; frontend quản lý edge node thông qua các API `/api/edge-cameras...` của backend, backend sẽ discovery/proxy sang Health API của Raspberry Pi.
 
 ## 1. Luồng Hoạt Động
 
@@ -72,8 +72,8 @@ Cấu hình hiện tại:
 ```json
 {
   "camera": {
-    "width": 2560,
-    "height": 1440,
+    "width": 1920,
+    "height": 1080,
     "fps": 30
   },
   "image_tuning": {
@@ -101,13 +101,18 @@ Cấu hình hiện tại:
     "spi_device": 0,
     "dc_pin": 25,
     "reset_pin": 24,
-    "backlight_pin": null
+    "backlight_pin": null,
+    "width": 240,
+    "height": 320,
+    "madctl": "0x48",
+    "spi_max_speed_hz": 16000000,
+    "font_size": 14
   },
   "stream": {
     "bitrate": 6000000,
     "udp_sink": "udp://127.0.0.1:1234?pkt_size=1316",
     "pipeline_mode": "auto",
-    "source": "auto",
+    "source": "usb_v4l2",
     "usb_device": "auto",
     "usb_input_format": "auto"
   },
@@ -180,6 +185,21 @@ LEDs:
 - WARNING: `GPIO27`
 - ERROR: `GPIO22`
 - STREAMING: `GPIO23`
+
+Chức năng nút:
+
+- MODE: đổi trang TFT.
+- RESTART_STREAM: yêu cầu supervisor restart pipeline RTSP.
+- SAFE_SHUTDOWN: nhấn giữ 3 giây để shutdown Raspberry Pi an toàn.
+- RESET_WATCHDOG: xóa watchdog latched và thử chạy lại stream.
+
+Quy tắc đèn:
+
+- ONLINE: nhấp nháy khi boot, sáng khi service đang chạy.
+- STREAMING: sáng khi RTSP pipeline đang chạy.
+- WARNING: nhấp nháy chậm khi FPS thấp, mDNS lỗi hoặc stream dừng tạm thời.
+- ERROR: nhấp nháy nhanh khi lỗi nghiêm trọng hoặc watchdog đã latch.
+- SHUTTING_DOWN: tắt toàn bộ đèn.
 
 Quy tắc an toàn:
 
@@ -325,27 +345,30 @@ Health API chạy cố định ở:
 http://<mdns-hostname>:8088
 ```
 
-Frontend popup dùng cùng chuẩn này: lấy host từ `rtsp_url`, bỏ RTSP port, rồi gọi `http://<rtsp-host>:8088`.
+Backend dùng cùng chuẩn này khi discovery/proxy edge camera. Frontend không cần gọi trực tiếp Raspberry Pi; frontend gọi backend `/api/edge-cameras...`.
 
 Endpoint:
 
 - `GET /health`
-- `GET /identity`
-- `GET /stream/start`
-- `GET /stream/stop`
-- `GET /restart-service`
+- `GET /api/health`
+- `GET /api/identity`
+- `POST /api/stream/start`
+- `POST /api/stream/stop`
+- `POST /api/stream/restart`
+- `POST /api/image-tuning/cycle`
 
 Ví dụ:
 
 ```bash
 curl http://cam-dca632112233.local:8088/health
-curl http://cam-dca632112233.local:8088/identity
-curl http://cam-dca632112233.local:8088/stream/stop
-curl http://cam-dca632112233.local:8088/stream/start
-curl http://cam-dca632112233.local:8088/restart-service
+curl http://cam-dca632112233.local:8088/api/identity
+curl -X POST http://cam-dca632112233.local:8088/api/stream/stop
+curl -X POST http://cam-dca632112233.local:8088/api/stream/start
+curl -X POST http://cam-dca632112233.local:8088/api/stream/restart
+curl -X POST http://cam-dca632112233.local:8088/api/image-tuning/cycle
 ```
 
-`/restart-service` chỉ tự chạy lại khi chương trình đang chạy dưới systemd. Service hiện dùng `Restart=always`, nên process thoát sạch rồi systemd khởi động lại sau `RestartSec=5`.
+`/api/stream/restart` chỉ restart RTSP pipeline do supervisor quản lý, không restart toàn bộ systemd service. Service vẫn dùng systemd để tự chạy lại nếu process edge node thoát.
 
 Nếu muốn khóa endpoint điều khiển:
 
@@ -370,10 +393,10 @@ Nếu muốn dùng token:
 }
 ```
 
-Khi có token, gọi:
+Khi có token, đặt token trên query string của lệnh POST:
 
 ```bash
-curl "http://cam-dca632112233.local:8088/restart-service?token=doi_chuoi_bi_mat_o_day"
+curl -X POST "http://cam-dca632112233.local:8088/api/stream/restart?token=doi_chuoi_bi_mat_o_day"
 ```
 
 ## 9. Tích Hợp Với Server Traffic Warning
@@ -384,8 +407,8 @@ Không cần sửa backend server. Trong cấu hình camera của server, nhập
 {
   "camera_id": "cam_dca632112233",
   "rtsp_url": "rtsp://cam-dca632112233.local:8554/cam_dca632112233",
-  "frame_width": 2560,
-  "frame_height": 1440
+  "frame_width": 1920,
+  "frame_height": 1080
 }
 ```
 
@@ -395,14 +418,14 @@ Nếu môi trường không resolve được `.local`, dùng IP fallback:
 {
   "camera_id": "cam_dca632112233",
   "rtsp_url": "rtsp://192.168.1.50:8554/cam_dca632112233",
-  "frame_width": 2560,
-  "frame_height": 1440
+  "frame_width": 1920,
+  "frame_height": 1080
 }
 ```
 
 `camera_id` trong server là định danh phần mềm dùng cho lane config, evidence và thống kê; nó có thể khác `camera_id` do edge node tự sinh. Liên kết đến phần cứng được xác định qua `rtsp_url`.
 
-Frontend quản lý camera có popup edge node để xem health, identity, bật/tắt stream và restart service từ xa. Popup gọi trực tiếp Health API trên Raspberry Pi, không đi qua backend server.
+Frontend có màn hình `Edge cameras` để xem health, identity, bật/tắt stream, restart stream và đổi image tuning từ xa. Frontend gọi backend, backend proxy sang Health API trên Raspberry Pi.
 
 ## 10. Lỗi Thường Gặp
 
@@ -457,6 +480,12 @@ Service restart liên tục:
 journalctl -u traffic-camera-node.service -f
 systemctl show traffic-camera-node.service -p NRestarts
 ```
+
+Watchdog latched:
+
+- Khi pipeline chết/no-frame quá nhiều lần trong cửa sổ restart, watchdog sẽ latch để tránh restart vô hạn.
+- Nhấn nút RESET_WATCHDOG hoặc gọi lệnh restart sau khi clear thủ công nếu đã xử lý nguyên nhân.
+- Kiểm tra `watchdog_latched`, `restart_count`, `last_error` trong `/api/health`.
 
 ## 11. Ghi Nhớ Khi Triển Khai
 

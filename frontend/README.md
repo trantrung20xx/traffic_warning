@@ -18,18 +18,20 @@ Frontend là giao diện web để vận hành Traffic Warning. Frontend không 
 
 | Việc | Giải thích |
 |---|---|
-| Giám sát realtime | Xem camera, xe đang được theo dõi, làn xe, quỹ đạo, biển số và vi phạm mới. |
-| Thống kê | Xem tổng số vi phạm, biểu đồ, lịch sử và xuất CSV/XLSX. |
+| Giám sát realtime | Xem camera, xe đang được theo dõi, làn xe, quỹ đạo, biển số, vi phạm mới và update plate/evidence realtime. |
+| Thống kê | Xem tổng số vi phạm, biểu đồ, lịch sử, chi tiết vi phạm và xuất CSV/XLSX. |
 | Quản lý camera | Tạo/sửa/xóa camera, upload ảnh nền. |
 | Cấu hình làn | Vẽ vùng làn, vùng rẽ, vạch kiểm tra, chiều đi đúng. |
+| Quản lý edge node | Xem health/identity edge camera, bật/tắt/restart stream và đổi image tuning qua backend proxy. |
 | Kiểm tra cấu hình | Hiển thị cảnh báo nếu vùng làn/vùng rẽ dễ gây nhầm. |
 
 Nguồn dữ liệu:
 
 ```text
 REST API      -> camera, cấu hình, lịch sử, thống kê, export
-WebSocket     -> xe realtime và vi phạm mới
+WebSocket     -> xe realtime, vi phạm mới và update plate/evidence
 MJPEG preview -> ảnh camera trực tiếp
+Edge API      -> trạng thái phần cứng và điều khiển stream edge node
 ```
 
 ## Chạy Frontend
@@ -100,6 +102,7 @@ Hiển thị:
 - Trạng thái hướng đi nếu làn có cấu hình hướng đúng chiều.
 - Quỹ đạo gần đây của xe.
 - Vi phạm mới.
+- Cập nhật realtime khi backend enrich biển số hoặc nâng cấp ảnh evidence.
 - FPS xử lý do backend gửi.
 
 Các trạng thái biển số:
@@ -110,6 +113,8 @@ Các trạng thái biển số:
 | `confirmed` | Đã đủ số lần xác nhận. |
 | `uncertain` | Có kết quả nhưng chưa chắc. |
 | `unreadable` | Đã thử nhiều lần nhưng không đọc được. |
+
+Lưu ý: UI chỉ hiển thị text biển số như bằng chứng hợp lệ khi backend gửi kèm ảnh crop biển số. Nếu có text nhưng thiếu ảnh crop, frontend sẽ giữ trạng thái chờ/không đọc được để tránh làm người vận hành hiểu nhầm.
 
 ### 2. Thống kê
 
@@ -124,6 +129,7 @@ Chức năng:
 - Xem thống kê theo camera, loại xe, loại vi phạm và khu vực.
 - Xem bảng lịch sử.
 - Mở chi tiết một vi phạm.
+- Nhận update realtime cho item lịch sử khi backend enrich plate/evidence.
 - Tải CSV hoặc XLSX.
 
 ### 3. Quản lý
@@ -142,6 +148,18 @@ Chức năng:
 - Cấu hình xe được phép đổi sang làn nào.
 - Bật/tắt hoặc cho phép/cấm từng hướng đi.
 - Undo/redo thao tác vẽ.
+
+### 4. Edge cameras
+
+Màn hình này dùng để theo dõi các Raspberry Pi edge camera mà backend discovery được.
+
+Chức năng:
+
+- Xem camera ID, node ID, mDNS hostname, IP, RTSP URL và trạng thái stream.
+- Xem nhiệt độ, FPS estimate, restart count, watchdog latched và lỗi gần nhất.
+- Rescan edge camera.
+- Bật, tắt hoặc restart stream.
+- Đổi profile image tuning của edge node.
 
 ## Cách Cấu Hình Camera Và Làn Trên UI
 
@@ -305,16 +323,24 @@ Validation giúp giảm lỗi cấu hình, nhưng không thay thế việc kiể
 | `GET /api/camera/{camera_id}/background-image` | Hiển thị ảnh nền. |
 | `DELETE /api/camera/{camera_id}/background-image` | Xóa ảnh nền. |
 | `GET /api/violations/history` | Bảng lịch sử vi phạm. |
+| `GET /api/violations/detail/{violation_id}` | Chi tiết một vi phạm đang mở trong modal. |
 | `GET /api/violations/export` | Tải CSV/XLSX. |
 | `GET /api/violations/evidence/{path}` | Xem ảnh bằng chứng. |
 | `GET /api/analytics/dashboard` | Biểu đồ và thống kê. |
+| `GET /api/edge-cameras` | Danh sách edge camera đã discovery. |
+| `POST /api/edge-cameras/rescan` | Quét lại edge camera. |
+| `GET /api/edge-cameras/{camera_id}` | Chi tiết health/identity edge camera. |
+| `POST /api/edge-cameras/{camera_id}/stream/start` | Bật stream edge camera. |
+| `POST /api/edge-cameras/{camera_id}/stream/stop` | Tắt stream edge camera. |
+| `POST /api/edge-cameras/{camera_id}/stream/restart` | Restart stream edge camera. |
+| `POST /api/edge-cameras/{camera_id}/image-tuning/cycle` | Đổi image tuning profile. |
 
 ### WebSocket
 
 | WebSocket | Dữ liệu |
 |---|---|
 | `/ws/tracks?camera_id=...` | Xe realtime, khung xe, làn, biển số, hướng, FPS. |
-| `/ws/violations?camera_id=...` | Vi phạm mới realtime. |
+| `/ws/violations?camera_id=...` | Vi phạm mới realtime và update plate/evidence cho vi phạm đã có. |
 
 ## Tổ Chức Source
 
@@ -322,14 +348,17 @@ Validation giúp giảm lỗi cấu hình, nhưng không thay thế việc kiể
 |---|---|
 | `src/api.js` | Gọi REST API, mở WebSocket, tạo URL ảnh preview/evidence. |
 | `src/utils.js` | Nhãn tiếng Việt, xử lý thời gian, helper geometry, helper biểu đồ. |
+| `src/violationDetails.js` | Chuẩn hóa dữ liệu chi tiết vi phạm và ẩn plate text nếu thiếu ảnh crop biển số. |
 | `src/App.jsx` | Khung chính của ứng dụng và chuyển tab. |
 | `src/views/MonitoringView.jsx` | Màn hình giám sát realtime. |
 | `src/views/AnalyticsView.jsx` | Màn hình thống kê và lịch sử. |
 | `src/views/ManagementView.jsx` | Màn hình quản lý camera/lane/maneuver. |
+| `src/views/EdgeCamerasView.jsx` | Màn hình edge camera discovery, health và điều khiển stream. |
 | `src/components/CameraCanvas.jsx` | Canvas vẽ camera, làn, xe, quỹ đạo và editor hình học. |
+| `src/components/ViolationDetailModal.jsx` | Modal chi tiết vi phạm, ảnh evidence và ảnh crop biển số. |
 | `src/components/canvas/PolygonLayer.js` | Hàm vẽ polygon, line và điểm kéo thả. |
 | `src/components/canvas/BackgroundImageLayer.js` | Vẽ ảnh nền khi cấu hình. |
-| `src/components/icons/AppIcon.jsx` | Icon dùng trong UI. |
+| `src/components/AppIcon.jsx` | Icon dùng trong UI. |
 
 ## Build Production
 
