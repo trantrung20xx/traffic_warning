@@ -21,7 +21,11 @@ from app.db.repository import (
     update_violation_evidence_image_if_better,
 )
 from app.logic.lane_logic import LaneLogic, TemporalLaneAssigner
-from app.logic.license_plate_logic import LicensePlateSnapshot, LicensePlateTemporalResolver
+from app.logic.license_plate_logic import (
+    LicensePlateSnapshot,
+    LicensePlateTemporalResolver,
+    normalize_license_plate_text,
+)
 from app.logic.track_id_logic import StableTrackIdAssigner
 from app.logic.vehicle_type_logic import TemporalVehicleTypeAssigner
 from app.logic.direction_logic import DirectionDetectionSettings
@@ -234,22 +238,22 @@ class CameraContext:
         license_plate_read_interval_ms: int = 500,
         license_plate_min_ocr_confidence: float = 0.65,
         license_plate_consensus_min_hits: int = 2,
-        license_plate_candidate_window_ms: int = 4000,
+        license_plate_candidate_window_ms: int = 5000,
         license_plate_max_attempts_before_unreadable: int = 6,
         license_plate_crop_expand_x_ratio: float = 0.10,
         license_plate_crop_expand_y_ratio: float = 0.08,
         license_plate_image_jpeg_quality: int = 92,
         license_plate_violation_update_enabled: bool = True,
-        license_plate_violation_update_min_confidence: float = 0.8,
+        license_plate_violation_update_min_confidence: float = 0.55,
         license_plate_violation_update_consensus_min_hits: int = 2,
-        license_plate_violation_update_window_ms: int = 5000,
+        license_plate_violation_update_window_ms: int = 10000,
         license_plate_violation_require_clean_track: bool = True,
         license_plate_prioritize_pending_violation_ocr: bool = True,
         license_plate_violation_track_max_gap_ms: int = 900,
         license_plate_violation_track_min_observations: int = 3,
         license_plate_violation_track_max_center_jump: float = 1.8,
         license_plate_violation_track_overlap_risk_iou: float = 0.45,
-        license_plate_violation_track_overlap_risk_distance: float = 0.55,
+        license_plate_violation_track_overlap_risk_distance: float = 0.35,
     ):
         # Root dùng để lưu evidence/config theo camera.
         self.repo_root = Path(repo_root)
@@ -851,6 +855,8 @@ class CameraContext:
                 vehicle_id=job.vehicle_id,
                 ts_dt=job.ts_dt,
                 plate_crop_bgr=plate_crop,
+                plate_text=readout.text if readout is not None else None,
+                plate_confidence=readout.confidence if readout is not None else None,
             )
             self._attempt_evidence_upgrade(
                 vehicle_id=job.vehicle_id,
@@ -1010,6 +1016,14 @@ class CameraContext:
                 )
                 gap_ms = (ts_dt - reference_ts).total_seconds() * 1000.0
                 if gap_ms <= float(self._license_plate_violation_track_max_gap_ms):
+                    continue
+                pending_age_ms = (ts_dt - pending_state.last_pending_ts).total_seconds() * 1000.0
+                if (
+                    not pending_state.has_committed_plate
+                    and pending_age_ms <= float(self._license_plate_violation_update_window_ms)
+                ):
+                    # OCR worker có thể vẫn đang xử lý crop đã chụp khi xe còn track.
+                    # Giữ state tới hết update window để xe cuối hàng không bị mất enrichment.
                     continue
                 # Track đã mất đủ lâu: kết thúc phiên enrich cho vehicle này.
                 self._clear_pending_violation_for_late_plate(
@@ -1298,6 +1312,8 @@ class CameraContext:
         vehicle_id: int,
         ts_dt: datetime,
         plate_crop_bgr,
+        plate_text: Optional[str] = None,
+        plate_confidence: Optional[float] = None,
     ) -> None:
         if not self._license_plate_violation_update_enabled:
             return
@@ -1310,22 +1326,51 @@ class CameraContext:
         if pending_state is None or not is_pending:
             return
 
+        candidate_plate: Optional[str] = None
+        candidate_confidence: Optional[float] = None
+        storage_status = "uncertain"
+
         snapshot = self._license_plate_snapshot_for(vehicle_id=int(vehicle_id))
-        if snapshot is None:
-            return
-        snapshot_status = str(snapshot.status or "").strip().lower()
-        if snapshot_status not in {"confirmed", "uncertain", "pending"}:
-            return
-        if not snapshot.license_plate:
-            return
-        if snapshot.confidence is None:
-            return
-        if float(snapshot.confidence) < float(self._license_plate_violation_update_min_confidence):
-            return
-        storage_status = "confirmed" if snapshot_status == "confirmed" else "uncertain"
-        if storage_status == "confirmed" and int(snapshot.consensus_hits) < int(
-            self._license_plate_violation_update_consensus_min_hits
+        if snapshot is not None:
+            snapshot_status = str(snapshot.status or "").strip().lower()
+            if (
+                snapshot_status in {"confirmed", "uncertain", "pending"}
+                and snapshot.license_plate
+                and snapshot.confidence is not None
+                and float(snapshot.confidence) >= float(self._license_plate_violation_update_min_confidence)
+            ):
+                snapshot_can_confirm = bool(
+                    snapshot_status == "confirmed"
+                    and int(snapshot.consensus_hits)
+                    >= int(self._license_plate_violation_update_consensus_min_hits)
+                )
+                candidate_plate = str(snapshot.license_plate)
+                candidate_confidence = float(snapshot.confidence)
+                storage_status = "confirmed" if snapshot_can_confirm else "uncertain"
+
+        direct_plate = normalize_license_plate_text(plate_text)
+        direct_confidence: Optional[float] = None
+        if direct_plate and plate_confidence is not None:
+            try:
+                direct_confidence = float(plate_confidence)
+            except (TypeError, ValueError):
+                direct_confidence = None
+        if (
+            direct_plate
+            and direct_confidence is not None
+            and direct_confidence >= float(self._license_plate_violation_update_min_confidence)
+            and storage_status != "confirmed"
+            and (
+                candidate_confidence is None
+                or direct_confidence > float(candidate_confidence)
+            )
         ):
+            candidate_plate = direct_plate
+            candidate_confidence = direct_confidence
+            # Một frame OCR trực tiếp là bằng chứng tham khảo, chưa phải confirmed.
+            storage_status = "uncertain"
+
+        if not candidate_plate or candidate_confidence is None:
             return
         if not self._is_late_plate_update_track_clean(vehicle_id=int(vehicle_id), ts_dt=ts_dt):
             return
@@ -1376,9 +1421,9 @@ class CameraContext:
                 camera_id=self.camera_id,
                 track_session_id=self.track_session_id,
                 vehicle_id=int(vehicle_id),
-                license_plate=str(snapshot.license_plate),
+                license_plate=str(candidate_plate),
                 license_plate_status=storage_status,
-                license_plate_confidence=float(snapshot.confidence),
+                license_plate_confidence=float(candidate_confidence),
                 license_plate_image_path=license_plate_image_path,
                 min_confidence=float(self._license_plate_violation_update_min_confidence),
                 allowed_current_statuses=("pending", "unreadable", "uncertain"),

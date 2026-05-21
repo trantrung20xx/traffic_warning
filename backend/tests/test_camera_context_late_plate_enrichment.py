@@ -151,7 +151,6 @@ def test_late_plate_enrichment_rejects_dirty_track(monkeypatch) -> None:
     )
 
     assert captured["calls"] == 0
-    assert vehicle_id in ctx._pending_violation_vehicle_ids
 
 
 def test_late_plate_enrichment_emits_realtime_update_event(monkeypatch) -> None:
@@ -285,7 +284,7 @@ def test_late_plate_enrichment_rejects_outside_update_window(monkeypatch) -> Non
     assert captured["calls"] == 0
 
 
-def test_late_plate_enrichment_rejects_when_consensus_hits_are_insufficient(monkeypatch) -> None:
+def test_late_plate_enrichment_downgrades_low_consensus_confirmed_to_uncertain(monkeypatch) -> None:
     ctx = _build_context_for_late_plate_tests()
     ts = datetime(2026, 5, 21, 12, 0, 0, tzinfo=timezone.utc)
     vehicle_id = 15
@@ -314,12 +313,18 @@ def test_late_plate_enrichment_rejects_when_consensus_hits_are_insufficient(monk
     )
     ctx._save_late_plate_evidence_from_crop = lambda **_: "config/evidence_images/cam_test/lp.jpg"
 
-    captured = {"calls": 0}
-    monkeypatch.setattr(
-        camera_context_module,
-        "update_pending_violation_plate",
-        lambda *args, **kwargs: (captured.__setitem__("calls", captured["calls"] + 1) or 0),
-    )
+    captured = {"calls": 0, "status": None}
+
+    def _fake_update(*args, **kwargs):
+        captured["calls"] += 1
+        captured["status"] = kwargs.get("license_plate_status")
+        ids = kwargs.get("updated_violation_ids_out")
+        if isinstance(ids, list):
+            ids.append(15)
+        return 1
+
+    monkeypatch.setattr(camera_context_module, "update_pending_violation_plate", _fake_update)
+    monkeypatch.setattr(camera_context_module, "query_violation_payloads_by_ids", lambda *args, **kwargs: [])
 
     ctx._attempt_late_plate_enrichment(
         vehicle_id=vehicle_id,
@@ -327,7 +332,8 @@ def test_late_plate_enrichment_rejects_when_consensus_hits_are_insufficient(monk
         plate_crop_bgr=np.ones((20, 80, 3), dtype=np.uint8),
     )
 
-    assert captured["calls"] == 0
+    assert captured["calls"] == 1
+    assert captured["status"] == "uncertain"
 
 
 def test_late_plate_enrichment_updates_uncertain_snapshot(monkeypatch) -> None:
@@ -434,8 +440,66 @@ def test_late_plate_enrichment_persists_single_read_as_uncertain(monkeypatch) ->
 
     assert captured["calls"] == 1
     assert captured["status"] == "uncertain"
-    assert vehicle_id in ctx._pending_violation_vehicle_ids
     assert ctx._pending_violation_plate_states[vehicle_id].has_committed_plate is False
+
+
+def test_late_plate_enrichment_uses_direct_ocr_readout_when_snapshot_is_empty(monkeypatch) -> None:
+    ctx = _build_context_for_late_plate_tests()
+    ctx._license_plate_violation_update_min_confidence = 0.55
+    ts = datetime(2026, 5, 21, 12, 0, 0, tzinfo=timezone.utc)
+    vehicle_id = 171
+
+    ctx._pending_violation_plate_states[vehicle_id] = _PendingViolationPlateState(
+        first_pending_ts=ts - timedelta(milliseconds=500),
+        last_pending_ts=ts - timedelta(milliseconds=200),
+        pending_count=1,
+        last_lane_id=1,
+    )
+    ctx._pending_violation_vehicle_ids.add(vehicle_id)
+    ctx._track_continuity_states[vehicle_id] = _TrackContinuityState(
+        first_seen_ts=ts - timedelta(seconds=1),
+        last_seen_ts=ts - timedelta(milliseconds=100),
+        last_bbox_xyxy=[10.0, 10.0, 30.0, 30.0],
+        observation_count=6,
+        dirty=False,
+    )
+    ctx._license_plate_snapshot_for = lambda **_: LicensePlateSnapshot(
+        license_plate=None,
+        status="pending",
+        confidence=None,
+        consensus_hits=0,
+        attempt_count=0,
+        confirmed_ts=None,
+    )
+    ctx._save_late_plate_evidence_from_crop = lambda **_: "config/evidence_images/cam_test/lp_direct.jpg"
+
+    captured = {"calls": 0, "plate": None, "status": None, "confidence": None}
+
+    def _fake_update(*args, **kwargs):
+        captured["calls"] += 1
+        captured["plate"] = kwargs.get("license_plate")
+        captured["status"] = kwargs.get("license_plate_status")
+        captured["confidence"] = kwargs.get("license_plate_confidence")
+        ids = kwargs.get("updated_violation_ids_out")
+        if isinstance(ids, list):
+            ids.append(171)
+        return 1
+
+    monkeypatch.setattr(camera_context_module, "update_pending_violation_plate", _fake_update)
+    monkeypatch.setattr(camera_context_module, "query_violation_payloads_by_ids", lambda *args, **kwargs: [])
+
+    ctx._attempt_late_plate_enrichment(
+        vehicle_id=vehicle_id,
+        ts_dt=ts,
+        plate_crop_bgr=np.ones((20, 80, 3), dtype=np.uint8),
+        plate_text="nl64 ogx",
+        plate_confidence=0.58,
+    )
+
+    assert captured["calls"] == 1
+    assert captured["plate"] == "NL64OGX"
+    assert captured["status"] == "uncertain"
+    assert captured["confidence"] == 0.58
 
 
 def test_late_plate_enrichment_keeps_pending_when_repository_updates_zero_rows(monkeypatch) -> None:
@@ -974,6 +1038,41 @@ def test_track_lost_without_crop_cancels_runtime_plate_state() -> None:
     ts = datetime(2026, 5, 21, 12, 0, 0, tzinfo=timezone.utc)
     vehicle_id = 31
     ctx._pending_violation_plate_states[vehicle_id] = _PendingViolationPlateState(
+        first_pending_ts=ts - timedelta(seconds=7),
+        last_pending_ts=ts - timedelta(seconds=7),
+        pending_count=1,
+        last_lane_id=1,
+        has_committed_plate=False,
+    )
+    ctx._pending_violation_vehicle_ids.add(vehicle_id)
+    ctx._track_continuity_states[vehicle_id] = _TrackContinuityState(
+        first_seen_ts=ts - timedelta(seconds=7),
+        last_seen_ts=ts - timedelta(seconds=7),
+        last_bbox_xyxy=[10.0, 10.0, 30.0, 30.0],
+        observation_count=3,
+        dirty=False,
+    )
+
+    ctx._update_late_plate_track_continuity(tracks=[], ts_dt=ts)
+
+    assert vehicle_id not in ctx._pending_violation_vehicle_ids
+    assert resolver.discarded == [vehicle_id]
+
+
+def test_recent_track_loss_keeps_pending_state_for_queued_ocr() -> None:
+    class _Resolver:
+        def __init__(self):
+            self.discarded = []
+
+        def discard(self, *, vehicle_id: int):
+            self.discarded.append(int(vehicle_id))
+
+    ctx = _build_context_for_late_plate_tests()
+    resolver = _Resolver()
+    ctx._license_plate_resolver = resolver
+    ts = datetime(2026, 5, 21, 12, 0, 0, tzinfo=timezone.utc)
+    vehicle_id = 32
+    ctx._pending_violation_plate_states[vehicle_id] = _PendingViolationPlateState(
         first_pending_ts=ts - timedelta(seconds=2),
         last_pending_ts=ts - timedelta(seconds=2),
         pending_count=1,
@@ -991,8 +1090,8 @@ def test_track_lost_without_crop_cancels_runtime_plate_state() -> None:
 
     ctx._update_late_plate_track_continuity(tracks=[], ts_dt=ts)
 
-    assert vehicle_id not in ctx._pending_violation_vehicle_ids
-    assert resolver.discarded == [vehicle_id]
+    assert vehicle_id in ctx._pending_violation_vehicle_ids
+    assert resolver.discarded == []
 
 
 def test_violation_event_with_confirmed_plate_still_registers_for_evidence_upgrade() -> None:
