@@ -267,27 +267,54 @@ class LicensePlateOcr:
         if height <= 0 or width <= 0:
             return variants
 
-        if height < 64 or width < 192:
-            scale = 2.0 if max(height, width) < 420 else 1.6
+        def _append_variant(candidate) -> None:
+            if candidate is None or getattr(candidate, "size", 0) == 0:
+                return
+            variants.append(candidate)
+
+        enhanced_source = image_bgr
+        if height < 72 or width < 240:
+            scale = max(2.0, 72.0 / float(height), 240.0 / float(width))
+            scale = min(scale, 4.0)
             scaled_w = max(int(round(width * scale)), 1)
             scaled_h = max(int(round(height * scale)), 1)
             try:
-                variants.append(
-                    cv2.resize(
-                        image_bgr,
-                        (scaled_w, scaled_h),
-                        interpolation=cv2.INTER_CUBIC,
-                    )
+                enhanced_source = cv2.resize(
+                    image_bgr,
+                    (scaled_w, scaled_h),
+                    interpolation=cv2.INTER_CUBIC,
                 )
+                _append_variant(enhanced_source)
             except Exception:
-                pass
+                enhanced_source = image_bgr
 
         try:
-            gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
-            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(gray)
-            variants.append(cv2.cvtColor(clahe, cv2.COLOR_GRAY2BGR))
+            h2, w2 = enhanced_source.shape[:2]
+            pad_x = max(int(round(w2 * 0.08)), 4)
+            pad_y = max(int(round(h2 * 0.18)), 4)
+            _append_variant(
+                cv2.copyMakeBorder(
+                    enhanced_source,
+                    pad_y,
+                    pad_y,
+                    pad_x,
+                    pad_x,
+                    cv2.BORDER_REPLICATE,
+                )
+            )
+        except Exception:
+            pass
 
-            denoised = cv2.bilateralFilter(clahe, 5, 35, 35)
+        try:
+            gray = cv2.cvtColor(enhanced_source, cv2.COLOR_BGR2GRAY)
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(gray)
+            _append_variant(cv2.cvtColor(clahe, cv2.COLOR_GRAY2BGR))
+
+            blur = cv2.GaussianBlur(clahe, (0, 0), 1.0)
+            sharpened = cv2.addWeighted(clahe, 1.7, blur, -0.7, 0)
+            _append_variant(cv2.cvtColor(sharpened, cv2.COLOR_GRAY2BGR))
+
+            denoised = cv2.bilateralFilter(sharpened, 5, 35, 35)
             threshold = cv2.adaptiveThreshold(
                 denoised,
                 255,
@@ -296,7 +323,15 @@ class LicensePlateOcr:
                 31,
                 8,
             )
-            variants.append(cv2.cvtColor(threshold, cv2.COLOR_GRAY2BGR))
+            _append_variant(cv2.cvtColor(threshold, cv2.COLOR_GRAY2BGR))
+
+            _, otsu = cv2.threshold(
+                denoised,
+                0,
+                255,
+                cv2.THRESH_BINARY + cv2.THRESH_OTSU,
+            )
+            _append_variant(cv2.cvtColor(otsu, cv2.COLOR_GRAY2BGR))
         except Exception:
             pass
         return variants

@@ -10,6 +10,8 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.vision.license_plate_ocr import (
+    LicensePlateOcr,
+    OcrReadout,
     _create_paddle_ocr_engine,
     _run_paddleocr_inference,
 )
@@ -95,3 +97,42 @@ def test_paddleocr_engine_uses_default_mkldnn_for_cpu(monkeypatch) -> None:
     assert os.environ["PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"] == "True"
     assert captured_kwargs["device"] == "cpu"
     assert "enable_mkldnn" not in captured_kwargs
+
+
+def test_aggressive_read_uses_upscaled_variant_when_primary_fails() -> None:
+    ocr = object.__new__(LicensePlateOcr)
+    ocr.available = True
+    ocr._engine = object()
+    calls = []
+
+    def _fake_reader(image_bgr):
+        calls.append(image_bgr.shape[:2])
+        height, width = image_bgr.shape[:2]
+        if height >= 72 and width >= 240:
+            return OcrReadout(text="NL64OGX", confidence=0.88)
+        return None
+
+    ocr._read_backend_from_bgr = _fake_reader
+
+    readout = ocr.read_best(np.zeros((28, 120, 3), dtype=np.uint8), aggressive=True)
+
+    assert readout == OcrReadout(text="NL64OGX", confidence=0.88)
+    assert calls[0] == (28, 120)
+    assert any(height >= 72 and width >= 240 for height, width in calls[1:])
+
+
+def test_non_aggressive_read_does_not_try_extra_variants() -> None:
+    ocr = object.__new__(LicensePlateOcr)
+    ocr.available = True
+    ocr._engine = object()
+    calls = 0
+
+    def _fake_reader(_image_bgr):
+        nonlocal calls
+        calls += 1
+        return None
+
+    ocr._read_backend_from_bgr = _fake_reader
+
+    assert ocr.read_best(np.zeros((28, 120, 3), dtype=np.uint8), aggressive=False) is None
+    assert calls == 1

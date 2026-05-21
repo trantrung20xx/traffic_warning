@@ -237,7 +237,7 @@ class LicensePlateConfig(BaseModel):
     paddle_lang: str = "en"
     paddle_use_gpu: bool = False
     read_interval_ms: int = 500
-    min_ocr_confidence: float = 0.65
+    min_ocr_confidence: float = 0.55
     consensus_min_hits: int = 2
     candidate_window_ms: int = 4000
     max_attempts_before_unreadable: int = 6
@@ -245,7 +245,7 @@ class LicensePlateConfig(BaseModel):
     crop_expand_y_ratio: float = 0.08
     image_jpeg_quality: int = 92
     violation_update_enabled: bool = True
-    violation_update_min_confidence: float = 0.8
+    violation_update_min_confidence: float = 0.65
     violation_update_consensus_min_hits: int = 2
     violation_update_window_ms: int = 5000
     require_clean_track_for_violation_update: bool = True
