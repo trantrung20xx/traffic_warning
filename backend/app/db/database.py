@@ -36,6 +36,18 @@ def _ensure_violation_schema(engine) -> None:
         connection.execute(
             text("CREATE INDEX IF NOT EXISTS ix_violations_track_session_id ON violations (track_session_id)")
         )
+        connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_violations_scope_lookup "
+                "ON violations (camera_id, track_session_id, vehicle_id, timestamp_utc)"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_violations_scope_lookup_no_ts "
+                "ON violations (camera_id, track_session_id, vehicle_id)"
+            )
+        )
 
 
 def create_engine_and_session(db_path: Union[Path, str]):

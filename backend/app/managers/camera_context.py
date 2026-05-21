@@ -683,7 +683,8 @@ class CameraContext:
                 return False
             pending_state = self._pending_violation_plate_states.get(normalized_vehicle_id)
         if pending_state is None:
-            return False
+            # Ưu tiên không bỏ sót OCR cho xe pending khi metadata tạm thời chưa đồng bộ.
+            return True
         return not bool(pending_state.has_committed_plate)
 
     def _dequeue_license_plate_jobs(self) -> list[_LicensePlateJob]:

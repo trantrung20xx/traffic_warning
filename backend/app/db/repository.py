@@ -108,15 +108,13 @@ def update_pending_violation_plate(
         query = query.where(Violation.timestamp_utc >= ensure_utc_datetime(violation_not_before_ts))
 
     rows = session.execute(query).scalars().all()
+    normalized_allowed_set = set(normalized_allowed_statuses)
     updated_rows = 0
     for row in rows:
         current_status = str(row.license_plate_status or "").strip().lower()
         current_plate = str(row.license_plate or "").strip().upper()
 
-        is_pending_like = (
-            not current_status
-            or current_status in normalized_allowed_statuses
-        )
+        is_pending_like = (not current_status or current_status in normalized_allowed_set)
         is_confirmed_backfillable = (
             current_status == "confirmed"
             and ((not current_plate) or current_plate == normalized_plate)
