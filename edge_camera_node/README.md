@@ -193,7 +193,7 @@ Chức năng nút:
 - SAFE_SHUTDOWN: nhấn giữ 3 giây để shutdown Raspberry Pi an toàn.
 - RESET_WATCHDOG: xóa watchdog latched và thử chạy lại stream.
 
-Quy tắc đèn:
+Trạng thái của đèn:
 
 - ONLINE: nhấp nháy khi boot, sáng khi service đang chạy.
 - STREAMING: sáng khi RTSP pipeline đang chạy.
@@ -201,7 +201,7 @@ Quy tắc đèn:
 - ERROR: nhấp nháy nhanh khi lỗi nghiêm trọng hoặc watchdog đã latch.
 - SHUTTING_DOWN: tắt toàn bộ đèn.
 
-Quy tắc an toàn:
+Lưu ý an toàn:
 
 - Không đưa 5V vào chân GPIO signal.
 - LED phải có điện trở hạn dòng.
