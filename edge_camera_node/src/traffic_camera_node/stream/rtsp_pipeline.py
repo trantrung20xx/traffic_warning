@@ -7,7 +7,7 @@ import subprocess
 import threading
 import time
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from logging import Logger
 from pathlib import Path
@@ -57,6 +57,145 @@ V4L2_TO_FFMPEG_INPUT_FORMAT = {
     "YUYV": "yuyv422",
 }
 FFMPEG_TO_V4L2_INPUT_FORMAT = {value: key for key, value in V4L2_TO_FFMPEG_INPUT_FORMAT.items()}
+V4L2_CTRL_LINE_PATTERN = re.compile(
+    r"^\s*(?P<name>[A-Za-z0-9_]+)\s+0x[0-9a-fA-F]+\s+\((?P<type>[^)]+)\)\s*:\s*(?P<body>.+)$"
+)
+V4L2_CTRL_VALUE_PATTERN = re.compile(
+    r"\b(?P<key>min|max|step|default|value)=(?P<value>[-+]?(?:0x[0-9a-fA-F]+|\d+))\b"
+)
+V4L2_CTRL_MENU_ITEM_PATTERN = re.compile(r"^\s*(?P<index>-?\d+)\s*:\s*(?P<label>.+?)\s*$")
+SUPPORTED_IMAGE_TUNING_PROFILES = (
+    "normal",
+    "low_light",
+    "bright_scene",
+    "sharpness_safe",
+    "disabled",
+)
+CSI_IMAGE_TUNING_ARGS: dict[str, list[str]] = {
+    "normal": [
+        "--ev",
+        "0.00",
+        "--metering",
+        "centre",
+        "--exposure",
+        "sport",
+        "--awb",
+        "auto",
+        "--brightness",
+        "0.00",
+        "--contrast",
+        "1.03",
+        "--sharpness",
+        "1.08",
+        "--saturation",
+        "1.00",
+    ],
+    "low_light": [
+        "--ev",
+        "0.30",
+        "--metering",
+        "centre",
+        "--exposure",
+        "sport",
+        "--awb",
+        "auto",
+        "--brightness",
+        "0.04",
+        "--contrast",
+        "1.08",
+        "--sharpness",
+        "1.03",
+        "--saturation",
+        "0.94",
+    ],
+    "bright_scene": [
+        "--ev",
+        "-0.45",
+        "--metering",
+        "average",
+        "--exposure",
+        "sport",
+        "--awb",
+        "daylight",
+        "--brightness",
+        "-0.06",
+        "--contrast",
+        "0.98",
+        "--sharpness",
+        "1.02",
+        "--saturation",
+        "0.94",
+    ],
+    "sharpness_safe": [
+        "--ev",
+        "0.00",
+        "--metering",
+        "centre",
+        "--exposure",
+        "sport",
+        "--awb",
+        "auto",
+        "--brightness",
+        "0.00",
+        "--contrast",
+        "1.05",
+        "--sharpness",
+        "1.14",
+        "--saturation",
+        "0.98",
+    ],
+}
+USB_V4L2_IMAGE_TUNING_CONTROLS: dict[str, dict[str, int | str]] = {
+    "normal": {
+        "power_line_frequency": "50hz",
+        "exposure_auto_priority": 0,
+        "white_balance_temperature_auto": 1,
+        "brightness": 50,
+        "contrast": 52,
+        "saturation": 50,
+        "sharpness": 53,
+        "gain": 9,
+        "backlight_compensation": 0,
+    },
+    "low_light": {
+        "power_line_frequency": "50hz",
+        "exposure_auto_priority": 0,
+        "white_balance_temperature_auto": 1,
+        "brightness": 56,
+        "contrast": 56,
+        "saturation": 47,
+        "sharpness": 51,
+        "gain": 15,
+        "backlight_compensation": 1,
+    },
+    "bright_scene": {
+        "power_line_frequency": "50hz",
+        "exposure_auto_priority": 0,
+        "white_balance_temperature_auto": 1,
+        "brightness": 44,
+        "contrast": 48,
+        "saturation": 46,
+        "sharpness": 48,
+        "gain": 4,
+        "backlight_compensation": 0,
+    },
+    "sharpness_safe": {
+        "power_line_frequency": "50hz",
+        "exposure_auto_priority": 0,
+        "white_balance_temperature_auto": 1,
+        "brightness": 50,
+        "contrast": 54,
+        "saturation": 49,
+        "sharpness": 63,
+        "gain": 10,
+        "backlight_compensation": 0,
+    },
+}
+USB_PERCENT_CONTROLS = {"brightness", "contrast", "saturation", "sharpness", "gain"}
+USB_V4L2_CONTROL_ALIASES: dict[str, tuple[str, ...]] = {
+    "white_balance_temperature_auto": ("white_balance_automatic",),
+    "gain": ("analogue_gain", "analog_gain"),
+}
 
 
 @dataclass(frozen=True)
@@ -67,17 +206,37 @@ class UsbCaptureMode:
     input_format: str
 
 
+@dataclass(frozen=True)
+class V4L2Control:
+    name: str
+    min_value: int | None = None
+    max_value: int | None = None
+    default: int | None = None
+    value: int | None = None
+    control_type: str = ""
+    step: int | None = None
+    menu_items: dict[int, str] = field(default_factory=dict)
+
+
+def _normalize_tuning_profile_for_helpers(profile: str) -> str:
+    normalized = str(profile or "").strip().lower()
+    if normalized in SUPPORTED_IMAGE_TUNING_PROFILES:
+        return normalized
+    return "normal"
+
+
 def _image_tuning_args(profile: str) -> list[str]:
-    # Các mức tinh chỉnh nhẹ để tránh làm lệch dữ liệu ảnh phía server.
-    if profile == "low_light":
-        return ["--brightness", "0.10", "--contrast", "1.05", "--sharpness", "1.00"]
-    if profile == "bright_scene":
-        return ["--brightness", "-0.05", "--contrast", "1.10", "--sharpness", "1.00"]
-    if profile == "sharpness_safe":
-        return ["--brightness", "0.00", "--contrast", "1.05", "--sharpness", "1.15"]
-    if profile == "disabled":
+    normalized = _normalize_tuning_profile_for_helpers(profile)
+    if normalized == "disabled":
         return []
-    return ["--brightness", "0.00", "--contrast", "1.00", "--sharpness", "1.00"]
+    return list(CSI_IMAGE_TUNING_ARGS[normalized])
+
+
+def _v4l2_image_tuning_controls(profile: str) -> dict[str, int | str]:
+    normalized = _normalize_tuning_profile_for_helpers(profile)
+    if normalized == "disabled":
+        return {}
+    return dict(USB_V4L2_IMAGE_TUNING_CONTROLS[normalized])
 
 
 class RtspPipeline:
@@ -350,6 +509,7 @@ class RtspPipeline:
         del mode
         stream = self._config.stream
         usb_device = self._resolve_usb_device_path()
+        self._apply_usb_image_tuning(usb_device)
         capture_mode = self._resolve_usb_capture_mode(usb_device)
         stream_name = self._identity.stream_path.lstrip("/")
         target_rtsp = f"rtsp://127.0.0.1:{self._port}/{stream_name}"
@@ -573,6 +733,281 @@ class RtspPipeline:
             self._logger.debug("v4l2-ctl format query failed for %s: %s", usb_device, result.stderr.strip())
             return ""
         return result.stdout
+
+    @staticmethod
+    def _parse_v4l2_int(raw: str) -> int | None:
+        try:
+            return int(raw, 0)
+        except (TypeError, ValueError):
+            return None
+
+    @classmethod
+    def _parse_v4l2_controls_listing(cls, listing: str) -> dict[str, V4L2Control]:
+        controls: dict[str, V4L2Control] = {}
+        current_menu_control: str | None = None
+
+        for line in listing.splitlines():
+            ctrl_match = V4L2_CTRL_LINE_PATTERN.match(line)
+            if ctrl_match:
+                raw_values: dict[str, int] = {}
+                for value_match in V4L2_CTRL_VALUE_PATTERN.finditer(ctrl_match.group("body")):
+                    parsed = cls._parse_v4l2_int(value_match.group("value"))
+                    if parsed is None:
+                        continue
+                    raw_values[value_match.group("key")] = parsed
+
+                control_type = ctrl_match.group("type").strip().lower()
+                control = V4L2Control(
+                    name=ctrl_match.group("name"),
+                    min_value=raw_values.get("min"),
+                    max_value=raw_values.get("max"),
+                    default=raw_values.get("default"),
+                    value=raw_values.get("value"),
+                    control_type=control_type,
+                    step=raw_values.get("step"),
+                    menu_items={},
+                )
+                controls[control.name] = control
+                current_menu_control = control.name if "menu" in control_type else None
+                continue
+
+            if not current_menu_control:
+                continue
+
+            menu_match = V4L2_CTRL_MENU_ITEM_PATTERN.match(line)
+            if not menu_match:
+                if line.strip():
+                    current_menu_control = None
+                continue
+
+            control = controls.get(current_menu_control)
+            if not control:
+                continue
+            menu_items = dict(control.menu_items)
+            menu_items[int(menu_match.group("index"))] = menu_match.group("label").strip()
+            controls[current_menu_control] = V4L2Control(
+                name=control.name,
+                min_value=control.min_value,
+                max_value=control.max_value,
+                default=control.default,
+                value=control.value,
+                control_type=control.control_type,
+                step=control.step,
+                menu_items=menu_items,
+            )
+
+        return controls
+
+    def _query_v4l2_controls(self, usb_device: str) -> dict[str, V4L2Control]:
+        v4l2_ctl = shutil.which("v4l2-ctl")
+        if not v4l2_ctl:
+            self._logger.warning("v4l2-ctl not found; skipping USB image tuning for %s.", usb_device)
+            return {}
+
+        try:
+            result = subprocess.run(
+                [v4l2_ctl, "--device", usb_device, "--list-ctrls", "--list-ctrls-menus"],
+                capture_output=True,
+                text=True,
+                timeout=4,
+                check=False,
+            )
+        except Exception as exc:
+            self._logger.warning("Unable to query V4L2 controls on %s: %s. Skipping tuning.", usb_device, exc)
+            return {}
+
+        if result.returncode != 0:
+            self._logger.warning(
+                "v4l2-ctl control query failed on %s (exit=%s): %s. Skipping tuning.",
+                usb_device,
+                result.returncode,
+                result.stderr.strip(),
+            )
+            return {}
+
+        return self._parse_v4l2_controls_listing(result.stdout)
+
+    @staticmethod
+    def _clamp(value: int, minimum: int, maximum: int) -> int:
+        return max(minimum, min(maximum, value))
+
+    @staticmethod
+    def _percent_to_v4l2_value(percent: int, minimum: int, maximum: int) -> int:
+        value = minimum + round((float(percent) / 100.0) * float(maximum - minimum))
+        return RtspPipeline._clamp(int(value), minimum, maximum)
+
+    @staticmethod
+    def _resolve_discrete_control_value(control: V4L2Control, desired: int) -> int | None:
+        if control.menu_items:
+            valid_values = sorted(control.menu_items.keys())
+        elif control.min_value is not None and control.max_value is not None:
+            valid_values = list(range(control.min_value, control.max_value + 1))
+        else:
+            return None
+
+        if not valid_values:
+            return None
+        if desired in valid_values:
+            return desired
+        return min(valid_values, key=lambda candidate: abs(candidate - desired))
+
+    @staticmethod
+    def _resolve_power_line_frequency_value(control: V4L2Control) -> int | None:
+        menu_by_index = {index: label.lower() for index, label in control.menu_items.items()}
+        if 1 in menu_by_index and "50" in menu_by_index[1]:
+            return 1
+
+        for index, label in menu_by_index.items():
+            if "50" in label and "hz" in label:
+                return index
+
+        return RtspPipeline._resolve_discrete_control_value(control, desired=1)
+
+    def _resolve_v4l2_target_value(
+        self,
+        control_name: str,
+        target: int | str,
+        control: V4L2Control,
+    ) -> tuple[int | None, str | None]:
+        control_type = control.control_type.lower()
+
+        if control_name in USB_PERCENT_CONTROLS:
+            if control.min_value is None or control.max_value is None:
+                return None, "missing min/max range"
+            try:
+                percent = int(target)
+            except (TypeError, ValueError):
+                return None, f"invalid percent target: {target}"
+            percent = self._clamp(percent, 0, 100)
+            return self._percent_to_v4l2_value(percent, control.min_value, control.max_value), None
+
+        if control_name == "power_line_frequency":
+            value = self._resolve_power_line_frequency_value(control)
+            if value is None:
+                return None, "cannot resolve 50Hz value"
+            return value, None
+
+        desired = self._parse_v4l2_int(str(target))
+        if desired is None:
+            return None, f"invalid discrete target: {target}"
+
+        if "bool" in control_type:
+            desired = 1 if desired else 0
+            if not control.menu_items and control.min_value is None and control.max_value is None:
+                return desired, None
+            resolved = self._resolve_discrete_control_value(control, desired=desired)
+            if resolved is None:
+                return None, "missing bool range/menu values"
+            return resolved, None
+
+        if "menu" in control_type:
+            resolved = self._resolve_discrete_control_value(control, desired=desired)
+            if resolved is None:
+                return None, "missing menu values"
+            return resolved, None
+
+        if control.min_value is None or control.max_value is None:
+            return None, "missing min/max range"
+        return self._clamp(desired, control.min_value, control.max_value), None
+
+    def _set_v4l2_control(self, usb_device: str, control_name: str, value: int) -> bool:
+        v4l2_ctl = shutil.which("v4l2-ctl")
+        if not v4l2_ctl:
+            self._logger.warning("v4l2-ctl not found while applying USB tuning; skipping.")
+            return False
+        try:
+            result = subprocess.run(
+                [v4l2_ctl, "--device", usb_device, "--set-ctrl", f"{control_name}={value}"],
+                capture_output=True,
+                text=True,
+                timeout=3,
+                check=False,
+            )
+        except Exception as exc:
+            self._logger.warning("Failed to set USB control %s on %s: %s", control_name, usb_device, exc)
+            return False
+
+        if result.returncode != 0:
+            self._logger.warning(
+                "Failed to set USB control %s=%s on %s (exit=%s): %s",
+                control_name,
+                value,
+                usb_device,
+                result.returncode,
+                result.stderr.strip(),
+            )
+            return False
+        return True
+
+    def _apply_usb_image_tuning(self, usb_device: str) -> None:
+        requested_profile = self._image_tuning_profile
+        normalized_profile = _normalize_tuning_profile_for_helpers(requested_profile)
+        controls_target = _v4l2_image_tuning_controls(normalized_profile)
+        self._logger.info(
+            "USB image tuning profile request=%s normalized=%s on %s",
+            requested_profile,
+            normalized_profile,
+            usb_device,
+        )
+
+        if not controls_target:
+            self._logger.info("USB image tuning disabled; no V4L2 controls applied on %s.", usb_device)
+            return
+
+        controls = self._query_v4l2_controls(usb_device)
+        if not controls:
+            return
+
+        applied_controls: list[str] = []
+        skipped_controls: list[str] = []
+        for control_name, target in controls_target.items():
+            available = controls.get(control_name)
+            chosen_control_name = control_name
+            if not available:
+                for alias in USB_V4L2_CONTROL_ALIASES.get(control_name, ()):
+                    available = controls.get(alias)
+                    if available:
+                        chosen_control_name = alias
+                        self._logger.info(
+                            "Using USB control alias %s -> %s on %s",
+                            control_name,
+                            alias,
+                            usb_device,
+                        )
+                        break
+            if not available:
+                skipped_controls.append(f"{control_name}=missing")
+                self._logger.debug("Skipping USB control %s: not supported on %s", control_name, usb_device)
+                continue
+
+            resolved_value, skip_reason = self._resolve_v4l2_target_value(control_name, target, available)
+            if resolved_value is None:
+                skipped_controls.append(f"{control_name}={skip_reason or 'unresolved'}")
+                self._logger.debug(
+                    "Skipping USB control %s on %s: %s",
+                    control_name,
+                    usb_device,
+                    skip_reason or "cannot resolve target value",
+                )
+                continue
+
+            if self._set_v4l2_control(usb_device, chosen_control_name, resolved_value):
+                applied_controls.append(f"{chosen_control_name}={resolved_value}")
+
+        if applied_controls:
+            self._logger.info(
+                "Applied USB tuning controls on %s profile=%s: %s",
+                usb_device,
+                normalized_profile,
+                ", ".join(applied_controls),
+            )
+        if skipped_controls:
+            self._logger.info(
+                "Skipped USB tuning controls on %s profile=%s: %s",
+                usb_device,
+                normalized_profile,
+                ", ".join(skipped_controls),
+            )
 
     def _build_source_command(self, mode: PipelineMode) -> list[str]:
         if self._source_kind == CameraSourceKind.RPI_CSI:
@@ -866,8 +1301,46 @@ class RtspPipeline:
 
     def set_image_tuning_profile(self, profile: str) -> str:
         normalized = normalize_image_tuning_profile(profile)
+        apply_live = False
+        active_usb_device = ""
+        previous = ""
         with self._lock:
+            previous = self._image_tuning_profile
             self._image_tuning_profile = normalized
+            apply_live = (
+                self._source_kind == CameraSourceKind.USB_V4L2
+                and self.is_running()
+                and bool(self._active_usb_device)
+            )
+            active_usb_device = self._active_usb_device or ""
+
+        self._logger.info(
+            "Image tuning profile update: %s -> %s (running=%s source=%s)",
+            previous,
+            normalized,
+            self.is_running(),
+            self._source_kind.value,
+        )
+
+        if not self.is_running():
+            self._logger.info("Pipeline is not running; new profile will be applied at next start.")
+            return normalized
+
+        if self._source_kind == CameraSourceKind.USB_V4L2 and not active_usb_device:
+            self._logger.warning("USB pipeline is running but active USB device is unknown; skip live tuning apply.")
+            return normalized
+
+        if apply_live:
+            try:
+                self._apply_usb_image_tuning(active_usb_device)
+                self._logger.info("Live USB tuning apply completed for profile=%s on %s", normalized, active_usb_device)
+            except Exception as exc:
+                self._logger.warning(
+                    "Live USB tuning apply failed for profile=%s on %s: %s",
+                    normalized,
+                    active_usb_device,
+                    exc,
+                )
         return normalized
 
     def get_image_tuning_profile(self) -> str:
