@@ -354,61 +354,63 @@ export default function EdgeCamerasView() {
 										<td>{normalizeStreamState(row)}</td>
 										<td>{formatLastSeen(row.last_seen)}</td>
 										<td className="edge-camera-actions">
-											<button
-												className="button secondary compact-button edge-profile-button"
-												onClick={(event) => {
-													event.stopPropagation();
-													handleAction(row, "tuning");
-												}}
-												disabled={
-													!isEdgeOnline(row) ||
-													busyAction.startsWith(
-														`${row.camera_id}:`,
-													)
-												}>
-												{busyAction === `${row.camera_id}:tuning`
-													? "Đang đổi"
-													: getImageTuningButtonLabel(
-															row.image_tuning_profile,
-														)}
-											</button>
-											<button
-												className={`button compact-button ${isStreamStarted(row) ? "warning-action" : "secondary"}`}
-												onClick={(event) => {
-													event.stopPropagation();
-													handleAction(
-														row,
-														isStreamStarted(row)
-															? "stop"
-															: "start",
-													);
-												}}
-												disabled={
-													!isEdgeOnline(row) ||
-													busyAction.startsWith(
-														`${row.camera_id}:`,
-													)
-												}>
-												{busyAction === `${row.camera_id}:toggle`
-													? "Đang gửi..."
-													: isStreamStarted(row)
-														? "Stop Stream"
-														: "Start Stream"}
-											</button>
-											<button
-												className="button danger compact-button"
-												onClick={(event) => {
-													event.stopPropagation();
-													handleAction(row, "restart");
-												}}
-												disabled={
-													!isEdgeOnline(row) ||
-													busyAction.startsWith(
-														`${row.camera_id}:`,
-													)
-												}>
-												Restart Stream
-											</button>
+											<div className="edge-camera-actions-inner">
+												<button
+													className="button secondary compact-button edge-profile-button"
+													onClick={(event) => {
+														event.stopPropagation();
+														handleAction(row, "tuning");
+													}}
+													disabled={
+														!isEdgeOnline(row) ||
+														busyAction.startsWith(
+															`${row.camera_id}:`,
+														)
+													}>
+													{busyAction === `${row.camera_id}:tuning`
+														? "Đang đổi"
+														: getImageTuningButtonLabel(
+																row.image_tuning_profile,
+															)}
+												</button>
+												<button
+													className={`button compact-button ${isStreamStarted(row) ? "warning-action" : "secondary"}`}
+													onClick={(event) => {
+														event.stopPropagation();
+														handleAction(
+															row,
+															isStreamStarted(row)
+																? "stop"
+																: "start",
+														);
+													}}
+													disabled={
+														!isEdgeOnline(row) ||
+														busyAction.startsWith(
+															`${row.camera_id}:`,
+														)
+													}>
+													{busyAction === `${row.camera_id}:toggle`
+														? "Đang gửi..."
+														: isStreamStarted(row)
+															? "Stop Stream"
+															: "Start Stream"}
+												</button>
+												<button
+													className="button danger compact-button"
+													onClick={(event) => {
+														event.stopPropagation();
+														handleAction(row, "restart");
+													}}
+													disabled={
+														!isEdgeOnline(row) ||
+														busyAction.startsWith(
+															`${row.camera_id}:`,
+														)
+													}>
+													Restart Stream
+												</button>
+											</div>
 										</td>
 									</tr>
 								))}

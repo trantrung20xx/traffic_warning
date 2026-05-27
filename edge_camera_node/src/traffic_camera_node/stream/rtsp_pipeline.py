@@ -146,48 +146,61 @@ CSI_IMAGE_TUNING_ARGS: dict[str, list[str]] = {
     ],
 }
 USB_V4L2_IMAGE_TUNING_CONTROLS: dict[str, dict[str, int | str]] = {
+    # Dùng cho đa số tình huống: ban ngày, trời râm, mưa nhẹ.
+    # Giữ ảnh tự nhiên, tăng nét và contrast nhẹ để xe/biển số/làn đường rõ hơn.
     "normal": {
         "power_line_frequency": "50hz",
         "exposure_auto_priority": 0,
         "white_balance_temperature_auto": 1,
         "brightness": 50,
-        "contrast": 52,
-        "saturation": 50,
-        "sharpness": 53,
-        "gain": 9,
+        "contrast": 53,
+        "saturation": 49,
+        "sharpness": 56,
+        "gain": 8,
         "backlight_compensation": 0,
     },
+
+    # Tối/mưa tối/đường thiếu đèn.
+    # Tăng sáng và gain có kiểm soát. Không tăng sharpness quá cao vì ban đêm noise sẽ bị làm sắc lên,
+    # OCR dễ đọc sai hoặc bệt ký tự.
     "low_light": {
         "power_line_frequency": "50hz",
         "exposure_auto_priority": 0,
         "white_balance_temperature_auto": 1,
-        "brightness": 56,
-        "contrast": 56,
-        "saturation": 47,
-        "sharpness": 51,
-        "gain": 15,
+        "brightness": 59,
+        "contrast": 57,
+        "saturation": 45,
+        "sharpness": 52,
+        "gain": 18,
         "backlight_compensation": 1,
     },
+
+    # Nắng gắt, đèn pha, mặt đường ướt phản xạ, vùng chói cục bộ.
+    # Giảm brightness/gain/contrast để hạn chế cháy biển số và thân xe.
+    # Sharpness thấp hơn normal một chút để không tạo viền giả ở vùng highlight.
     "bright_scene": {
         "power_line_frequency": "50hz",
         "exposure_auto_priority": 0,
         "white_balance_temperature_auto": 1,
-        "brightness": 44,
-        "contrast": 48,
-        "saturation": 46,
-        "sharpness": 48,
-        "gain": 4,
+        "brightness": 41,
+        "contrast": 45,
+        "saturation": 43,
+        "sharpness": 47,
+        "gain": 3,
         "backlight_compensation": 0,
     },
+
+    # Khi ảnh hơi mềm/mờ do lens/camera nhưng ánh sáng không quá xấu.
+    # Tăng sharpness rõ hơn normal, nhưng không đẩy lên quá cao để tránh halo/viền giả quanh biển số.
     "sharpness_safe": {
         "power_line_frequency": "50hz",
         "exposure_auto_priority": 0,
         "white_balance_temperature_auto": 1,
         "brightness": 50,
-        "contrast": 54,
-        "saturation": 49,
-        "sharpness": 63,
-        "gain": 10,
+        "contrast": 55,
+        "saturation": 48,
+        "sharpness": 66,
+        "gain": 8,
         "backlight_compensation": 0,
     },
 }
