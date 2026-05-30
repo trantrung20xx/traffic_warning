@@ -35,11 +35,13 @@
     {
       "camera_id": "cam_03",
       "rtsp_url": "D:\\Workspace\\DATN\\traffic_video_data\\4k\\Traffic Flow In The Highway - 4K Stock Videos ｜ NoCopyright ｜ AllVideoFree.mp4",
-      "camera_type": "roadside",
+      "camera_type": "intersection",
       "view_direction": "Đông - Bắc",
       "location": {
         "road_name": "QL39",
-        "intersection_name": "Bần Yên Nhân"
+        "intersection_name": "Bần Yên Nhân",
+        "gps_lat": 20.93355,
+        "gps_lng": 106.0575
       },
       "monitored_lanes": [
         1,

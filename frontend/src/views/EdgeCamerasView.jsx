@@ -11,11 +11,11 @@ import {
 } from "../api";
 
 const IMAGE_TUNING_SHORT_LABELS = Object.freeze({
-	normal: "Thường",
-	low_light: "Tối",
-	bright_scene: "Sáng",
-	sharpness_safe: "Nét",
-	disabled: "Tắt",
+	normal: "Normal",
+	low_light: "Low Light",
+	bright_scene: "Bright Scene",
+	sharpness_safe: "Sharpness Safe",
+	disabled: "Disabled",
 });
 
 function formatLastSeen(value) {
@@ -83,8 +83,8 @@ function getImageTuningButtonLabel(profile) {
 	const key = String(profile || "")
 		.trim()
 		.toLowerCase();
-	const shortLabel = IMAGE_TUNING_SHORT_LABELS[key] || "Mặc định";
-	return `Ảnh: ${shortLabel}`;
+	const shortLabel = IMAGE_TUNING_SHORT_LABELS[key] || "Default";
+	return `Image: ${shortLabel}`;
 }
 
 export default function EdgeCamerasView() {
@@ -367,7 +367,8 @@ export default function EdgeCamerasView() {
 															`${row.camera_id}:`,
 														)
 													}>
-													{busyAction === `${row.camera_id}:tuning`
+													{busyAction ===
+													`${row.camera_id}:tuning`
 														? "Đang đổi"
 														: getImageTuningButtonLabel(
 																row.image_tuning_profile,
@@ -390,7 +391,8 @@ export default function EdgeCamerasView() {
 															`${row.camera_id}:`,
 														)
 													}>
-													{busyAction === `${row.camera_id}:toggle`
+													{busyAction ===
+													`${row.camera_id}:toggle`
 														? "Đang gửi..."
 														: isStreamStarted(row)
 															? "Stop Stream"
