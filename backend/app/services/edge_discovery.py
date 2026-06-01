@@ -66,6 +66,25 @@ def _safe_int(value: Any, default: int) -> int:
     return parsed
 
 
+def _derive_stream_state(row: dict[str, Any]) -> str:
+    explicit = str(row.get("stream_state") or "").strip().lower()
+    if explicit:
+        return explicit
+    if row.get("profile_change_pending") is True:
+        return "profile_switching"
+    if str(row.get("status") or "").strip().lower() == "offline":
+        return "offline"
+    if row.get("stream_enabled") is False:
+        return "stopped"
+    if row.get("stream_running") is True:
+        return "running"
+    if str(row.get("node_status") or "").strip().upper() == "ERROR":
+        return "error"
+    if str(row.get("status") or "").strip().lower() == "online":
+        return "starting"
+    return "unknown"
+
+
 def _decode_txt_properties(raw: Any) -> dict[str, str]:
     if not isinstance(raw, dict):
         return {}
@@ -203,7 +222,10 @@ class EdgeDiscoveryService:
             updated["node_status"] = "OFFLINE"
             updated["stream_enabled"] = False
             updated["stream_running"] = False
+            updated["stream_state"] = "offline"
+            updated["profile_change_pending"] = False
             updated["last_checked"] = _utcnow_iso()
+            updated["stream_state"] = _derive_stream_state(updated)
             self._registry[camera_id] = updated
 
     async def proxy_stream_action(self, camera_id: str, action: str) -> dict[str, Any]:
@@ -365,12 +387,25 @@ class EdgeDiscoveryService:
                     updated["stream_enabled"] = bool(edge_payload.get("stream_enabled"))
                 if "stream_running" in edge_payload:
                     updated["stream_running"] = bool(edge_payload.get("stream_running"))
+                if "stream_state" in edge_payload:
+                    updated["stream_state"] = str(edge_payload.get("stream_state") or "").strip().lower() or None
                 if "fps_estimate" in edge_payload:
                     try:
                         updated["edge_fps"] = float(edge_payload.get("fps_estimate"))
                     except (TypeError, ValueError):
                         pass
+                for field in (
+                    "profile_change_pending",
+                    "profile_change_request_id",
+                    "profile_change_previous_profile",
+                    "profile_change_target_profile",
+                    "profile_change_requested_at",
+                    "profile_change_last_error",
+                ):
+                    if field in edge_payload:
+                        updated[field] = edge_payload.get(field)
 
+            updated["stream_state"] = _derive_stream_state(updated)
             self._registry[camera_id] = updated
 
     def _apply_image_tuning_hint(self, *, camera_id: str, edge_payload: dict[str, Any]) -> None:
@@ -387,11 +422,24 @@ class EdgeDiscoveryService:
                     updated["stream_enabled"] = bool(edge_payload.get("stream_enabled"))
                 if "stream_running" in edge_payload:
                     updated["stream_running"] = bool(edge_payload.get("stream_running"))
+                if "stream_state" in edge_payload:
+                    updated["stream_state"] = str(edge_payload.get("stream_state") or "").strip().lower() or None
                 if "fps_estimate" in edge_payload:
                     try:
                         updated["edge_fps"] = float(edge_payload.get("fps_estimate"))
                     except (TypeError, ValueError):
                         pass
+                for field in (
+                    "profile_change_pending",
+                    "profile_change_request_id",
+                    "profile_change_previous_profile",
+                    "profile_change_target_profile",
+                    "profile_change_requested_at",
+                    "profile_change_last_error",
+                ):
+                    if field in edge_payload:
+                        updated[field] = edge_payload.get(field)
+            updated["stream_state"] = _derive_stream_state(updated)
             self._registry[camera_id] = updated
 
     def _build_action_candidate_urls(self, *, item: dict[str, Any], path: str) -> list[str]:
@@ -807,6 +855,13 @@ class EdgeDiscoveryService:
             "node_status": "ONLINE",
             "stream_enabled": None,
             "stream_running": None,
+            "stream_state": "unknown",
+            "profile_change_pending": False,
+            "profile_change_request_id": None,
+            "profile_change_previous_profile": None,
+            "profile_change_target_profile": None,
+            "profile_change_requested_at": None,
+            "profile_change_last_error": None,
             "last_seen": now_iso,
             "last_checked": now_iso,
             "discovery_source": "identity_probe",
@@ -920,6 +975,13 @@ class EdgeDiscoveryService:
             "node_status": None,
             "stream_enabled": None,
             "stream_running": None,
+            "stream_state": "unknown",
+            "profile_change_pending": False,
+            "profile_change_request_id": None,
+            "profile_change_previous_profile": None,
+            "profile_change_target_profile": None,
+            "profile_change_requested_at": None,
+            "profile_change_last_error": None,
             "last_seen": now_iso,
             "last_checked": now_iso,
             "discovery_source": "dns_sd",
@@ -956,6 +1018,8 @@ class EdgeDiscoveryService:
                     updated["stream_enabled"] = bool(health_payload.get("stream_enabled"))
                 if "stream_running" in health_payload:
                     updated["stream_running"] = bool(health_payload.get("stream_running"))
+                if "stream_state" in health_payload:
+                    updated["stream_state"] = str(health_payload.get("stream_state") or "").strip().lower() or None
                 if "fps_estimate" in health_payload:
                     try:
                         updated["edge_fps"] = float(health_payload.get("fps_estimate"))
@@ -974,6 +1038,12 @@ class EdgeDiscoveryService:
                     "watchdog_latched",
                     "active_interface",
                     "uptime_s",
+                    "profile_change_pending",
+                    "profile_change_request_id",
+                    "profile_change_previous_profile",
+                    "profile_change_target_profile",
+                    "profile_change_requested_at",
+                    "profile_change_last_error",
                 ):
                     if field in health_payload:
                         updated[field] = health_payload.get(field)
@@ -987,6 +1057,7 @@ class EdgeDiscoveryService:
             now_iso = _utcnow_iso()
             updated["last_seen"] = now_iso
             updated["last_checked"] = now_iso
+            updated["stream_state"] = _derive_stream_state(updated)
             self._registry[camera_id] = updated
 
     def _mark_camera_offline(self, camera_id: str) -> None:
@@ -999,7 +1070,10 @@ class EdgeDiscoveryService:
             updated["node_status"] = "OFFLINE"
             updated["stream_enabled"] = False
             updated["stream_running"] = False
+            updated["stream_state"] = "offline"
+            updated["profile_change_pending"] = False
             updated["last_checked"] = _utcnow_iso()
+            updated["stream_state"] = _derive_stream_state(updated)
             self._registry[camera_id] = updated
 
     def _http_json_request(self, url: str, method: str, timeout_s: float | None = None) -> dict[str, Any]:

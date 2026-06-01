@@ -231,6 +231,11 @@ class CameraNodeApp:
             self._display.set_image_tuning_profile(persisted_profile)
 
         stream_enabled = self._supervisor.is_stream_enabled()
+        profile_change_request_id = self._state.begin_profile_change(
+            previous_profile=previous_profile,
+            target_profile=persisted_profile,
+            pending_restart=stream_enabled,
+        )
         restart_requested = False
         if stream_enabled:
             restart_requested = self._supervisor.request_restart(
@@ -244,12 +249,14 @@ class CameraNodeApp:
                     persisted_profile,
                 )
             else:
+                self._state.finish_profile_change(error="stream restart request rejected")
                 self._logger.warning(
                     "Image tuning profile changed: %s -> %s (restart request rejected).",
                     previous_profile,
                     persisted_profile,
                 )
         else:
+            self._state.finish_profile_change()
             self._logger.info(
                 "Image tuning profile changed: %s -> %s (stream currently disabled).",
                 previous_profile,
@@ -261,8 +268,11 @@ class CameraNodeApp:
             "status": "accepted",
             "previous_image_tuning_profile": previous_profile,
             "image_tuning_profile": persisted_profile,
+            "profile_change_request_id": profile_change_request_id,
+            "profile_change_pending": snapshot.profile_change_pending,
             "stream_enabled": snapshot.stream_enabled,
             "stream_running": snapshot.stream_running,
+            "stream_state": snapshot.stream_state,
             "stream_restart_requested": restart_requested,
             "fps_estimate": snapshot.fps_estimate,
         }

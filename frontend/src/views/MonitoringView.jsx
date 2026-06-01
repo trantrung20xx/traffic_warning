@@ -8,6 +8,7 @@ import {
 	connectTracks,
 	connectViolations,
 	fetchCameraDetail,
+	fetchEdgeCamera,
 	fetchCameraStreamEndpoints,
 	fetchViolationDetail,
 	getCameraPreviewUrl,
@@ -41,6 +42,33 @@ const DEFAULT_MONITORING_UI_CONFIG = {
 		poll_interval_ms: 500,
 	},
 };
+
+const EDGE_PROFILE_LABELS = Object.freeze({
+	normal: "Normal",
+	low_light: "Low Light",
+	bright_scene: "Bright Scene",
+	sharpness_safe: "Sharpness Safe",
+	disabled: "Disabled",
+});
+
+function normalizeEdgeRuntime(raw) {
+	if (!raw || typeof raw !== "object") return null;
+	const streamState = String(raw.stream_state || "")
+		.trim()
+		.toLowerCase();
+	return {
+		...raw,
+		stream_state: streamState || "unknown",
+		profile_change_pending: raw.profile_change_pending === true,
+	};
+}
+
+function formatProfileLabel(profile) {
+	const key = String(profile || "")
+		.trim()
+		.toLowerCase();
+	return EDGE_PROFILE_LABELS[key] || key || "Unknown";
+}
 
 function toFiniteNumber(value, fallback) {
 	// Chuẩn hóa input số từ API/UI, fallback khi NaN/Infinity.
@@ -210,6 +238,7 @@ export default function MonitoringView({
 	const [previewError, setPreviewError] = useState("");
 	const [streamEndpoints, setStreamEndpoints] = useState(null);
 	const [streamEndpointsLoaded, setStreamEndpointsLoaded] = useState(false);
+	const [edgeRuntime, setEdgeRuntime] = useState(null);
 	const [activePreviewTransport, setActivePreviewTransport] = useState("none");
 	const [previewReady, setPreviewReady] = useState(false);
 	const [realtimeError, setRealtimeError] = useState("");
@@ -292,6 +321,7 @@ export default function MonitoringView({
 			setPreviewError("");
 			setStreamEndpoints(null);
 			setStreamEndpointsLoaded(false);
+			setEdgeRuntime(null);
 			setActivePreviewTransport("none");
 			setPreviewReady(false);
 			setRealtimeError("");
@@ -309,6 +339,7 @@ export default function MonitoringView({
 		setPreviewError("");
 		setStreamEndpoints(null);
 		setStreamEndpointsLoaded(false);
+		setEdgeRuntime(null);
 		setActivePreviewTransport("none");
 		setPreviewReady(false);
 		setRealtimeError("");
@@ -321,6 +352,11 @@ export default function MonitoringView({
 				setDetail(nextDetail);
 				setStreamEndpoints(nextStreamEndpoints);
 				setStreamEndpointsLoaded(true);
+				setEdgeRuntime(
+					normalizeEdgeRuntime(
+						nextDetail?.edge_runtime || nextStreamEndpoints?.edge_runtime || null,
+					),
+				);
 				const uiConfig = normalizeMonitoringUiConfig(nextDetail?.ui?.monitoring);
 				setTrajectoryLimit(uiConfig.trajectory.default_limit);
 			})
@@ -329,6 +365,7 @@ export default function MonitoringView({
 				setDetail(null);
 				setStreamEndpoints(null);
 				setStreamEndpointsLoaded(true);
+				setEdgeRuntime(null);
 				setCameraDetailError(
 					error?.message || "Không thể tải cấu hình camera hoặc backend đang offline.",
 				);
@@ -349,6 +386,29 @@ export default function MonitoringView({
 			active = false;
 		};
 	}, [configRevision, selectedCameraId]);
+
+	useEffect(() => {
+		if (!selectedCameraId) return undefined;
+		let active = true;
+
+		const syncEdgeRuntime = async () => {
+			try {
+				const snapshot = await fetchEdgeCamera(selectedCameraId);
+				if (!active) return;
+				setEdgeRuntime(normalizeEdgeRuntime(snapshot));
+			} catch {
+				if (!active) return;
+				// Camera có thể không phải edge source hoặc edge tạm mất mạng: giữ trạng thái gần nhất.
+			}
+		};
+
+		syncEdgeRuntime();
+		const timer = window.setInterval(syncEdgeRuntime, 1800);
+		return () => {
+			active = false;
+			window.clearInterval(timer);
+		};
+	}, [selectedCameraId]);
 
 	const updateLiveTrajectories = (nextVehicles) => {
 		if (!showTrajectoryOverlayRef.current) {
@@ -720,7 +780,10 @@ export default function MonitoringView({
 		: null;
 	const cameraLocationRoadName = camera?.location?.road_name || "-";
 	const cameraLocationIntersection = camera?.location?.intersection_name || "";
-	const previewTransportLabel =
+	const edgeRuntimeSnapshot = normalizeEdgeRuntime(
+		edgeRuntime || detail?.edge_runtime || streamEndpoints?.edge_runtime || null,
+	);
+	const previewTransportBaseLabel =
 		activePreviewTransport === "webrtc"
 			? "Video realtime · WebRTC"
 			: activePreviewTransport === "hls"
@@ -728,6 +791,22 @@ export default function MonitoringView({
 				: activePreviewTransport === "mjpeg"
 					? "Preview fallback · MJPEG"
 					: "Đang chuẩn bị luồng video";
+	const profileSwitchPending = edgeRuntimeSnapshot?.profile_change_pending === true;
+	const previewTransportLabel = profileSwitchPending
+		? `Đang áp dụng profile ${formatProfileLabel(edgeRuntimeSnapshot?.profile_change_target_profile)} · ${previewTransportBaseLabel}`
+		: previewTransportBaseLabel;
+	const previewTransportBadgeClass = profileSwitchPending
+		? "badge warning monitor-trajectory-status"
+		: activePreviewTransport === "webrtc"
+			? "badge success monitor-trajectory-status"
+			: activePreviewTransport === "hls"
+				? "badge warning monitor-trajectory-status"
+				: "badge subtle monitor-trajectory-status";
+	const edgeRuntimeStatusMessage = profileSwitchPending
+		? `Pi 5 đang đổi profile (${formatProfileLabel(edgeRuntimeSnapshot?.profile_change_previous_profile)} -> ${formatProfileLabel(edgeRuntimeSnapshot?.profile_change_target_profile)}), stream sẽ tự đồng bộ lại.`
+		: edgeRuntimeSnapshot?.stream_state
+			? `Trạng thái stream edge: ${String(edgeRuntimeSnapshot.stream_state).toUpperCase()}`
+			: "";
 	const orderedVehicles = [...vehicles]
 		.map((vehicle) => {
 			if (!vehicleSeenOrderRef.current.has(vehicle.vehicle_id)) {
@@ -897,13 +976,7 @@ export default function MonitoringView({
 										: "Theo dõi quỹ đạo đang tắt"}
 								</div>
 								<div
-									className={
-										activePreviewTransport === "webrtc"
-											? "badge success monitor-trajectory-status"
-											: activePreviewTransport === "hls"
-												? "badge warning monitor-trajectory-status"
-												: "badge subtle monitor-trajectory-status"
-									}>
+									className={previewTransportBadgeClass}>
 									<AppIcon name="video" />
 									{previewTransportLabel}
 								</div>
@@ -956,6 +1029,11 @@ export default function MonitoringView({
 							</div>
 							{previewError ? (
 								<div className="message-bar warning">{previewError}</div>
+							) : null}
+							{!previewError && edgeRuntimeStatusMessage ? (
+								<div className={profileSwitchPending ? "message-bar warning" : "message-bar"}>
+									{edgeRuntimeStatusMessage}
+								</div>
 							) : null}
 						</>
 					) : null}

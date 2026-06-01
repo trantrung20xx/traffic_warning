@@ -3,6 +3,7 @@ from __future__ import annotations
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
@@ -68,6 +69,13 @@ class HealthSnapshot:
     watchdog_latched: bool
     active_interface: str | None
     service_version: str
+    stream_state: str
+    profile_change_pending: bool
+    profile_change_request_id: str | None
+    profile_change_previous_profile: str | None
+    profile_change_target_profile: str | None
+    profile_change_requested_at: str | None
+    profile_change_last_error: str | None
 
     def to_health_dict(self) -> dict[str, Any]:
         return {
@@ -94,6 +102,13 @@ class HealthSnapshot:
             "watchdog_latched": self.watchdog_latched,
             "active_interface": self.active_interface,
             "service_version": self.service_version,
+            "stream_state": self.stream_state,
+            "profile_change_pending": self.profile_change_pending,
+            "profile_change_request_id": self.profile_change_request_id,
+            "profile_change_previous_profile": self.profile_change_previous_profile,
+            "profile_change_target_profile": self.profile_change_target_profile,
+            "profile_change_requested_at": self.profile_change_requested_at,
+            "profile_change_last_error": self.profile_change_last_error,
         }
 
 
@@ -129,6 +144,39 @@ class NodeState:
         self._disk_percent: float | None = None
         self._throttled_raw: str | None = None
         self._undervoltage: bool | None = None
+        self._stream_state = "starting"
+        self._profile_change_pending = False
+        self._profile_change_request_id: str | None = None
+        self._profile_change_previous_profile: str | None = None
+        self._profile_change_target_profile: str | None = None
+        self._profile_change_requested_at: str | None = None
+        self._profile_change_last_error: str | None = None
+        self._recompute_stream_state_unlocked()
+
+    @staticmethod
+    def _utcnow_iso() -> str:
+        return datetime.now(timezone.utc).isoformat()
+
+    def _recompute_stream_state_unlocked(self) -> None:
+        if self._status == NodeStatus.SHUTTING_DOWN:
+            self._stream_state = "shutting_down"
+            return
+        if self._watchdog_latched:
+            self._stream_state = "watchdog_latched"
+            return
+        if not self._stream_enabled:
+            self._stream_state = "stopped"
+            return
+        if self._profile_change_pending:
+            self._stream_state = "profile_switching"
+            return
+        if self._stream_running:
+            self._stream_state = "running"
+            return
+        if self._status == NodeStatus.ERROR:
+            self._stream_state = "error"
+            return
+        self._stream_state = "starting"
 
     @property
     def identity(self) -> RuntimeIdentity:
@@ -145,12 +193,14 @@ class NodeState:
             if next_status not in _ALLOWED_TRANSITIONS[self._status]:
                 return False
             self._status = next_status
+            self._recompute_stream_state_unlocked()
             return True
 
     def set_error(self, message: str) -> None:
         with self._lock:
             self._last_error = message
             self._status = NodeStatus.ERROR
+            self._recompute_stream_state_unlocked()
 
     def clear_error(self) -> None:
         with self._lock:
@@ -158,12 +208,14 @@ class NodeState:
             self._watchdog_latched = False
             if self._status == NodeStatus.ERROR:
                 self._status = NodeStatus.ONLINE
+            self._recompute_stream_state_unlocked()
 
     def set_watchdog_latched(self, latched: bool) -> None:
         with self._lock:
             self._watchdog_latched = latched
             if latched:
                 self._status = NodeStatus.ERROR
+            self._recompute_stream_state_unlocked()
 
     def set_stream_running(self, running: bool) -> None:
         with self._lock:
@@ -172,10 +224,17 @@ class NodeState:
                 self._status = NodeStatus.STREAMING
             if not running and self._status == NodeStatus.STREAMING:
                 self._status = NodeStatus.WARNING
+            if running and self._profile_change_pending:
+                # Hoàn tất trạng thái "đang đổi profile" sau khi stream đã chạy lại.
+                self._profile_change_pending = False
+            self._recompute_stream_state_unlocked()
 
     def set_stream_enabled(self, enabled: bool) -> None:
         with self._lock:
             self._stream_enabled = enabled
+            if not enabled:
+                self._profile_change_pending = False
+            self._recompute_stream_state_unlocked()
 
     def set_image_tuning_profile(self, profile: str) -> None:
         with self._lock:
@@ -201,6 +260,7 @@ class NodeState:
                 self._last_error = detail
                 if self._status != NodeStatus.ERROR:
                     self._status = NodeStatus.WARNING
+            self._recompute_stream_state_unlocked()
 
     def set_metrics(
         self,
@@ -233,6 +293,32 @@ class NodeState:
             self._last_error = message
             if self._status not in {NodeStatus.ERROR, NodeStatus.SHUTTING_DOWN}:
                 self._status = NodeStatus.WARNING
+            self._recompute_stream_state_unlocked()
+
+    def begin_profile_change(
+        self,
+        *,
+        previous_profile: str,
+        target_profile: str,
+        pending_restart: bool,
+    ) -> str:
+        with self._lock:
+            request_id = f"profile-{int(time.time() * 1000)}"
+            self._profile_change_request_id = request_id
+            self._profile_change_previous_profile = str(previous_profile).strip().lower()
+            self._profile_change_target_profile = str(target_profile).strip().lower()
+            self._profile_change_requested_at = self._utcnow_iso()
+            self._profile_change_last_error = None
+            self._profile_change_pending = bool(pending_restart)
+            self._recompute_stream_state_unlocked()
+            return request_id
+
+    def finish_profile_change(self, *, error: str | None = None) -> None:
+        with self._lock:
+            self._profile_change_pending = False
+            if error:
+                self._profile_change_last_error = str(error)
+            self._recompute_stream_state_unlocked()
 
     def get_status(self) -> NodeStatus:
         with self._lock:
@@ -265,4 +351,11 @@ class NodeState:
                 watchdog_latched=self._watchdog_latched,
                 active_interface=self._active_interface,
                 service_version=self._service_version,
+                stream_state=self._stream_state,
+                profile_change_pending=self._profile_change_pending,
+                profile_change_request_id=self._profile_change_request_id,
+                profile_change_previous_profile=self._profile_change_previous_profile,
+                profile_change_target_profile=self._profile_change_target_profile,
+                profile_change_requested_at=self._profile_change_requested_at,
+                profile_change_last_error=self._profile_change_last_error,
             )

@@ -301,6 +301,7 @@ class ProcessSupervisor:
             self._no_frame_warning_since = 0.0
             self._state.set_stream_running(True)
             self._state.transition(NodeStatus.STREAMING)
+            self._state.finish_profile_change()
         except PipelineStartError as exc:
             if counted_this_attempt and not exc.count_toward_watchdog and self._restart_history:
                 self._restart_history.pop()
@@ -308,8 +309,10 @@ class ProcessSupervisor:
             self._next_retry_monotonic = time.monotonic() + exc.retry_after_s
             self._state.set_stream_running(False)
             self._state.set_warning(f"Restart failed: {exc}")
+            self._state.finish_profile_change(error=str(exc))
         except Exception as exc:
             # Nếu khởi động lại lỗi thì giữ trạng thái cảnh báo để hiện trên màn hình chẩn đoán.
             self._next_retry_monotonic = time.monotonic() + retry_after_s
             self._state.set_stream_running(False)
             self._state.set_warning(f"Restart failed: {exc}")
+            self._state.finish_profile_change(error=str(exc))

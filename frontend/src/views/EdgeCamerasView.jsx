@@ -65,6 +65,10 @@ function getStatusBadgeClass(status) {
 }
 
 function normalizeStreamState(row) {
+	const explicitState = String(row?.stream_state || "")
+		.trim()
+		.toLowerCase();
+	if (explicitState) return explicitState;
 	if (row?.stream_running === true) return "running";
 	if (row?.stream_enabled === true) return "starting";
 	if (row?.stream_enabled === false) return "stopped";
@@ -73,6 +77,10 @@ function normalizeStreamState(row) {
 
 function isStreamStarted(row) {
 	return row?.stream_running === true;
+}
+
+function isProfileChangePending(row) {
+	return row?.profile_change_pending === true;
 }
 
 function isEdgeOnline(row) {
@@ -351,7 +359,14 @@ export default function EdgeCamerasView() {
 												</div>
 											) : null}
 										</td>
-										<td>{normalizeStreamState(row)}</td>
+										<td>
+											{normalizeStreamState(row)}
+											{isProfileChangePending(row) ? (
+												<div className="edge-camera-node-status">
+													{`profile -> ${String(row.profile_change_target_profile || row.image_tuning_profile || "").toLowerCase() || "unknown"}`}
+												</div>
+											) : null}
+										</td>
 										<td>{formatLastSeen(row.last_seen)}</td>
 										<td className="edge-camera-actions">
 											<div className="edge-camera-actions-inner">
@@ -363,6 +378,7 @@ export default function EdgeCamerasView() {
 													}}
 													disabled={
 														!isEdgeOnline(row) ||
+														isProfileChangePending(row) ||
 														busyAction.startsWith(
 															`${row.camera_id}:`,
 														)
@@ -370,6 +386,8 @@ export default function EdgeCamerasView() {
 													{busyAction ===
 													`${row.camera_id}:tuning`
 														? "Đang đổi"
+														: isProfileChangePending(row)
+															? "Đang áp dụng..."
 														: getImageTuningButtonLabel(
 																row.image_tuning_profile,
 															)}
@@ -461,6 +479,10 @@ export default function EdgeCamerasView() {
 								</span>
 								<span>{`Lần cuối: ${formatLastSeen(hardwarePopupRow.last_seen)}`}</span>
 								<span>{`Node: ${hardwarePopupRow.node_status || "-"}`}</span>
+								<span>{`Stream: ${normalizeStreamState(hardwarePopupRow)}`}</span>
+								{isProfileChangePending(hardwarePopupRow) ? (
+									<span>{`Profile switching -> ${String(hardwarePopupRow.profile_change_target_profile || hardwarePopupRow.image_tuning_profile || "").toLowerCase() || "-"}`}</span>
+								) : null}
 							</div>
 
 							{hardwareLoading ? (

@@ -246,6 +246,11 @@ def test_proxy_image_tuning_cycle_updates_registry(monkeypatch) -> None:
             "image_tuning_profile": "low_light",
             "stream_enabled": True,
             "stream_running": True,
+            "stream_state": "profile_switching",
+            "profile_change_pending": True,
+            "profile_change_request_id": "profile-123",
+            "profile_change_previous_profile": "normal",
+            "profile_change_target_profile": "low_light",
         }
 
     monkeypatch.setattr(discovery, "_http_json_request", _fake_http_request)
@@ -256,6 +261,9 @@ def test_proxy_image_tuning_cycle_updates_registry(monkeypatch) -> None:
     assert result["camera_id"] == "cam_tuning"
     assert result["action"] == "image_tuning_cycle"
     assert discovery._registry["cam_tuning"]["image_tuning_profile"] == "low_light"
+    assert discovery._registry["cam_tuning"]["stream_state"] == "profile_switching"
+    assert discovery._registry["cam_tuning"]["profile_change_pending"] is True
+    assert discovery._registry["cam_tuning"]["profile_change_request_id"] == "profile-123"
     assert any("/api/image-tuning/cycle" in url for url in called_urls)
 
 

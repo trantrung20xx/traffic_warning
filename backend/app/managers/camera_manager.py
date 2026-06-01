@@ -76,6 +76,35 @@ class CameraManager:
         # Injection nhẹ để runtime có thể lấy fallback IP cho RTSP .local khi cần.
         self._edge_discovery = edge_discovery
 
+    def _get_edge_runtime_snapshot(self, camera_id: str) -> dict[str, Any] | None:
+        discovery = self._edge_discovery
+        if discovery is None:
+            return None
+        try:
+            item = discovery.get_camera(camera_id)
+        except Exception:
+            return None
+        if not isinstance(item, dict):
+            return None
+        return {
+            "camera_id": camera_id,
+            "status": item.get("status"),
+            "node_status": item.get("node_status"),
+            "stream_enabled": item.get("stream_enabled"),
+            "stream_running": item.get("stream_running"),
+            "stream_state": item.get("stream_state"),
+            "image_tuning_profile": item.get("image_tuning_profile"),
+            "profile_change_pending": item.get("profile_change_pending"),
+            "profile_change_request_id": item.get("profile_change_request_id"),
+            "profile_change_previous_profile": item.get("profile_change_previous_profile"),
+            "profile_change_target_profile": item.get("profile_change_target_profile"),
+            "profile_change_requested_at": item.get("profile_change_requested_at"),
+            "profile_change_last_error": item.get("profile_change_last_error"),
+            "last_error": item.get("last_error"),
+            "last_seen": item.get("last_seen"),
+            "active_interface": item.get("active_interface"),
+        }
+
     @property
     def session_factory(self):
         # Expose session factory cho API layer cần query DB.
@@ -132,6 +161,7 @@ class CameraManager:
             "runtime_applied": camera_id in self._contexts,
             "has_background_image": self.has_background_image(camera_id),
             "config_validation": validation,
+            "edge_runtime": self._get_edge_runtime_snapshot(camera_id),
             "ui": self._ui_payload(),
         }
 
@@ -320,6 +350,7 @@ class CameraManager:
             "stream_path": stream_urls["stream_path"],
             "webrtc": stream_urls["webrtc"],
             "hls": stream_urls["hls"],
+            "edge_runtime": self._get_edge_runtime_snapshot(camera_id),
             # Giữ fallback MJPEG cho trường hợp browser/network không mở được WebRTC/HLS.
             "mjpeg": {
                 "enabled": True,
