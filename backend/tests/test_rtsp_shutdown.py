@@ -151,3 +151,41 @@ def test_reader_ffmpeg_pipe_mode_emits_frames(monkeypatch) -> None:
         assert frame.bgr.shape == (180, 320, 3)
     finally:
         reader.close()
+
+
+def test_reader_ffmpeg_pipe_uses_low_latency_rtsp_flags(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _FakeProc:
+        stdout = None
+
+        def poll(self):
+            return None
+
+    def _fake_popen(command, **kwargs):
+        captured["command"] = list(command)
+        captured["kwargs"] = dict(kwargs)
+        return _FakeProc()
+
+    monkeypatch.setattr("app.rtsp.rtsp_stream.subprocess.Popen", _fake_popen)
+
+    reader = RtspFrameReader.__new__(RtspFrameReader)
+    reader.rtsp_url = "rtsp://127.0.0.1:8554/live"
+    reader.frame_width = 640
+    reader.frame_height = 360
+    reader._ffmpeg_frame_size = int(reader.frame_width) * int(reader.frame_height) * 3
+
+    proc = RtspFrameReader._start_ffmpeg_pipe(reader)
+
+    assert proc is not None
+    command = captured["command"]
+    assert isinstance(command, list)
+    assert "-fflags" in command
+    assert "nobuffer+discardcorrupt" in command
+    assert "-flags" in command
+    assert "low_delay" in command
+    assert "-analyzeduration" in command
+    assert "0" in command
+    assert "-probesize" in command
+    assert "32768" in command
+    assert "-max_delay" in command

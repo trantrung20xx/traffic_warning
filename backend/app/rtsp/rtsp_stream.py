@@ -150,15 +150,26 @@ class RtspFrameReader:
                 self._file_next_deadline_s = None
 
     def _start_ffmpeg_pipe(self) -> subprocess.Popen:
+        # Ưu tiên "latest frame" thay vì độ ổn định theo kiểu buffer sâu để giảm độ trễ realtime.
         command = [
             "ffmpeg",
             "-hide_banner",
             "-loglevel",
             "error",
+            "-fflags",
+            "nobuffer+discardcorrupt",
+            "-flags",
+            "low_delay",
             "-rtsp_transport",
             "tcp",
             "-timeout",
             "2000000",
+            "-probesize",
+            "32768",
+            "-analyzeduration",
+            "0",
+            "-max_delay",
+            "0",
             "-i",
             self.rtsp_url,
             "-an",
