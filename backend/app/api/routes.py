@@ -170,6 +170,13 @@ def create_api_router(manager: CameraManager, edge_discovery: EdgeDiscoveryServi
         except KeyError:
             raise HTTPException(status_code=404, detail="Camera not found")
 
+    @router.get("/api/cameras/{camera_id}/stream-endpoints")
+    def get_camera_stream_endpoints(camera_id: str):
+        try:
+            return manager.get_camera_stream_endpoints(camera_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Camera not found")
+
     @router.post("/api/cameras")
     async def create_camera(payload: dict):
         try:

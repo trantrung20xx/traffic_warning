@@ -6,7 +6,7 @@ import logging
 import socket
 from pathlib import Path
 from typing import Any, Optional
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import quote, urlsplit, urlunsplit
 
 from fastapi import WebSocket
 from app.core.background_images import (
@@ -292,6 +292,35 @@ class CameraManager:
         if ctx is None:
             return None, int(last_seq)
         return ctx.wait_for_preview_after(last_seq=int(last_seq), timeout_s=float(timeout_s))
+
+    def get_camera_stream_endpoints(self, camera_id: str) -> dict[str, Any]:
+        """
+        Trả endpoint phát video thật cho browser (WebRTC/HLS) và fallback MJPEG.
+        Endpoint này chỉ cung cấp URL; luồng AI nhận diện hiện tại không thay đổi.
+        """
+        cam = next((item for item in self.cameras if item.camera_id == camera_id), None)
+        if cam is None:
+            raise KeyError(camera_id)
+
+        runtime_rtsp_url = self._resolve_runtime_rtsp_url(
+            camera_id=cam.camera_id,
+            rtsp_url=cam.rtsp_url,
+        )
+        stream_urls = self._build_browser_stream_urls(runtime_rtsp_url)
+        fallback_preview_path = f"/api/cameras/{camera_id}/preview"
+        return {
+            "camera_id": camera_id,
+            "rtsp_url": cam.rtsp_url,
+            "runtime_rtsp_url": runtime_rtsp_url,
+            "stream_path": stream_urls["stream_path"],
+            "webrtc": stream_urls["webrtc"],
+            "hls": stream_urls["hls"],
+            # Giữ fallback MJPEG cho trường hợp browser/network không mở được WebRTC/HLS.
+            "mjpeg": {
+                "enabled": True,
+                "preview_url": fallback_preview_path,
+            },
+        }
 
     def get_violation_evidence_path(self, relative_path: str) -> Optional[Path]:
         return resolve_evidence_image_path(self.repo_root, relative_path)
@@ -670,6 +699,48 @@ class CameraManager:
             return isinstance(ipaddress.ip_address(value), ipaddress.IPv4Address)
         except ValueError:
             return False
+
+    @staticmethod
+    def _build_browser_stream_urls(rtsp_url: str) -> dict[str, Any]:
+        parsed = urlsplit(str(rtsp_url or "").strip())
+        scheme = str(parsed.scheme or "").lower()
+        host = str(parsed.hostname or "").strip()
+        stream_path = str(parsed.path or "").strip("/")
+
+        disabled = {
+            "enabled": False,
+            "whep_url": None,
+            "player_url": None,
+        }
+        disabled_hls = {
+            "enabled": False,
+            "m3u8_url": None,
+        }
+        if scheme not in {"rtsp", "rtsps"} or not host or not stream_path:
+            return {
+                "stream_path": None,
+                "webrtc": disabled,
+                "hls": disabled_hls,
+            }
+
+        http_scheme = "https" if scheme == "rtsps" else "http"
+        # IPv6 literal khi ghép URL HTTP cần bọc dấu [].
+        host_for_http = f"[{host}]" if ":" in host and not host.startswith("[") else host
+        safe_stream_path = quote(stream_path, safe="/")
+        webrtc_base = f"{http_scheme}://{host_for_http}:8889/{safe_stream_path}"
+        hls_base = f"{http_scheme}://{host_for_http}:8888/{safe_stream_path}"
+        return {
+            "stream_path": f"/{stream_path}",
+            "webrtc": {
+                "enabled": True,
+                "whep_url": f"{webrtc_base}/whep",
+                "player_url": webrtc_base,
+            },
+            "hls": {
+                "enabled": True,
+                "m3u8_url": f"{hls_base}/index.m3u8",
+            },
+        }
 
     def _start_context(self, camera_id: str) -> None:
         cam = next((item for item in self.cameras if item.camera_id == camera_id), None)

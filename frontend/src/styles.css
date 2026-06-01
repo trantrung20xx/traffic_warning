@@ -607,6 +607,20 @@ select {
 .video-preview {
   width: 100%;
   display: block;
+  background: #0a1f30;
+}
+
+.video-preview-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(237, 247, 251, 0.8);
+  background: rgba(6, 17, 27, 0.78);
+  font-size: 14px;
+  letter-spacing: 0;
+  pointer-events: none;
 }
 
 .stack-column,

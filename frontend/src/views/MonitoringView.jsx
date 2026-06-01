@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Hls from "hls.js";
 import AppIcon from "../components/AppIcon";
 import CameraCanvas from "../components/CameraCanvas";
 import StatPill from "../components/StatPill";
@@ -7,9 +8,11 @@ import {
 	connectTracks,
 	connectViolations,
 	fetchCameraDetail,
+	fetchCameraStreamEndpoints,
 	fetchViolationDetail,
 	getCameraPreviewUrl,
 } from "../api";
+import { WhepReader } from "../lib/whepReader";
 import {
 	formatLicensePlateValue,
 	formatTimestamp,
@@ -205,6 +208,10 @@ export default function MonitoringView({
 	const [streamFps, setStreamFps] = useState(null);
 	const [cameraDetailError, setCameraDetailError] = useState("");
 	const [previewError, setPreviewError] = useState("");
+	const [streamEndpoints, setStreamEndpoints] = useState(null);
+	const [streamEndpointsLoaded, setStreamEndpointsLoaded] = useState(false);
+	const [activePreviewTransport, setActivePreviewTransport] = useState("none");
+	const [previewReady, setPreviewReady] = useState(false);
 	const [realtimeError, setRealtimeError] = useState("");
 	const [selectedViolation, setSelectedViolation] = useState(null);
 	const [showTrajectoryOverlay, setShowTrajectoryOverlay] = useState(true);
@@ -218,6 +225,10 @@ export default function MonitoringView({
 	const lastTrackUpdateRef = useRef(0);
 	const liveTrajectoriesRef = useRef(new Map());
 	const [previewSessionToken, setPreviewSessionToken] = useState(0);
+	const videoRef = useRef(null);
+	const whepReaderRef = useRef(null);
+	const hlsRef = useRef(null);
+	const webrtcFallbackAttemptedRef = useRef(false);
 	const showTrajectoryOverlayRef = useRef(true);
 	const trajectoryLimitRef = useRef(
 		DEFAULT_MONITORING_UI_CONFIG.trajectory.default_limit,
@@ -266,16 +277,29 @@ export default function MonitoringView({
 		);
 	}, [previewSessionToken, selectedCameraId]);
 
+	const webrtcWhepUrl = useMemo(() => {
+		return String(streamEndpoints?.webrtc?.whep_url || "");
+	}, [streamEndpoints]);
+
+	const hlsM3u8Url = useMemo(() => {
+		return String(streamEndpoints?.hls?.m3u8_url || "");
+	}, [streamEndpoints]);
+
 	useEffect(() => {
 		if (!selectedCameraId) {
 			setDetail(null);
 			setCameraDetailError("");
 			setPreviewError("");
+			setStreamEndpoints(null);
+			setStreamEndpointsLoaded(false);
+			setActivePreviewTransport("none");
+			setPreviewReady(false);
 			setRealtimeError("");
 			setSelectedViolation(null);
 			setTrajectoryRows([]);
 			setTrajectoryLimit(DEFAULT_MONITORING_UI_CONFIG.trajectory.default_limit);
 			liveTrajectoriesRef.current = new Map();
+			webrtcFallbackAttemptedRef.current = false;
 			return;
 		}
 		let active = true;
@@ -283,17 +307,28 @@ export default function MonitoringView({
 		setDetail(null);
 		setCameraDetailError("");
 		setPreviewError("");
+		setStreamEndpoints(null);
+		setStreamEndpointsLoaded(false);
+		setActivePreviewTransport("none");
+		setPreviewReady(false);
 		setRealtimeError("");
-		fetchCameraDetail(selectedCameraId)
-			.then((nextDetail) => {
+		Promise.all([
+			fetchCameraDetail(selectedCameraId),
+			fetchCameraStreamEndpoints(selectedCameraId).catch(() => null),
+		])
+			.then(([nextDetail, nextStreamEndpoints]) => {
 				if (!active) return;
 				setDetail(nextDetail);
+				setStreamEndpoints(nextStreamEndpoints);
+				setStreamEndpointsLoaded(true);
 				const uiConfig = normalizeMonitoringUiConfig(nextDetail?.ui?.monitoring);
 				setTrajectoryLimit(uiConfig.trajectory.default_limit);
 			})
 			.catch((error) => {
 				if (!active) return;
 				setDetail(null);
+				setStreamEndpoints(null);
+				setStreamEndpointsLoaded(true);
 				setCameraDetailError(
 					error?.message || "Không thể tải cấu hình camera hoặc backend đang offline.",
 				);
@@ -491,17 +526,186 @@ export default function MonitoringView({
 		return () => window.clearInterval(timer);
 	}, [monitoringUiConfig.processing_fps, selectedCameraId]);
 
+	const stopActivePreviewStream = useCallback(() => {
+		const reader = whepReaderRef.current;
+		if (reader) {
+			try {
+				reader.close();
+			} catch {
+				// Ignore close errors during transport switch.
+			}
+			whepReaderRef.current = null;
+		}
+
+		const hls = hlsRef.current;
+		if (hls) {
+			try {
+				hls.destroy();
+			} catch {
+				// Ignore destroy errors.
+			}
+			hlsRef.current = null;
+		}
+
+		const video = videoRef.current;
+		if (video) {
+			try {
+				video.pause();
+			} catch {
+				// Ignore pause errors.
+			}
+			video.removeAttribute("src");
+			video.srcObject = null;
+			video.load();
+		}
+	}, []);
+
 	useEffect(() => {
 		if (!selectedCameraId) {
+			stopActivePreviewStream();
+			setActivePreviewTransport("none");
+			setPreviewReady(false);
 			setPreviewError("");
 			return;
 		}
-		// Mỗi session preview mới cần reset trạng thái lỗi cũ.
-		setPreviewError("");
-	}, [previewUrl, selectedCameraId]);
 
-	const handlePreviewLoad = useCallback(() => {
-		// Với MJPEG, một số browser có thể báo load nhiều lần; chỉ setState khi cần.
+		stopActivePreviewStream();
+		webrtcFallbackAttemptedRef.current = false;
+		setActivePreviewTransport("none");
+		setPreviewReady(false);
+		setPreviewError("");
+		const video = videoRef.current;
+		if (!video) return;
+		video.muted = true;
+		video.autoplay = true;
+		video.playsInline = true;
+
+		const startMjpegFallback = () => {
+			stopActivePreviewStream();
+			setActivePreviewTransport("mjpeg");
+			setPreviewReady(false);
+		};
+
+		const startHlsPlayback = () => {
+			if (!hlsM3u8Url) return false;
+			stopActivePreviewStream();
+			setActivePreviewTransport("hls");
+			setPreviewReady(false);
+			if (Hls.isSupported()) {
+				const hls = new Hls({
+					lowLatencyMode: true,
+					liveSyncDurationCount: 2,
+					liveMaxLatencyDurationCount: 4,
+					maxLiveSyncPlaybackRate: 1.2,
+				});
+				hlsRef.current = hls;
+				hls.on(Hls.Events.MEDIA_ATTACHED, () => {
+					hls.loadSource(hlsM3u8Url);
+				});
+				hls.on(Hls.Events.MANIFEST_PARSED, () => {
+					video.play().catch(() => {
+						// Autoplay may be blocked in some browsers despite mute.
+					});
+				});
+				hls.on(Hls.Events.ERROR, (_, data) => {
+					if (!data?.fatal) return;
+					startMjpegFallback();
+					setPreviewError(
+						"Không phát được HLS realtime. Đang fallback về MJPEG preview.",
+					);
+				});
+				hls.attachMedia(video);
+				return true;
+			}
+			if (video.canPlayType("application/vnd.apple.mpegurl")) {
+				video.src = hlsM3u8Url;
+				video.play().catch(() => {
+					// Autoplay may be blocked in some browsers despite mute.
+				});
+				return true;
+			}
+			return false;
+		};
+
+		const startWebRtcPlayback = () => {
+			if (!webrtcWhepUrl || typeof RTCPeerConnection === "undefined") {
+				return false;
+			}
+			stopActivePreviewStream();
+			setActivePreviewTransport("webrtc");
+			setPreviewReady(false);
+			whepReaderRef.current = new WhepReader({
+				url: webrtcWhepUrl,
+				onTrack: (event) => {
+					const stream = event?.streams?.[0];
+					if (!stream) return;
+					if (video.srcObject !== stream) {
+						video.srcObject = stream;
+					}
+					video.play().catch(() => {
+						// Autoplay may be blocked in some browsers despite mute.
+					});
+					setPreviewReady(true);
+					if (previewErrorRef.current) {
+						setPreviewError("");
+					}
+				},
+				onError: (reason) => {
+					if (!webrtcFallbackAttemptedRef.current) {
+						webrtcFallbackAttemptedRef.current = true;
+						if (startHlsPlayback()) {
+							setPreviewError(
+								`WebRTC lỗi (${reason}). Đang chuyển sang HLS realtime.`,
+							);
+							return;
+						}
+					}
+					startMjpegFallback();
+					setPreviewError(
+						`WebRTC lỗi (${reason}). Đang fallback về MJPEG preview.`,
+					);
+				},
+			});
+			return true;
+		};
+
+		if (startWebRtcPlayback()) {
+			return () => {
+				stopActivePreviewStream();
+			};
+		}
+		if (startHlsPlayback()) {
+			return () => {
+				stopActivePreviewStream();
+			};
+		}
+
+		startMjpegFallback();
+		if (streamEndpointsLoaded) {
+			setPreviewError(
+				"Camera chưa có endpoint WebRTC/HLS khả dụng. Đang dùng MJPEG preview.",
+			);
+		}
+		return () => {
+			stopActivePreviewStream();
+		};
+	}, [
+		hlsM3u8Url,
+		previewUrl,
+		selectedCameraId,
+		stopActivePreviewStream,
+		streamEndpointsLoaded,
+		webrtcWhepUrl,
+	]);
+
+	useEffect(() => {
+		return () => {
+			stopActivePreviewStream();
+		};
+	}, [stopActivePreviewStream]);
+
+	const handlePreviewReady = useCallback(() => {
+		setPreviewReady(true);
 		if (previewErrorRef.current) {
 			setPreviewError("");
 		}
@@ -516,6 +720,14 @@ export default function MonitoringView({
 		: null;
 	const cameraLocationRoadName = camera?.location?.road_name || "-";
 	const cameraLocationIntersection = camera?.location?.intersection_name || "";
+	const previewTransportLabel =
+		activePreviewTransport === "webrtc"
+			? "Video realtime · WebRTC"
+			: activePreviewTransport === "hls"
+				? "Video realtime · HLS"
+				: activePreviewTransport === "mjpeg"
+					? "Preview fallback · MJPEG"
+					: "Đang chuẩn bị luồng video";
 	const orderedVehicles = [...vehicles]
 		.map((vehicle) => {
 			if (!vehicleSeenOrderRef.current.has(vehicle.vehicle_id)) {
@@ -592,6 +804,11 @@ export default function MonitoringView({
 
 					{loading && cameras.length === 0 ? (
 						<div className="empty-state">Đang tải danh sách camera...</div>
+					) : null}
+					{selectedCameraId && !cameraDetailError && laneConfig && !previewReady ? (
+						<div className="empty-state slim">
+							Đang kết nối luồng video realtime...
+						</div>
 					) : null}
 					{!selectedCameraId ? (
 						<div className="empty-state">Chưa có camera được cấu hình.</div>
@@ -679,20 +896,51 @@ export default function MonitoringView({
 										? `Quỹ đạo đang theo dõi · ${trajectoryRows.length}`
 										: "Theo dõi quỹ đạo đang tắt"}
 								</div>
+								<div
+									className={
+										activePreviewTransport === "webrtc"
+											? "badge success monitor-trajectory-status"
+											: activePreviewTransport === "hls"
+												? "badge warning monitor-trajectory-status"
+												: "badge subtle monitor-trajectory-status"
+									}>
+									<AppIcon name="video" />
+									{previewTransportLabel}
+								</div>
 							</div>
 							<div className="video-stage">
-								<img
+								<video
+									ref={videoRef}
 									className="video-preview"
-									key={previewUrl || selectedCameraId}
-									alt="Xem trước camera"
-									src={previewUrl}
-									onLoad={handlePreviewLoad}
-									onError={() =>
-										setPreviewError(
-											"Không thể tải preview MJPEG. Hãy kiểm tra backend hoặc camera stream.",
-										)
-									}
+									style={{
+										display:
+											activePreviewTransport === "mjpeg" ? "none" : "block",
+									}}
+									autoPlay
+									muted
+									playsInline
+									onLoadedData={handlePreviewReady}
+									onCanPlay={handlePreviewReady}
 								/>
+								{activePreviewTransport === "mjpeg" ? (
+									<img
+										className="video-preview"
+										key={previewUrl || selectedCameraId}
+										alt="Xem trước camera"
+										src={previewUrl}
+										onLoad={handlePreviewReady}
+										onError={() =>
+											setPreviewError(
+												"Không thể tải preview MJPEG. Hãy kiểm tra backend hoặc camera stream.",
+											)
+										}
+									/>
+								) : null}
+								{activePreviewTransport !== "mjpeg" && !previewReady ? (
+									<div className="video-preview-placeholder">
+										Đang khởi tạo video realtime...
+									</div>
+								) : null}
 								<CameraCanvas
 									overlay
 									frameWidth={laneConfig.frame_width}

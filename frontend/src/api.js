@@ -150,6 +150,10 @@ export async function fetchCameraDetail(cameraId) {
   return await request(`/api/cameras/${cameraId}`);
 }
 
+export async function fetchCameraStreamEndpoints(cameraId) {
+  return await request(`/api/cameras/${cameraId}/stream-endpoints`);
+}
+
 export async function fetchDashboard({ cameraId, fromTs, toTs }) {
   return await request(
     withQuery("/api/analytics/dashboard", {

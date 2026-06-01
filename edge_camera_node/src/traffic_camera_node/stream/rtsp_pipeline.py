@@ -461,8 +461,20 @@ class RtspPipeline:
         env = dict(os.environ)
         env["MTX_RTSPADDRESS"] = f":{self._port}"
         env["MTX_RTMP"] = "false"
-        env["MTX_HLS"] = "false"
-        env["MTX_WEBRTC"] = "false"
+        # Bật HLS/WebRTC để frontend nhận video stream thật thay vì MJPEG frame-by-frame.
+        env["MTX_HLS"] = "true"
+        env["MTX_HLSVARIANT"] = "lowLatency"
+        env["MTX_WEBRTC"] = "true"
+        # Bổ sung host public/LAN để trình duyệt nhận ICE candidates ổn định hơn.
+        extra_hosts: list[str] = []
+        fallback_ip = str(self._identity.fallback_ip or "").strip()
+        if fallback_ip:
+            extra_hosts.append(fallback_ip)
+        mdns_host = str(self._identity.mdns_hostname or "").strip().rstrip(".")
+        if mdns_host:
+            extra_hosts.append(mdns_host)
+        if extra_hosts:
+            env["MTX_WEBRTCADDITIONALHOSTS"] = ",".join(dict.fromkeys(extra_hosts))
         env["MTX_SRT"] = "false"
         # Cho phép publish vào mọi path, tránh lỗi \"path is not configured\" khi không có mediamtx.yml.
         env["MTX_PATHS_ALL_OTHERS_SOURCE"] = "publisher"

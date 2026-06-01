@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.managers.camera_manager import CameraManager
+from app.schemas.camera import CameraConfig, CameraLocation
 
 
 class _FakeEdgeDiscovery:
@@ -81,3 +82,36 @@ def test_rtsp_fallback_returns_none_when_no_registry_match():
     )
 
     assert fallback_ip is None
+
+
+def test_build_browser_stream_urls_from_rtsp_url():
+    urls = CameraManager._build_browser_stream_urls("rtsp://10.10.10.5:8593/cam_01")
+    assert urls["stream_path"] == "/cam_01"
+    assert urls["webrtc"]["enabled"] is True
+    assert urls["webrtc"]["whep_url"] == "http://10.10.10.5:8889/cam_01/whep"
+    assert urls["hls"]["m3u8_url"] == "http://10.10.10.5:8888/cam_01/index.m3u8"
+
+
+def test_get_camera_stream_endpoints_uses_runtime_rtsp_url():
+    manager = _build_manager_with_registry([])
+    manager.cameras = [
+        CameraConfig(
+            camera_id="cam_01",
+            rtsp_url="rtsp://cam-01.local:8593/cam_01",
+            camera_type="intersection",
+            view_direction=None,
+            frame_width=1280,
+            frame_height=720,
+            location=CameraLocation(road_name="Road A"),
+            monitored_lanes=[1],
+        )
+    ]
+    manager._resolve_runtime_rtsp_url = lambda **kwargs: "rtsp://10.10.10.5:8593/cam_01"  # type: ignore[method-assign]
+
+    payload = manager.get_camera_stream_endpoints("cam_01")
+
+    assert payload["camera_id"] == "cam_01"
+    assert payload["runtime_rtsp_url"] == "rtsp://10.10.10.5:8593/cam_01"
+    assert payload["webrtc"]["whep_url"] == "http://10.10.10.5:8889/cam_01/whep"
+    assert payload["hls"]["m3u8_url"] == "http://10.10.10.5:8888/cam_01/index.m3u8"
+    assert payload["mjpeg"]["preview_url"] == "/api/cameras/cam_01/preview"
