@@ -495,9 +495,10 @@ cd /home/pi/traffic_warning/edge_camera_node
 bash scripts/harden_network.sh \
   --wifi-ssid "<SSID>" \
   --wifi-password "<wifi-password>" \
-  --disable-ethernet-autoconnect \
   --disable-wait-online
 ```
+
+Mặc định script sẽ giữ `ethernet-autoconnect=yes`. Chỉ dùng `--disable-ethernet-autoconnect` nếu muốn tắt tự kết nối LAN.
 
 - Nếu log có `no secrets` / `No agents were available`, profile Wi-Fi chưa lưu mật khẩu cho chế độ headless:
 
@@ -505,6 +506,7 @@ bash scripts/harden_network.sh \
 sudo nmcli con delete "<SSID>" 2>/dev/null || true
 sudo nmcli con mod "<SSID>" wifi-sec.key-mgmt wpa-psk
 sudo nmcli con mod "<SSID>" wifi-sec.psk "<wifi-password>"
+sudo nmcli con mod "<SSID>" connection.permissions ""
 sudo nmcli con mod "<SSID>" connection.autoconnect yes
 sudo nmcli con up "<SSID>"
 ```

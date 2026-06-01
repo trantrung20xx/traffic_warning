@@ -15,7 +15,7 @@ What this script does:
   1) Disable Wi-Fi powersave in NetworkManager (improves stability for edge workloads)
   2) Ensure a persistent WPA-PSK profile exists for headless boot
   3) Force Wi-Fi profile autoconnect on selected interface
-  4) Optionally disable Ethernet autoconnect to avoid DHCP churn on unplugged end0
+  4) Keep Ethernet autoconnect enabled by default (or optionally disable it)
   5) Optionally disable NetworkManager-wait-online to avoid boot delays when offline
 EOF
 }
@@ -93,11 +93,14 @@ echo "[2/5] Ensuring Wi-Fi connection profile '${WIFI_SSID}' on ${WIFI_IFACE}...
 if nmcli -t -f NAME connection show | grep -Fxq "${WIFI_SSID}"; then
   run_root nmcli connection modify "${WIFI_SSID}" \
     802-11-wireless.ssid "${WIFI_SSID}" \
+    802-11-wireless.mode infrastructure \
     802-11-wireless-security.key-mgmt wpa-psk \
     802-11-wireless-security.psk "${WIFI_PASSWORD}" \
     connection.interface-name "${WIFI_IFACE}" \
+    connection.permissions "" \
     connection.autoconnect yes \
-    connection.autoconnect-priority 100
+    connection.autoconnect-priority 100 \
+    connection.autoconnect-retries -1
 else
   run_root nmcli device wifi connect "${WIFI_SSID}" \
     password "${WIFI_PASSWORD}" \
@@ -105,8 +108,10 @@ else
     name "${WIFI_SSID}"
   run_root nmcli connection modify "${WIFI_SSID}" \
     connection.interface-name "${WIFI_IFACE}" \
+    connection.permissions "" \
     connection.autoconnect yes \
-    connection.autoconnect-priority 100
+    connection.autoconnect-priority 100 \
+    connection.autoconnect-retries -1
 fi
 
 echo "[3/5] Cleaning duplicate Wi-Fi profiles with same SSID (keep '${WIFI_SSID}')..."
@@ -127,7 +132,11 @@ if [[ "${DISABLE_ETH_AUTOCONNECT}" == "1" ]]; then
     run_root nmcli connection modify "${eth_name}" connection.autoconnect no || true
   done < <(nmcli -t -f NAME,TYPE connection show | awk -F: '$2=="ethernet"{print $1}')
 else
-  echo "[4/5] Skipping Ethernet autoconnect change (flag not set)."
+  echo "[4/5] Ensuring Ethernet autoconnect stays enabled..."
+  while IFS= read -r eth_name; do
+    [[ -z "${eth_name}" ]] && continue
+    run_root nmcli connection modify "${eth_name}" connection.autoconnect yes || true
+  done < <(nmcli -t -f NAME,TYPE connection show | awk -F: '$2=="ethernet"{print $1}')
 fi
 
 echo "[5/5] Restarting NetworkManager and re-activating Wi-Fi profile..."
@@ -144,3 +153,6 @@ echo "Current status:"
 nmcli dev status || true
 ip -4 a show "${WIFI_IFACE}" || true
 ip route || true
+echo
+echo "Profile flags:"
+nmcli -g connection.id,connection.permissions,connection.autoconnect,connection.autoconnect-retries,connection.interface-name,802-11-wireless.ssid,802-11-wireless-security.psk-flags connection show "${WIFI_SSID}" || true
