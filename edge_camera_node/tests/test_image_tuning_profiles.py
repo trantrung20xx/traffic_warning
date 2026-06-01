@@ -252,7 +252,7 @@ def test_build_usb_source_command_applies_tuning_before_capture_mode_resolution(
     command = pipeline._build_usb_source_command(PipelineMode.LIBAV_MPEGTS)
     assert command[0] == "ffmpeg"
     assert "-fflags" in command
-    assert "nobuffer+discardcorrupt" in command
+    assert "nobuffer" in command
     assert "-flags" in command
     assert "low_delay" in command
     assert "-muxdelay" in command

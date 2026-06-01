@@ -600,9 +600,11 @@ class CameraContext:
             license_plate_worker.join(timeout=1.0)
 
     def _submit_preview_frame(self, frame_bgr, frame_timestamp_utc_ms: int) -> None:
-        # Chỉ giữ frame mới nhất; preview không cần xử lý mọi frame như pipeline AI.
+        # Luồng AI là critical path cho detection/tracking, nên không copy frame tại đây.
+        # Worker preview sẽ tự pull snapshot mới nhất từ rtsp_reader (đã copy-safe).
+        del frame_bgr
         with self._preview_pending_lock:
-            self._preview_pending_frame_bgr = frame_bgr
+            self._preview_pending_frame_bgr = None
             self._preview_pending_frame_ts_ms = int(frame_timestamp_utc_ms)
         self._preview_pending_event.set()
 
@@ -1479,8 +1481,8 @@ class CameraContext:
     def _maybe_update_preview(self, frame_bgr, *, source_timestamp_utc_ms: int = 0) -> None:
         """Mã hóa JPEG theo nhịp giới hạn để giao diện web xem được ảnh camera trực tiếp."""
         source_ts = int(source_timestamp_utc_ms or 0)
-        if source_ts > 0 and source_ts == self._last_preview_source_ts_ms:
-            # Không encode lại cùng một frame gốc để tiết kiệm CPU.
+        if source_ts > 0 and source_ts <= self._last_preview_source_ts_ms:
+            # Không cho frame cũ/duplicate ghi đè frame preview mới hơn.
             return
         now = int(time.time() * 1000)
         # Gate theo khoảng thời gian để giữ tốc độ encode ổn định.

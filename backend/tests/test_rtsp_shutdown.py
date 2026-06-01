@@ -153,7 +153,7 @@ def test_reader_ffmpeg_pipe_mode_emits_frames(monkeypatch) -> None:
         reader.close()
 
 
-def test_reader_ffmpeg_pipe_uses_low_latency_rtsp_flags(monkeypatch) -> None:
+def test_reader_ffmpeg_pipe_uses_stable_low_latency_rtsp_flags(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
     class _FakeProc:
@@ -181,11 +181,12 @@ def test_reader_ffmpeg_pipe_uses_low_latency_rtsp_flags(monkeypatch) -> None:
     command = captured["command"]
     assert isinstance(command, list)
     assert "-fflags" in command
-    assert "nobuffer+discardcorrupt" in command
+    assert "nobuffer" in command
     assert "-flags" in command
     assert "low_delay" in command
     assert "-analyzeduration" in command
-    assert "0" in command
+    assert "100000" in command
     assert "-probesize" in command
-    assert "32768" in command
+    assert "131072" in command
     assert "-max_delay" in command
+    assert "250000" in command

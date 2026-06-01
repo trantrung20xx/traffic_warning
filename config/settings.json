@@ -157,9 +157,9 @@
 	"performance": {
 		"preview": {
 			"max_fps": 24.0,
-			"jpeg_quality": 70,
-			"output_width": 1920,
-			"output_height": 1080
+			"jpeg_quality": 65,
+			"output_width": 1080,
+			"output_height": 720
 		},
 		"processing": {
 			"fps_window_s": 1.5
