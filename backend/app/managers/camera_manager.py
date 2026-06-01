@@ -306,12 +306,17 @@ class CameraManager:
             camera_id=cam.camera_id,
             rtsp_url=cam.rtsp_url,
         )
-        stream_urls = self._build_browser_stream_urls(runtime_rtsp_url)
+        browser_rtsp_url = self._resolve_browser_rtsp_url(
+            camera_id=cam.camera_id,
+            rtsp_url=runtime_rtsp_url,
+        )
+        stream_urls = self._build_browser_stream_urls(browser_rtsp_url)
         fallback_preview_path = f"/api/cameras/{camera_id}/preview"
         return {
             "camera_id": camera_id,
             "rtsp_url": cam.rtsp_url,
             "runtime_rtsp_url": runtime_rtsp_url,
+            "browser_rtsp_url": browser_rtsp_url,
             "stream_path": stream_urls["stream_path"],
             "webrtc": stream_urls["webrtc"],
             "hls": stream_urls["hls"],
@@ -635,6 +640,53 @@ class CameraManager:
             host,
             fallback_ip,
         )
+        return resolved_url
+
+    def _resolve_browser_rtsp_url(self, *, camera_id: str, rtsp_url: str) -> str:
+        """
+        Chuẩn hóa URL cho client browser:
+        - Nếu host là `.local`, ưu tiên đổi sang IPv4 fallback trong edge registry.
+        - Lý do: backend có thể resolve mDNS được, nhưng máy chạy browser (nhất là Windows)
+          có thể không resolve `.local`, khiến WebRTC/HLS fail dù pipeline AI vẫn chạy.
+        """
+        raw_url = str(rtsp_url or "").strip()
+        if not raw_url:
+            return raw_url
+        try:
+            parsed = urlsplit(raw_url)
+        except Exception:
+            return raw_url
+        scheme = str(parsed.scheme or "").lower()
+        host = str(parsed.hostname or "").strip().lower().rstrip(".")
+        if scheme not in {"rtsp", "rtsps"} or not host.endswith(".local"):
+            return raw_url
+
+        fallback_ip = self._find_rtsp_host_fallback_ip(
+            camera_id=camera_id,
+            unresolved_host=host,
+            stream_path=parsed.path or "",
+        )
+        if not fallback_ip:
+            return raw_url
+
+        netloc = ""
+        if parsed.username:
+            netloc += parsed.username
+            if parsed.password:
+                netloc += f":{parsed.password}"
+            netloc += "@"
+        netloc += fallback_ip
+        if parsed.port:
+            netloc += f":{parsed.port}"
+        resolved_url = urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
+        logger = getattr(self, "_logger", None)
+        if logger is not None:
+            logger.info(
+                "Using browser stream fallback host for camera %s: %s -> %s",
+                camera_id,
+                host,
+                fallback_ip,
+            )
         return resolved_url
 
     def _find_rtsp_host_fallback_ip(

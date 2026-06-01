@@ -107,11 +107,32 @@ def test_get_camera_stream_endpoints_uses_runtime_rtsp_url():
         )
     ]
     manager._resolve_runtime_rtsp_url = lambda **kwargs: "rtsp://10.10.10.5:8593/cam_01"  # type: ignore[method-assign]
+    manager._resolve_browser_rtsp_url = lambda **kwargs: "rtsp://10.10.10.5:8593/cam_01"  # type: ignore[method-assign]
 
     payload = manager.get_camera_stream_endpoints("cam_01")
 
     assert payload["camera_id"] == "cam_01"
     assert payload["runtime_rtsp_url"] == "rtsp://10.10.10.5:8593/cam_01"
+    assert payload["browser_rtsp_url"] == "rtsp://10.10.10.5:8593/cam_01"
     assert payload["webrtc"]["whep_url"] == "http://10.10.10.5:8889/cam_01/whep"
     assert payload["hls"]["m3u8_url"] == "http://10.10.10.5:8888/cam_01/index.m3u8"
     assert payload["mjpeg"]["preview_url"] == "/api/cameras/cam_01/preview"
+
+
+def test_resolve_browser_rtsp_url_prefers_fallback_ip_for_local_host():
+    manager = _build_manager_with_registry(
+        [
+            {
+                "camera_id": "cam_01",
+                "host": "10.10.10.5",
+                "mdns_host": "cam-01.local",
+                "stream_path": "/cam_01",
+                "ip_address": "10.10.10.5",
+            }
+        ]
+    )
+    resolved = manager._resolve_browser_rtsp_url(
+        camera_id="cam_01",
+        rtsp_url="rtsp://cam-01.local:8593/cam_01",
+    )
+    assert resolved == "rtsp://10.10.10.5:8593/cam_01"

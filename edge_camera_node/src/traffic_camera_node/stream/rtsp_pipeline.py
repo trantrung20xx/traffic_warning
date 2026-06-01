@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 import os
 import re
 import shutil
@@ -465,20 +466,27 @@ class RtspPipeline:
         env["MTX_HLS"] = "true"
         env["MTX_HLSVARIANT"] = "lowLatency"
         env["MTX_WEBRTC"] = "true"
-        # Bổ sung host public/LAN để trình duyệt nhận ICE candidates ổn định hơn.
+        # Chỉ dùng IP literal cho ICE candidates.
+        # Không đưa hostname (đặc biệt *.local) vào additional hosts để tránh lỗi DNS lookup
+        # làm session WebRTC bị đóng dù HLS vẫn chạy.
         extra_hosts: list[str] = []
         fallback_ip = str(self._identity.fallback_ip or "").strip()
-        if fallback_ip:
+        if self._is_ip_literal(fallback_ip):
             extra_hosts.append(fallback_ip)
-        mdns_host = str(self._identity.mdns_hostname or "").strip().rstrip(".")
-        if mdns_host:
-            extra_hosts.append(mdns_host)
         if extra_hosts:
             env["MTX_WEBRTCADDITIONALHOSTS"] = ",".join(dict.fromkeys(extra_hosts))
         env["MTX_SRT"] = "false"
         # Cho phép publish vào mọi path, tránh lỗi \"path is not configured\" khi không có mediamtx.yml.
         env["MTX_PATHS_ALL_OTHERS_SOURCE"] = "publisher"
         return env
+
+    @staticmethod
+    def _is_ip_literal(value: str) -> bool:
+        try:
+            ipaddress.ip_address(str(value or "").strip())
+            return True
+        except ValueError:
+            return False
 
     def _preferred_mode_order(self) -> list[PipelineMode]:
         # USB nguồn đã encode/publish trực tiếp bằng ffmpeg, chỉ cần một mode ổn định.
