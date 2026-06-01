@@ -120,7 +120,7 @@ Edge Camera Node (Raspberry Pi 5)
 
 ### 5.2 Pipeline mỗi frame trong `CameraContext.run_forever()`
 1. `RtspFrameReader.read(only_new=True)` lấy frame mới nhất.
-2. Gửi frame sang worker preview (MJPEG endpoint).
+2. Gửi frame sang worker preview JPEG snapshot (dùng cho fallback MJPEG); frontend ưu tiên transport realtime qua `/api/cameras/{camera_id}/stream-endpoints` (`WebRTC -> HLS -> fallback MJPEG`).
 3. Detect + track:
    - YOLO + ByteTrack (`tracker.track`)
    - stable ID assignment.
@@ -314,7 +314,7 @@ Kết quả: không cần refresh trang để thấy plate/evidence update mới
 ### 11.1 Monitoring
 `frontend/src/views/MonitoringView.jsx`
 - Dùng 2 WS song song: tracks + violations.
-- Hiển thị preview MJPEG + overlay bbox/lane/quỹ đạo.
+- Hiển thị video realtime (ưu tiên WebRTC, fallback HLS, fallback MJPEG) + overlay bbox/lane/quỹ đạo.
 - Vi phạm list realtime có upsert, không append trùng.
 - `ViolationDetailModal` mở theo record đang chọn.
 
@@ -444,6 +444,7 @@ Theo `hardware/leds.py`:
 - `GET /api/health`
 - `GET /api/cameras`
 - `GET /api/cameras/{camera_id}`
+- `GET /api/cameras/{camera_id}/stream-endpoints`
 - `POST /api/cameras`
 - `PUT /api/cameras/{camera_id}`
 - `DELETE /api/cameras/{camera_id}`

@@ -357,6 +357,16 @@ Endpoint:
 - `POST /api/stream/restart`
 - `POST /api/image-tuning/cycle`
 
+`GET /api/health` trả thêm các trường trạng thái để backend/frontend đồng bộ UI khi chuyển profile image tuning:
+
+- `stream_state` (`running`, `starting`, `stopped`, `profile_switching`, `error`, `watchdog_latched`, ...)
+- `profile_change_pending`
+- `profile_change_request_id`
+- `profile_change_previous_profile`
+- `profile_change_target_profile`
+- `profile_change_requested_at`
+- `profile_change_last_error`
+
 Ví dụ:
 
 ```bash
@@ -366,6 +376,23 @@ curl -X POST http://cam-dca632112233.local:8088/api/stream/stop
 curl -X POST http://cam-dca632112233.local:8088/api/stream/start
 curl -X POST http://cam-dca632112233.local:8088/api/stream/restart
 curl -X POST http://cam-dca632112233.local:8088/api/image-tuning/cycle
+```
+
+Ví dụ response khi chuyển profile image tuning:
+
+```json
+{
+	"status": "accepted",
+	"previous_image_tuning_profile": "normal",
+	"image_tuning_profile": "low_light",
+	"profile_change_request_id": "profile-1717268212345",
+	"profile_change_pending": true,
+	"stream_enabled": true,
+	"stream_running": false,
+	"stream_state": "profile_switching",
+	"stream_restart_requested": true,
+	"fps_estimate": 0.0
+}
 ```
 
 `/api/stream/restart` chỉ restart RTSP pipeline do supervisor quản lý, không restart toàn bộ systemd service. Service vẫn dùng systemd để tự chạy lại nếu process edge node thoát.
@@ -425,7 +452,7 @@ Nếu môi trường không resolve được `.local`, dùng IP fallback:
 
 `camera_id` trong server là định danh phần mềm dùng cho lane config, evidence và thống kê; nó có thể khác `camera_id` do edge node tự sinh. Liên kết đến phần cứng được xác định qua `rtsp_url`.
 
-Frontend có màn hình `Edge cameras` để xem health, identity, bật/tắt stream, restart stream và đổi image tuning từ xa. Frontend gọi backend, backend proxy sang Health API trên Raspberry Pi.
+Frontend có màn hình `Edge cameras` để xem health, identity, bật/tắt stream, restart stream và chuyển profile image tuning từ xa. Frontend gọi backend, backend proxy sang Health API trên Raspberry Pi.
 
 ## 10. Lỗi Thường Gặp
 
@@ -467,7 +494,7 @@ FPS thấp:
 
 - Thử `image_tuning.profile = "low_light"` khi tối.
 - Thử `image_tuning.profile = "bright_scene"` khi nắng gắt.
-- Tránh đổi profile liên tục ngoài thực địa.
+- Tránh chuyển profile liên tục ngoài thực địa.
 
 TFT/GPIO lỗi:
 

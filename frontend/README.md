@@ -22,7 +22,7 @@ Frontend là giao diện web để vận hành Traffic Warning. Frontend không 
 | Thống kê | Xem tổng số vi phạm, biểu đồ, lịch sử, chi tiết vi phạm và xuất CSV/XLSX. |
 | Quản lý camera | Tạo/sửa/xóa camera, upload ảnh nền. |
 | Cấu hình làn | Vẽ vùng làn, vùng rẽ, vạch kiểm tra, chiều đi đúng. |
-| Quản lý edge node | Xem health/identity edge camera, bật/tắt/restart stream và đổi image tuning qua backend proxy. |
+| Quản lý edge node | Xem health/identity edge camera, bật/tắt/restart stream và chuyển profile image tuning qua backend proxy. |
 | Kiểm tra cấu hình | Hiển thị cảnh báo nếu vùng làn/vùng rẽ dễ gây nhầm. |
 
 Nguồn dữ liệu:
@@ -30,7 +30,7 @@ Nguồn dữ liệu:
 ```text
 REST API      -> camera, cấu hình, lịch sử, thống kê, export
 WebSocket     -> xe realtime, vi phạm mới và update plate/evidence
-MJPEG preview -> ảnh camera trực tiếp
+Video realtime -> ưu tiên WebRTC (WHEP), fallback HLS, cuối cùng fallback MJPEG
 Edge API      -> trạng thái phần cứng và điều khiển stream edge node
 ```
 
@@ -159,7 +159,8 @@ Chức năng:
 - Xem nhiệt độ, FPS estimate, restart count, watchdog latched và lỗi gần nhất.
 - Rescan edge camera.
 - Bật, tắt hoặc restart stream.
-- Đổi profile image tuning của edge node.
+- Chuyển profile image tuning của edge node.
+- Đồng bộ trạng thái chuyển profile của edge qua `stream_state` và `profile_change_pending`.
 
 ## Cách Cấu Hình Camera Và Làn Trên UI
 
@@ -315,10 +316,11 @@ Validation giúp giảm lỗi cấu hình, nhưng không thay thế việc kiể
 |---|---|
 | `GET /api/cameras` | Load danh sách camera. |
 | `GET /api/cameras/{camera_id}` | Load chi tiết camera, lane config, UI config và validation. |
+| `GET /api/cameras/{camera_id}/stream-endpoints` | Lấy endpoint video realtime (`webrtc`, `hls`, `mjpeg`) và `edge_runtime`. |
 | `POST /api/cameras` | Tạo camera. |
 | `PUT /api/cameras/{camera_id}` | Lưu camera/lane config. |
 | `DELETE /api/cameras/{camera_id}` | Xóa camera. |
-| `GET /api/cameras/{camera_id}/preview` | Hiển thị video preview. |
+| `GET /api/cameras/{camera_id}/preview` | Hiển thị preview fallback MJPEG. |
 | `POST /api/camera/{camera_id}/background-image` | Upload ảnh nền. |
 | `GET /api/camera/{camera_id}/background-image` | Hiển thị ảnh nền. |
 | `DELETE /api/camera/{camera_id}/background-image` | Xóa ảnh nền. |
@@ -333,7 +335,7 @@ Validation giúp giảm lỗi cấu hình, nhưng không thay thế việc kiể
 | `POST /api/edge-cameras/{camera_id}/stream/start` | Bật stream edge camera. |
 | `POST /api/edge-cameras/{camera_id}/stream/stop` | Tắt stream edge camera. |
 | `POST /api/edge-cameras/{camera_id}/stream/restart` | Restart stream edge camera. |
-| `POST /api/edge-cameras/{camera_id}/image-tuning/cycle` | Đổi image tuning profile. |
+| `POST /api/edge-cameras/{camera_id}/image-tuning/cycle` | Chuyển profile image tuning. |
 
 ### WebSocket
 

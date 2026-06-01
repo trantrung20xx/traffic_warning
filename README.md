@@ -119,6 +119,8 @@ Edge camera node trên Raspberry Pi 5 phát RTSP cho backend và cung cấp Heal
 
 Health API edge hỗ trợ `GET /health`, `GET /api/health`, `GET /api/identity` và các lệnh `POST /api/stream/start`, `POST /api/stream/stop`, `POST /api/stream/restart`, `POST /api/image-tuning/cycle`. Frontend hiện gọi qua backend `/api/edge-cameras...`; backend proxy sang edge node để giữ cùng origin API và dễ quản lý nhiều camera.
 
+`/api/health` hiện bao gồm thêm trạng thái đồng bộ stream như `stream_state`, `profile_change_pending`, `profile_change_request_id`, `profile_change_previous_profile`, `profile_change_target_profile` để backend/frontend theo dõi nhất quán khi chuyển profile image tuning.
+
 ## Chạy Hệ Thống
 
 ### 1. Chạy backend
@@ -376,14 +378,14 @@ Frontend có 4 màn hình chính:
 | `Giám sát` | Xem camera realtime, xe đang theo dõi, biển số, hướng đi, vi phạm mới và cập nhật evidence/plate realtime. |
 | `Thống kê` | Xem biểu đồ, lịch sử vi phạm, lọc theo thời gian/camera/biển số, mở chi tiết và export CSV/XLSX. |
 | `Quản lý camera` | Thêm camera, upload ảnh nền, vẽ làn, vẽ vùng rẽ, đặt luật cho từng làn. |
-| `Edge Cameras` | Xem edge node được phát hiện, health, identity, RTSP URL, bật/tắt/restart stream và đổi image tuning. |
+| `Edge Cameras` | Xem edge node được phát hiện, health, identity, RTSP URL, bật/tắt/restart stream và chuyển profile image tuning. |
 
 API chính:
 
 | Loại | Đường dẫn |
 |---|---|
 | Camera | `/api/cameras`, `/api/cameras/{camera_id}` |
-| Preview | `/api/cameras/{camera_id}/preview` |
+| Preview | `/api/cameras/{camera_id}/stream-endpoints`, `/api/cameras/{camera_id}/preview` |
 | Làn | Đi kèm trong `/api/cameras/{camera_id}` dưới `lane_config`. |
 | Vi phạm | `/api/violations/history`, `/api/violations/detail/{id}`, `/api/violations/export`, `/api/violations/evidence/...` |
 | Thống kê | `/api/analytics/dashboard`, `/api/stats` |
