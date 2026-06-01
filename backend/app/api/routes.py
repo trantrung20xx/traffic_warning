@@ -26,6 +26,7 @@ from app.services.edge_discovery import EdgeDiscoveryService, EdgeStreamActionEr
 _PREVIEW_PLACEHOLDER_JPEG = base64.b64decode(
     "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDABALDA4MChAODQ4SERATGCgaGBYWGDEjJR0oOjM9PDkzODdASFxOQERXRTc4UG1RV19iZ2hnPk1xeXBkeFxlZ2P/2wBDARESEhgVGC8aGi9jQjhCY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2P/wAARCAACAAIDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwDiaKKKAP/Z"
 )
+_MJPEG_BOUNDARY_TOKEN = b"traffic_preview_boundary_7f3b9b9b5d4a4a5fa2b0b9d5e1c6"
 
 
 def create_api_router(manager: CameraManager, edge_discovery: EdgeDiscoveryService) -> APIRouter:
@@ -247,7 +248,20 @@ def create_api_router(manager: CameraManager, edge_discovery: EdgeDiscoveryServi
 
         async def frames():
             # Boundary chuẩn của multipart/x-mixed-replace cho MJPEG stream.
-            boundary = b"--frame"
+            boundary = _MJPEG_BOUNDARY_TOKEN
+
+            def _pack_jpeg_part(jpg_bytes: bytes) -> bytes:
+                # Gửi Content-Length để browser tách part ổn định hơn, hạn chế nhấp nháy.
+                return (
+                    b"--"
+                    + boundary
+                    + b"\r\n"
+                    + b"Content-Type: image/jpeg\r\n"
+                    + f"Content-Length: {len(jpg_bytes)}\r\n".encode("ascii")
+                    + b"\r\n"
+                    + jpg_bytes
+                    + b"\r\n"
+                )
             preview_fps = max(float(manager.cfg.preview_max_fps), 0.1)
             wait_timeout_s = max(1.0 / preview_fps, 0.02)
             last_seq = 0
@@ -257,22 +271,12 @@ def create_api_router(manager: CameraManager, edge_discovery: EdgeDiscoveryServi
                     seed_jpg, seed_seq = manager.get_camera_preview_snapshot(camera_id)
                     if seed_jpg is not None and seed_seq > 0:
                         last_seq = int(seed_seq)
-                        yield (
-                            boundary
-                            + b"\r\nContent-Type: image/jpeg\r\n\r\n"
-                            + seed_jpg
-                            + b"\r\n"
-                        )
+                        yield _pack_jpeg_part(seed_jpg)
                         continue
                     if not placeholder_sent:
                         # Gửi frame placeholder ngay khi chưa có ảnh thật để frontend không giữ ảnh camera cũ.
                         placeholder_sent = True
-                        yield (
-                            boundary
-                            + b"\r\nContent-Type: image/jpeg\r\n\r\n"
-                            + _PREVIEW_PLACEHOLDER_JPEG
-                            + b"\r\n"
-                        )
+                        yield _pack_jpeg_part(_PREVIEW_PLACEHOLDER_JPEG)
 
                 jpg, seq = await asyncio.to_thread(
                     manager.wait_camera_preview_after,
@@ -286,15 +290,17 @@ def create_api_router(manager: CameraManager, edge_discovery: EdgeDiscoveryServi
                     continue
                 last_seq = int(seq)
                 if jpg:
-                    yield boundary + b"\r\nContent-Type: image/jpeg\r\n\r\n" + jpg + b"\r\n"
+                    yield _pack_jpeg_part(jpg)
 
         return StreamingResponse(
             frames(),
-            media_type="multipart/x-mixed-replace; boundary=frame",
+            media_type=f"multipart/x-mixed-replace; boundary={_MJPEG_BOUNDARY_TOKEN.decode('ascii')}",
             headers={
                 # Tránh browser/proxy tái sử dụng frame cũ khi đổi camera.
                 "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
                 "Pragma": "no-cache",
+                # Tắt buffering ở reverse proxy trung gian để tránh giật/nhấp nháy do dồn cụm frame.
+                "X-Accel-Buffering": "no",
             },
         )
 

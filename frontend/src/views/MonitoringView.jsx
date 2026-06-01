@@ -222,10 +222,15 @@ export default function MonitoringView({
 	const trajectoryLimitRef = useRef(
 		DEFAULT_MONITORING_UI_CONFIG.trajectory.default_limit,
 	);
+	const previewErrorRef = useRef("");
 	const monitoringUiConfig = useMemo(
 		() => normalizeMonitoringUiConfig(detail?.ui?.monitoring),
 		[detail],
 	);
+
+	useEffect(() => {
+		previewErrorRef.current = previewError || "";
+	}, [previewError]);
 
 	useEffect(() => {
 		const normalizedLimit = clampTrajectoryLimit(
@@ -495,6 +500,13 @@ export default function MonitoringView({
 		setPreviewError("");
 	}, [previewUrl, selectedCameraId]);
 
+	const handlePreviewLoad = useCallback(() => {
+		// Với MJPEG, một số browser có thể báo load nhiều lần; chỉ setState khi cần.
+		if (previewErrorRef.current) {
+			setPreviewError("");
+		}
+	}, []);
+
 	const detailCameraId = detail?.camera?.camera_id || null;
 	const isDetailMatchedSelectedCamera =
 		Boolean(selectedCameraId) && detailCameraId === selectedCameraId;
@@ -674,7 +686,7 @@ export default function MonitoringView({
 									key={previewUrl || selectedCameraId}
 									alt="Xem trước camera"
 									src={previewUrl}
-									onLoad={() => setPreviewError("")}
+									onLoad={handlePreviewLoad}
 									onError={() =>
 										setPreviewError(
 											"Không thể tải preview MJPEG. Hãy kiểm tra backend hoặc camera stream.",
