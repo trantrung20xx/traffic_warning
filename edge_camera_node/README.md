@@ -31,15 +31,15 @@ Ví dụ:
 
 ```json
 {
-  "camera_id": "cam_dca632112233",
-  "node_id": "dca632112233",
-  "mac_address": "dca632112233",
-  "interface": "eth0",
-  "mdns_hostname": "cam-dca632112233.local",
-  "rtsp_port": 8554,
-  "stream_path": "/cam_dca632112233",
-  "fallback_ip": "192.168.1.50",
-  "created_at": "2026-05-09T10:00:00+07:00"
+	"camera_id": "cam_dca632112233",
+	"node_id": "dca632112233",
+	"mac_address": "dca632112233",
+	"interface": "eth0",
+	"mdns_hostname": "cam-dca632112233.local",
+	"rtsp_port": 8554,
+	"stream_path": "/cam_dca632112233",
+	"fallback_ip": "192.168.1.50",
+	"created_at": "2026-05-09T10:00:00+07:00"
 }
 ```
 
@@ -71,58 +71,58 @@ Cấu hình hiện tại:
 
 ```json
 {
-  "camera": {
-    "width": 1920,
-    "height": 1080,
-    "fps": 30
-  },
-  "image_tuning": {
-    "profile": "normal"
-  },
-  "gpio": {
-    "enabled": true,
-    "buttons": {
-      "mode": 5,
-      "restart_stream": 6,
-      "safe_shutdown": 13,
-      "reset_watchdog": 19
-    },
-    "leds": {
-      "online": 17,
-      "warning": 27,
-      "error": 22,
-      "streaming": 23
-    }
-  },
-  "display": {
-    "enabled": true,
-    "update_hz": 1,
-    "spi_bus": 0,
-    "spi_device": 0,
-    "dc_pin": 25,
-    "reset_pin": 24,
-    "backlight_pin": null,
-    "width": 240,
-    "height": 320,
-    "madctl": "0x48",
-    "spi_max_speed_hz": 16000000,
-    "font_size": 14
-  },
-  "stream": {
-    "bitrate": 6000000,
-    "udp_sink": "udp://127.0.0.1:1234?pkt_size=1316",
-    "pipeline_mode": "auto",
-    "source": "usb_v4l2",
-    "usb_device": "auto",
-    "usb_input_format": "auto"
-  },
-  "watchdog": {
-    "fps_warning_threshold": 15
-  },
-  "health_api": {
-    "port": 8088,
-    "allow_restart_endpoint": true
-  }
+	"camera": {
+		"width": 1920,
+		"height": 1080,
+		"fps": 30
+	},
+	"image_tuning": {
+		"profile": "normal"
+	},
+	"gpio": {
+		"enabled": true,
+		"buttons": {
+			"mode": 5,
+			"restart_stream": 6,
+			"safe_shutdown": 13,
+			"reset_watchdog": 19
+		},
+		"leds": {
+			"online": 17,
+			"warning": 27,
+			"error": 22,
+			"streaming": 23
+		}
+	},
+	"display": {
+		"enabled": true,
+		"update_hz": 1,
+		"spi_bus": 0,
+		"spi_device": 0,
+		"dc_pin": 25,
+		"reset_pin": 24,
+		"backlight_pin": null,
+		"width": 240,
+		"height": 320,
+		"madctl": "0x48",
+		"spi_max_speed_hz": 16000000,
+		"font_size": 14
+	},
+	"stream": {
+		"bitrate": 6000000,
+		"udp_sink": "udp://127.0.0.1:1234?pkt_size=1316",
+		"pipeline_mode": "auto",
+		"source": "usb_v4l2",
+		"usb_device": "auto",
+		"usb_input_format": "auto"
+	},
+	"watchdog": {
+		"fps_warning_threshold": 15
+	},
+	"health_api": {
+		"port": 8088,
+		"allow_restart_endpoint": true
+	}
 }
 ```
 
@@ -134,13 +134,13 @@ Thông thường chỉ cần chỉnh:
 - `display.*` nếu đổi chân TFT
 - `stream.bitrate` nếu mạng yếu hoặc hình chưa đủ nét
 - `stream.pipeline_mode`:
-  - `auto`: ưu tiên `libav_mpegts`, tự fallback sang `h264` nếu mode đầu lỗi
-  - `libav_mpegts`: ép dùng `--codec libav --libav-format mpegts`
-  - `h264`: ép dùng H264 thuần từ `rpicam-vid`
+    - `auto`: ưu tiên `libav_mpegts`, tự fallback sang `h264` nếu mode đầu lỗi
+    - `libav_mpegts`: ép dùng `--codec libav --libav-format mpegts`
+    - `h264`: ép dùng H264 thuần từ `rpicam-vid`
 - `stream.source`:
-  - `auto`: tự chọn CSI (`rpicam`) nếu có, fallback USB (`/dev/video*`) nếu không có CSI
-  - `rpi_csi`: ép dùng camera CSI qua `rpicam-vid`
-  - `usb_v4l2`: ép dùng webcam USB qua `ffmpeg -f v4l2`
+    - `auto`: tự chọn CSI (`rpicam`) nếu có, fallback USB (`/dev/video*`) nếu không có CSI
+    - `rpi_csi`: ép dùng camera CSI qua `rpicam-vid`
+    - `usb_v4l2`: ép dùng webcam USB qua `ffmpeg -f v4l2`
 - `stream.usb_device`: `auto` (khuyến nghị) hoặc đường dẫn cụ thể như `/dev/video2`
 - `stream.usb_input_format`: `auto` (khuyến nghị), hoặc `mjpeg`/`yuyv422` tùy webcam
 
@@ -195,10 +195,10 @@ Chức năng nút:
 
 Trạng thái của đèn:
 
-- ONLINE: nhấp nháy khi boot, sáng khi service đang chạy.
-- STREAMING: sáng khi RTSP pipeline đang chạy.
-- WARNING: nhấp nháy chậm khi FPS thấp, mDNS lỗi hoặc stream dừng tạm thời.
-- ERROR: nhấp nháy nhanh khi lỗi nghiêm trọng hoặc watchdog đã latch.
+- ONLINE - Xanh lá cây: nhấp nháy khi boot, sáng khi service đang chạy.
+- STREAMING - Xanh dương: sáng khi RTSP pipeline đang chạy.
+- WARNING - Cam: nhấp nháy chậm khi FPS thấp, mDNS lỗi hoặc stream dừng tạm thời.
+- ERROR - Đỏ: nhấp nháy nhanh khi lỗi nghiêm trọng hoặc watchdog đã latch.
 - SHUTTING_DOWN: tắt toàn bộ đèn.
 
 Lưu ý an toàn:
@@ -374,10 +374,10 @@ Nếu muốn khóa endpoint điều khiển:
 
 ```json
 {
-  "health_api": {
-    "port": 8088,
-    "allow_restart_endpoint": false
-  }
+	"health_api": {
+		"port": 8088,
+		"allow_restart_endpoint": false
+	}
 }
 ```
 
@@ -385,11 +385,11 @@ Nếu muốn dùng token:
 
 ```json
 {
-  "health_api": {
-    "port": 8088,
-    "allow_restart_endpoint": true,
-    "token": "doi_chuoi_bi_mat_o_day"
-  }
+	"health_api": {
+		"port": 8088,
+		"allow_restart_endpoint": true,
+		"token": "doi_chuoi_bi_mat_o_day"
+	}
 }
 ```
 
@@ -405,10 +405,10 @@ Không cần sửa backend server. Trong cấu hình camera của server, nhập
 
 ```json
 {
-  "camera_id": "cam_dca632112233",
-  "rtsp_url": "rtsp://cam-dca632112233.local:8554/cam_dca632112233",
-  "frame_width": 1920,
-  "frame_height": 1080
+	"camera_id": "cam_dca632112233",
+	"rtsp_url": "rtsp://cam-dca632112233.local:8554/cam_dca632112233",
+	"frame_width": 1920,
+	"frame_height": 1080
 }
 ```
 
@@ -416,10 +416,10 @@ Nếu môi trường không resolve được `.local`, dùng IP fallback:
 
 ```json
 {
-  "camera_id": "cam_dca632112233",
-  "rtsp_url": "rtsp://192.168.1.50:8554/cam_dca632112233",
-  "frame_width": 1920,
-  "frame_height": 1080
+	"camera_id": "cam_dca632112233",
+	"rtsp_url": "rtsp://192.168.1.50:8554/cam_dca632112233",
+	"frame_width": 1920,
+	"frame_height": 1080
 }
 ```
 
@@ -479,6 +479,40 @@ Service restart liên tục:
 ```bash
 journalctl -u traffic-camera-node.service -f
 systemctl show traffic-camera-node.service -p NRestarts
+```
+
+Pi không vào lại Wi-Fi sau boot hoặc mất SSH:
+
+```bash
+nmcli dev status
+journalctl -u NetworkManager -n 120 --no-pager
+```
+
+- Cách nhanh nhất để harden NetworkManager cho node headless:
+
+```bash
+cd /home/pi/traffic_warning/edge_camera_node
+bash scripts/harden_network.sh \
+  --wifi-ssid "<SSID>" \
+  --wifi-password "<wifi-password>" \
+  --disable-ethernet-autoconnect \
+  --disable-wait-online
+```
+
+- Nếu log có `no secrets` / `No agents were available`, profile Wi-Fi chưa lưu mật khẩu cho chế độ headless:
+
+```bash
+sudo nmcli con delete "<SSID>" 2>/dev/null || true
+sudo nmcli con mod "<SSID>" wifi-sec.key-mgmt wpa-psk
+sudo nmcli con mod "<SSID>" wifi-sec.psk "<wifi-password>"
+sudo nmcli con mod "<SSID>" connection.autoconnect yes
+sudo nmcli con up "<SSID>"
+```
+
+- Nếu không dùng LAN, tắt auto-connect Ethernet để tránh vòng lặp DHCP trên `end0`:
+
+```bash
+sudo nmcli con mod "Wired connection 1" connection.autoconnect no
 ```
 
 Watchdog latched:
