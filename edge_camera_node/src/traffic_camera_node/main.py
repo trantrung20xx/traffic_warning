@@ -233,7 +233,10 @@ class CameraNodeApp:
         stream_enabled = self._supervisor.is_stream_enabled()
         restart_requested = False
         if stream_enabled:
-            restart_requested = self._supervisor.request_restart()
+            restart_requested = self._supervisor.request_restart(
+                reason="image tuning profile changed",
+                count_toward_watchdog=False,
+            )
             if restart_requested:
                 self._logger.info(
                     "Image tuning profile changed: %s -> %s (stream restart requested).",

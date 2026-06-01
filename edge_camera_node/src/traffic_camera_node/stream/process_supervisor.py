@@ -39,6 +39,10 @@ class ProcessSupervisor:
         self._manual_start_event = threading.Event()
         # Cờ tắt stream thủ công từ API/UI.
         self._manual_stop_event = threading.Event()
+        # Đồng bộ metadata cho lệnh restart thủ công đến từ nhiều luồng khác nhau.
+        self._manual_restart_lock = threading.Lock()
+        self._manual_restart_reason = "manual restart requested"
+        self._manual_restart_counts_toward_watchdog = True
         # Tham chiếu thread giám sát nền.
         self._thread: threading.Thread | None = None
         # Chốt watchdog chặn vòng lặp khởi động lại vô hạn khi lỗi lặp lại.
@@ -54,8 +58,12 @@ class ProcessSupervisor:
         # Đặt lại cờ điều khiển trước khi bắt đầu giám sát.
         self._stop_event.clear()
         self._control_event.clear()
+        self._manual_restart_event.clear()
         self._manual_start_event.clear()
         self._manual_stop_event.clear()
+        with self._manual_restart_lock:
+            self._manual_restart_reason = "manual restart requested"
+            self._manual_restart_counts_toward_watchdog = True
         self._watchdog_latched = False
         self._stream_enabled = True
         self._next_retry_monotonic = 0.0
@@ -92,13 +100,22 @@ class ProcessSupervisor:
         self._pipeline.stop()
         self._state.set_stream_running(False)
 
-    def request_restart(self, force: bool = False) -> bool:
+    def request_restart(
+        self,
+        force: bool = False,
+        *,
+        reason: str = "manual restart requested",
+        count_toward_watchdog: bool = True,
+    ) -> bool:
         if not self._stream_enabled and not force:
             return False
         # Nếu watchdog đang chốt lỗi thì từ chối khởi động lại thông thường.
         if self._watchdog_latched and not force:
             return False
         # Hàng đợi khởi động lại để luồng giám sát xử lý an toàn.
+        with self._manual_restart_lock:
+            self._manual_restart_reason = str(reason or "manual restart requested")
+            self._manual_restart_counts_toward_watchdog = bool(count_toward_watchdog)
         self._manual_restart_event.set()
         self._control_event.set()
         return True
@@ -135,8 +152,7 @@ class ProcessSupervisor:
         self._state.set_watchdog_latched(False)
         self._state.clear_error()
         # Kích hoạt một lần khởi động lại mới sau khi xóa lỗi.
-        self._manual_restart_event.set()
-        self._control_event.set()
+        self.request_restart(force=True, reason="manual watchdog reset", count_toward_watchdog=True)
 
     def _run(self) -> None:
         # Vòng lặp giám sát chính: nhận lệnh, theo dõi health, cập nhật trạng thái.
@@ -169,7 +185,16 @@ class ProcessSupervisor:
             if self._manual_restart_event.is_set():
                 # Tiêu thụ lệnh khởi động lại thủ công.
                 self._manual_restart_event.clear()
-                self._try_restart_with_limits("manual restart requested", ignore_retry_delay=True)
+                with self._manual_restart_lock:
+                    reason = self._manual_restart_reason
+                    count_toward_watchdog = self._manual_restart_counts_toward_watchdog
+                    self._manual_restart_reason = "manual restart requested"
+                    self._manual_restart_counts_toward_watchdog = True
+                self._try_restart_with_limits(
+                    reason,
+                    ignore_retry_delay=True,
+                    force_watchdog_count=count_toward_watchdog,
+                )
 
             health = self._pipeline.health()
             if not self._stream_enabled:
@@ -224,6 +249,7 @@ class ProcessSupervisor:
         reason: str,
         error: Exception | None = None,
         ignore_retry_delay: bool = False,
+        force_watchdog_count: bool | None = None,
     ) -> None:
         # Đánh giá tần suất khởi động lại trong cửa sổ thời gian.
         now = time.monotonic()
@@ -237,6 +263,8 @@ class ProcessSupervisor:
         if isinstance(error, PipelineStartError):
             count_toward_watchdog = error.count_toward_watchdog
             retry_after_s = error.retry_after_s
+        if force_watchdog_count is not None:
+            count_toward_watchdog = bool(force_watchdog_count)
 
         # Cửa sổ trượt ngăn vòng lặp khởi động lại vô hạn gây áp lực CPU/SD.
         counted_this_attempt = False
