@@ -129,9 +129,27 @@ Health API edge hỗ trợ `GET /health`, `GET /api/health`, `GET /api/identity`
 cd backend
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
+scoop install ffmpeg
+ffmpeg -version
 uvicorn app.server:app --host 0.0.0.0 --port 8000
 ```
+
+FFmpeg là dependency hệ thống để giải mã RTSP, được cài riêng với các package
+Python. Nếu Windows không có Scoop, dùng
+`winget install --id Gyan.FFmpeg -e`.
+
+Để dùng GPU NVIDIA cho YOLO/EasyOCR, sau khi cài requirements hãy cài lại
+PyTorch bằng wheel CUDA và kiểm tra kết quả:
+
+```powershell
+python -m pip install --force-reinstall torch==2.10.0 torchvision==0.25.0 --index-url https://download.pytorch.org/whl/cu130
+python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available())"
+```
+
+Sau đó đặt `detection.device` thành `auto` hoặc `cuda:0`. Hướng dẫn GPU cho
+PaddleOCR và cách kiểm tra tên GPU nằm trong
+[Backend README](backend/README.md#cài-pytorch-gpu-trên-windows).
 
 Backend chạy tại:
 
